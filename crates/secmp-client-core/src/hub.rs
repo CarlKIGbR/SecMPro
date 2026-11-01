@@ -1005,6 +1005,14 @@ mod tests {
     fn step_retire(sc: &mut Scene) -> R {
         let (inv_queue, pooled) = (sc.inv_queue, sc.pooled);
         let host = &mut sc.inviter;
+        // a rotation of the contact retires the pooled queue too: its entry must outlive the other queue's deletion
+        let rotated = host.core_mut().handle(Request::Rotate {
+            contact: ContactId(1),
+            relay: 1,
+        })?;
+        assert!(matches!(rotated, Response::Rotated(true)));
+        host.pump()?;
+        host.take_actions();
         host.queue_deleted(inv_queue)?;
         let actions = host.take_actions();
         assert!(matches!(actions.as_slice(), [Action::Remove { queue }] if *queue == inv_queue));
@@ -1017,9 +1025,17 @@ mod tests {
                 .ok_or("queues")?;
             QueueSet::decode(&bytes)?
         };
-        assert_eq!(set.entries.len(), 1);
-        assert_eq!(set.entries.first().map(|e| QueueId(e.queue)), Some(pooled));
-        assert_eq!(host.core.view.recv_periods_ms, vec![10_000]);
+        assert_eq!(
+            set.entries.len(),
+            2,
+            "the pooled queue, retiring, and the new one"
+        );
+        assert!(
+            set.entries
+                .iter()
+                .any(|e| QueueId(e.queue) == pooled && e.retire_at_ms.is_some())
+        );
+        assert!(set.entries.iter().all(|e| QueueId(e.queue) != inv_queue));
         assert_eq!(host.queue_material(inv_queue), None);
         Ok(())
     }

@@ -8,7 +8,7 @@
 
 use crate::scheduler::core::backoff::reconnect_delay;
 use crate::scheduler::params::Params;
-use crate::scheduler::types::{ControlKind, OpId, RelayId};
+use crate::scheduler::types::{ControlKind, OpId, QueueId, RelayId};
 use crate::timing::{TimingRng, Unavailable};
 
 /// When an operation starts.
@@ -20,6 +20,9 @@ pub enum When {
     Delayed,
     /// At this monotonic time (re-creation after `ERR_NOQUEUE`, spec §9.1: its own delay, drawn by the caller).
     At(u64),
+    /// After a `FETCH` of this queue that held no present cell, then `U[1 min, 60 min]` (the `QUEUE_DEL` of a retired
+    /// queue, §10.6 (4), Q163, Q194): [`ControlOps::schedule_after_empty_fetch`].
+    AfterEmptyFetch(QueueId),
 }
 
 struct Op {
@@ -36,6 +39,9 @@ struct Op {
     running: bool,
     failures: u32,
     closed_before: u32,
+    /// The queue whose `FETCH` must first answer with no present cell (Q163, Q194): the operation does not start, and has no
+    /// time, until [`ControlOps::note_empty_fetch`] reports it.
+    awaiting: Option<QueueId>,
 }
 
 /// What to queue.
@@ -104,7 +110,7 @@ impl ControlOps {
     pub fn due_of(&self, id: OpId) -> Option<u64> {
         self.ops
             .iter()
-            .find(|o| o.id == id)
+            .find(|o| o.id == id && o.awaiting.is_none())
             .map(|o| self.start_not_before(o))
     }
 
@@ -127,9 +133,12 @@ impl ControlOps {
             related,
             when,
         } = spec;
+        if let When::AfterEmptyFetch(queue) = when {
+            return self.schedule_after_empty_fetch(id, spec, queue);
+        }
         let mut delay = None;
         let due = match when {
-            When::Prompt => now,
+            When::Prompt | When::AfterEmptyFetch(_) => now,
             When::At(t) => t,
             When::Delayed => {
                 let started = self
@@ -159,8 +168,78 @@ impl ControlOps {
             running: false,
             failures: 0,
             closed_before: 0,
+            awaiting: None,
         });
         Ok(())
+    }
+
+    /// Queue `spec` (a `QUEUE_DEL` of `queue`, §10.6 (4)) behind an empty `FETCH` (Q163, Q194; D-B11): it waits, with no
+    /// time of its own, until the core reports a `FETCH` of `queue` that held no present cell
+    /// ([`ControlOps::note_empty_fetch`]); then its `U[1 min, 60 min]` delay (§10.6 (2)) starts. One implementation for
+    /// every retirement: an expired invitation, a rotated queue, a consumed invitation's queue.
+    ///
+    /// # Errors
+    /// [`Unavailable`] never here (the delay is drawn when the empty `FETCH` is seen); the signature follows
+    /// [`ControlOps::schedule`].
+    pub fn schedule_after_empty_fetch(
+        &mut self,
+        id: OpId,
+        spec: OpSpec,
+        queue: QueueId,
+    ) -> Result<(), Unavailable> {
+        self.ops.push(Op {
+            id,
+            kind: spec.kind,
+            relay: spec.relay,
+            related: spec.related,
+            due: u64::MAX,
+            delay: None,
+            running: false,
+            failures: 0,
+            closed_before: 0,
+            awaiting: Some(queue),
+        });
+        Ok(())
+    }
+
+    /// A `FETCH` of `queue` returned no present cell at `now`: the operations that waited for it start their delay
+    /// `U[1 min, 60 min]` from `max(now, the latest related start)`. Without randomness they keep waiting (fail closed:
+    /// nothing is deleted without its delay).
+    pub fn note_empty_fetch(
+        &mut self,
+        params: &Params,
+        rng: &mut TimingRng,
+        queue: QueueId,
+        now: u64,
+    ) {
+        for i in 0..self.ops.len() {
+            let Some(op) = self.ops.get(i) else { break };
+            if op.awaiting != Some(queue) {
+                continue;
+            }
+            let related = op.related;
+            let started = self
+                .last_start
+                .iter()
+                .filter(|(r, _)| *r == related)
+                .map(|(_, t)| *t)
+                .fold(now, u64::max);
+            let (lo, hi) = params.control_delay_ms;
+            let Ok(drawn) = rng.uniform(lo, hi) else {
+                continue;
+            };
+            if let Some(op) = self.ops.get_mut(i) {
+                op.awaiting = None;
+                op.delay = Some(drawn);
+                op.due = started.saturating_add(drawn);
+            }
+        }
+    }
+
+    /// Whether `id` still waits for an empty `FETCH`.
+    #[must_use]
+    pub fn awaits_empty_fetch(&self, id: OpId) -> bool {
+        self.ops.iter().any(|o| o.id == id && o.awaiting.is_some())
     }
 
     /// When `op` may start: its due time, and for a delayed operation not before the latest related start plus its drawn
@@ -181,7 +260,7 @@ impl ControlOps {
     pub fn next_due(&self) -> Option<u64> {
         self.ops
             .iter()
-            .filter(|o| !o.running)
+            .filter(|o| !o.running && o.awaiting.is_none())
             .map(|o| self.start_not_before(o))
             .min()
     }
@@ -192,7 +271,7 @@ impl ControlOps {
         let mut out = Vec::new();
         for i in 0..self.ops.len() {
             let Some(op) = self.ops.get(i) else { break };
-            if op.running || self.start_not_before(op) > now {
+            if op.running || op.awaiting.is_some() || self.start_not_before(op) > now {
                 continue;
             }
             let related = op.related;

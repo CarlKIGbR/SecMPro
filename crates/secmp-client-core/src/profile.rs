@@ -552,10 +552,10 @@ mod tests {
             }]
         );
         assert_eq!(gone.ops.len(), 1);
-        assert_eq!(
+        assert!(matches!(
             gone.ops.first().map(|o| o.when),
-            Some(crate::scheduler::control::When::Delayed)
-        );
+            Some(crate::scheduler::control::When::AfterEmptyFetch(_))
+        ));
     }
 
     /// SE-09 [O-28] (§7.7; §7.6 `docs/03:503`; Q164, D-B5): `Profile::rotate_identity` with two contacts gives a new

@@ -946,11 +946,18 @@ impl World {
         generation: u64,
         cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
         source: &mut S,
+        now: u64,
     ) {
+        let empty = cells.is_empty();
         let queues = self.recvs.iter_mut().map(|r| (r.id, &mut r.ledger));
         take_response(queues, &queue, generation, cells, |id, cell| {
             source.deliver(queue, id, &cell)
         });
+        // a FETCH with no present cell: a `QUEUE_DEL` that waited for it starts its delay (Q163, Q194)
+        if empty && self.current(queue, generation) {
+            self.control
+                .note_empty_fetch(&self.params, &mut self.ctl, queue, now);
+        }
     }
 
     /// Whether `queue` exists and is in `generation` (a response asked in an older generation changes nothing, SC-07).
@@ -1019,7 +1026,7 @@ impl World {
             },
             (ReqKind::Ping, Outcome::Ping(_)) => {}
             (ReqKind::Fetch(queue, generation), Outcome::Fetch(result)) => match result {
-                Ok(cells) => self.fetched(queue, generation, cells, source),
+                Ok(cells) => self.fetched(queue, generation, cells, source, now),
                 Err(e) if self.current(queue, generation) => self.queue_error(queue, e, now)?,
                 Err(_) => {}
             },
@@ -1046,7 +1053,7 @@ impl World {
                             })
                             .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
                             .collect();
-                        self.fetched(*q, *generation, cells, source);
+                        self.fetched(*q, *generation, cells, source, now);
                         if !self.current(*q, *generation) {
                             continue;
                         }
@@ -1695,6 +1702,31 @@ impl Scheduler {
                 related,
                 when,
             },
+        )?;
+        Ok(op)
+    }
+
+    /// Queue the `QUEUE_DEL` of `queue` behind an empty `FETCH` of it (Q163, Q194; D-B11): see
+    /// [`ControlOps::schedule_after_empty_fetch`]. No slot, frame or link of the schedule changes.
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`].
+    pub fn schedule_queue_del_after_empty_fetch(
+        &mut self,
+        relay: RelayId,
+        related: u64,
+        queue: QueueId,
+    ) -> Result<OpId, SchedError> {
+        let op = self.world.new_op_id();
+        self.world.control.schedule_after_empty_fetch(
+            op,
+            OpSpec {
+                kind: ControlKind::QueueDel(queue),
+                relay,
+                related,
+                when: When::Delayed,
+            },
+            queue,
         )?;
         Ok(op)
     }

@@ -423,11 +423,18 @@ fn accept_only_offered_records() -> R {
     let op = step.ops.first().ok_or("QUEUE_DEL")?;
     assert_eq!(step.ops.len(), 1);
     assert_eq!(op.kind, ControlKind::QueueDel(QueueId(1)));
-    assert_eq!((op.relay, op.when), (RelayId(1), When::Delayed));
+    assert_eq!(
+        (op.relay, op.when),
+        (RelayId(1), When::AfterEmptyFetch(QueueId(1)))
+    );
     let mut queue = ControlOps::new();
     let mut rng = TimingRng::seeded(11);
     let now = fx.clock.mono_ms();
     queue.schedule(&Params::default(), &mut rng, OpId(1), now, *op)?;
+    // nothing before the queue has been fetched empty
+    assert!(queue.awaits_empty_fetch(OpId(1)));
+    assert!(queue.take_due(u64::MAX).is_empty());
+    queue.note_empty_fetch(&Params::default(), &mut rng, QueueId(1), now);
     let due = queue.due_of(OpId(1)).ok_or("due")?;
     assert!(
         (now + 60_000..=now + 3_600_000).contains(&due),
@@ -1275,4 +1282,45 @@ fn consumed_queue_cells_reach_session() -> R {
         let _ = &mut g;
         Ok(())
     })
+}
+
+/// Q194 / OPEN-M7-B-7 (D-B11; Q163; red first: on the tree where the `QUEUE_DEL` was merely `Delayed` it was due at once, so
+/// `awaits_empty_fetch` is false): the `QUEUE_DEL` of an expired invitation's queue is queued behind an empty `FETCH` — a
+/// `FETCH` that still holds a cell does not release it, the first one that holds none does, and its `U[1 min, 60 min]`
+/// delay runs from that `FETCH`.
+#[cfg(feature = "kat")]
+#[test]
+fn expired_queue_del_after_empty_fetch() -> R {
+    use crate::scheduler::control::ControlOps;
+    use crate::scheduler::params::Params;
+    use crate::scheduler::types::OpId;
+    use crate::timing::TimingRng;
+
+    let (fx, mut e) = inviter("q194", 75, 1)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let mut req = request(1)?;
+    req.expires = T0 + 100;
+    invitations.issue(&req, &fx.clock, &mut e)?;
+    fx.clock.set_ms(101_000);
+    let ops = invitations.maintain(&fx.clock)?.ops;
+    let op = ops.first().ok_or("QUEUE_DEL")?;
+    let (params, mut rng) = (Params::default(), TimingRng::seeded(13));
+    let mut queue = ControlOps::new();
+    queue.schedule(&params, &mut rng, OpId(1), 5_000, *op)?;
+    assert!(queue.awaits_empty_fetch(OpId(1)));
+    // a FETCH of another queue, then the queue's own FETCH that still held a cell (no report): nothing is due
+    queue.note_empty_fetch(&params, &mut rng, QueueId(9), 6_000);
+    assert!(queue.take_due(u64::MAX).is_empty());
+    assert_eq!(queue.next_due(), None);
+    // the FETCH with no present cell
+    queue.note_empty_fetch(&params, &mut rng, QueueId(1), 70_000);
+    assert!(!queue.awaits_empty_fetch(OpId(1)));
+    let due = queue.due_of(OpId(1)).ok_or("due")?;
+    assert!(
+        (70_000 + 60_000..=70_000 + 3_600_000).contains(&due),
+        "{due}"
+    );
+    assert!(queue.take_due(70_000 + 59_999).is_empty());
+    assert_eq!(queue.take_due(due).len(), 1);
+    Ok(())
 }

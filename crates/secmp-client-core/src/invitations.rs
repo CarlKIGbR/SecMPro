@@ -680,7 +680,8 @@ pub fn retirement(retired: &[Retired], rotated: Option<RetireReason>) -> Maintai
             kind: ControlKind::QueueDel(r.queue),
             relay: r.relay,
             related: u64::from(link_data_n(&r.ld_id)),
-            when: When::Delayed,
+            // §10.6 (4), Q163, Q194: after a FETCH of the queue that held no present cell, then U[1 min, 60 min]
+            when: When::AfterEmptyFetch(r.queue),
         });
     }
     out

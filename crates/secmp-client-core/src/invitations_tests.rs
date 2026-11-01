@@ -1232,3 +1232,47 @@ fn decide_rechecks_status_after_lock() -> R {
     assert!(out.accepted.is_none());
     Ok(())
 }
+
+/// Q193 (`docs/03:351`, §6.6 step 4; OPEN-M7-B-6; red first: `out.ack_through.is_none()` on the tree that acknowledged and
+/// dropped, `left: Some(..)`): after the record is consumed, the cells that arrive on its invitation queue are TR cells of
+/// the session — the round hands them to the session (`to_session`), acknowledges nothing itself, and the session's receive
+/// path decrypts, commits and so decides them; none is dropped unprocessed.
+#[cfg(feature = "kat")]
+#[test]
+fn consumed_queue_cells_reach_session() -> R {
+    use crate::sessions::tests::{Link, big, connect, deliver, next, party};
+
+    big(|| {
+        let host = party("q193-h", 71)?;
+        let guest = party("q193-g", 73)?;
+        let Link {
+            mut h,
+            mut g,
+            ld_id,
+            ..
+        } = connect(&host, &guest, 400)?;
+        let invitations = Invitations::new(host.profile.clone());
+        // the guest sent its three handshake cells (consumed by the accept); then TR cells reach the consumed invitation queue
+        for i in 1..=3_u64 {
+            next(&mut g, i.saturating_mul(1_000))?;
+        }
+        let fetched: Vec<(u64, Cell)> = (10..12_u64)
+            .map(|id| Ok((id, next(&mut g, id.saturating_mul(1_000))?)))
+            .collect::<Result<_, E>>()?;
+        let before = accept_calls_kat();
+        let out = invitations.process_round(&ld_id, &fetched, &host.clock, &mut entropy(402))?;
+        assert!(
+            out.ack_through.is_none(),
+            "the invitation path acknowledges nothing"
+        );
+        assert_eq!(out.to_session, vec![10, 11]);
+        assert_eq!(accept_calls_kat(), before, "accept is not called");
+        // the session path decides them: decrypted and committed, then they count as acknowledged
+        for (_, cell) in &fetched {
+            deliver(&mut h, cell)?;
+        }
+        assert_eq!(h.discarded(), 0, "both were cells of the session");
+        let _ = &mut g;
+        Ok(())
+    })
+}

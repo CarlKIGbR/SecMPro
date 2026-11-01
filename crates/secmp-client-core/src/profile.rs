@@ -546,15 +546,25 @@ mod tests {
         use crate::invitations::Invitations;
         use crate::sessions::accept_key_change;
         use crate::sessions::actor::SessionEvent;
-        use crate::sessions::tests::{big, connect, deliver, next, party, pending_handshake};
+        use crate::sessions::tests::{Link, big, connect, deliver, next, party, pending_handshake};
         use crate::testutil::entropy;
         use secmp_proto::wire::cell::Cell;
 
         big(|| {
             let host = party("se09-h", 61)?;
             let (g1, g2) = (party("se09-g1", 63)?, party("se09-g2", 65)?);
-            let (mut h1, mut c1, id1) = connect(&host, &g1, 100)?;
-            let (mut h2, mut c2, id2) = connect(&host, &g2, 200)?;
+            let Link {
+                h: mut h1,
+                g: mut c1,
+                contact: id1,
+                ..
+            } = connect(&host, &g1, 100)?;
+            let Link {
+                h: mut h2,
+                g: mut c2,
+                contact: id2,
+                ..
+            } = connect(&host, &g2, 200)?;
             assert_eq!((id1, id2), (ContactId(1), ContactId(2)));
             // an open invitation, and a handshake on it that has not been decided yet
             let invitations = Invitations::new(host.profile.clone());

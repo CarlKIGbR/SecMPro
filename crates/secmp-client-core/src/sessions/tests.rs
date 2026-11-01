@@ -45,18 +45,7 @@ pub(crate) fn party(label: &str, seed: u64) -> Result<Fixture, E> {
 /// conversation (host side first, with the contacts' ids on the two sides); the guest's three handshake cells have not
 /// been sent as TR cells (they were handed over directly). `seed` seeds the entropy of the four actors.
 #[cfg(feature = "kat")]
-pub(crate) fn connect(
-    host: &Fixture,
-    guest: &Fixture,
-    seed: u64,
-) -> Result<
-    (
-        StoreConversation<Fixed>,
-        StoreConversation<Fixed>,
-        ContactId,
-    ),
-    E,
-> {
+pub(crate) fn connect(host: &Fixture, guest: &Fixture, seed: u64) -> Result<Link, E> {
     let mut he = entropy(seed.wrapping_add(10));
     let mut ge = entropy(seed.wrapping_add(12));
     let invitations = Invitations::new(host.profile.clone());
@@ -98,7 +87,23 @@ pub(crate) fn connect(
         Fixed(entropy(seed.wrapping_add(22))),
         T0,
     )?;
-    Ok((h, g, contact))
+    Ok(Link {
+        h,
+        g,
+        contact,
+        ld_id: issued.invitation.ld_id,
+    })
+}
+
+/// What [`connect`] made.
+#[cfg(feature = "kat")]
+pub(crate) struct Link {
+    pub(crate) h: StoreConversation<Fixed>,
+    pub(crate) g: StoreConversation<Fixed>,
+    /// The host's contact.
+    pub(crate) contact: ContactId,
+    /// The consumed invitation.
+    pub(crate) ld_id: [u8; 16],
 }
 
 /// An open invitation of `host` and the three handshake cells of a new guest that accepted it (not yet decided by the
@@ -138,7 +143,7 @@ pub(crate) fn pending_handshake(
 pub(crate) fn world(label: &str, seed: u64) -> Result<World, E> {
     let host = party(&format!("{label}-h"), seed)?;
     let guest = party(&format!("{label}-g"), seed.wrapping_add(2))?;
-    let (h, g, contact) = connect(&host, &guest, seed)?;
+    let Link { h, g, contact, .. } = connect(&host, &guest, seed)?;
     assert_eq!(contact, ContactId(1));
     Ok(World { host, guest, h, g })
 }

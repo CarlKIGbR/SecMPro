@@ -535,6 +535,29 @@ mod tests {
         Ok(())
     }
 
+    /// The events and operations of an identity rotation's retirement of `ld_id` (Q164): `InvitationRetired` with the
+    /// reason, one `QUEUE_DEL` on the IN-11 schedule (`Delayed`).
+    #[cfg(feature = "kat")]
+    fn assert_retirement(ld_id: &[u8; 16], retired: &[Retired]) {
+        let gone = crate::invitations::retirement(
+            retired,
+            Some(crate::api::RetireReason::IdentityRotated),
+        );
+        let id = u32::from_be_bytes([ld_id[0], ld_id[1], ld_id[2], ld_id[3]]);
+        assert_eq!(
+            gone.events,
+            [crate::api::Event::InvitationRetired {
+                id,
+                reason: crate::api::RetireReason::IdentityRotated
+            }]
+        );
+        assert_eq!(gone.ops.len(), 1);
+        assert_eq!(
+            gone.ops.first().map(|o| o.when),
+            Some(crate::scheduler::control::When::Delayed)
+        );
+    }
+
     /// SE-09 [O-28] (§7.7; §7.6 `docs/03:503`; Q164, D-B5): `Profile::rotate_identity` with two contacts gives a new
     /// identity and fingerprint, one `KeyChange` per contact signed by the **old** `IK_sig` (each contact's session
     /// verifies it and takes the new identity), and retires every unconsumed invitation (row, one-time prekey) — a
@@ -578,36 +601,7 @@ mod tests {
             assert_eq!(host.profile.fingerprint()?, rotation.fingerprint);
             assert_eq!(rotation.key_changes.len(), 2);
             assert_eq!(rotation.retired.len(), 1);
-            let gone = crate::invitations::retirement(
-                &rotation.retired,
-                Some(crate::api::RetireReason::IdentityRotated),
-            );
-            let id = u32::from_be_bytes([
-                open.invitation.ld_id[0],
-                open.invitation.ld_id[1],
-                open.invitation.ld_id[2],
-                open.invitation.ld_id[3],
-            ]);
-            assert_eq!(
-                gone.events,
-                [crate::api::Event::InvitationRetired {
-                    id,
-                    reason: crate::api::RetireReason::IdentityRotated
-                }]
-            );
-            assert_eq!(
-                gone.ops.len(),
-                1,
-                "one QUEUE_DEL, on the IN-11 schedule (Delayed)"
-            );
-            assert_eq!(
-                gone.ops.first().map(|o| o.when),
-                Some(crate::scheduler::control::When::Delayed)
-            );
-            assert_eq!(
-                rotation.retired.first().map(|r| r.ld_id),
-                Some(open.invitation.ld_id)
-            );
+            assert_retirement(&open.invitation.ld_id, &rotation.retired);
             let mut bodies = rotation.key_changes.into_iter();
             h1.queue_key_change(bodies.next().ok_or("body")?)
                 .map_err(|_| "queue")?;

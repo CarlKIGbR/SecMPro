@@ -355,9 +355,10 @@ fn life(dir: &Path, seed: u64, n: u64, crash: Option<(CrashAt, u32)>) {
         // SE-21: every message a side saw `Delivered` in life 1 is `Delivered` in the reopened outbox
         for side in [&a, &b] {
             for line in lines(&dir.join(format!("delivered-1-{}.txt", side.name))) {
-                let id: Vec<u8> = (0..line.len())
-                    .step_by(2)
-                    .map(|i| u8::from_str_radix(&line[i..i + 2], 16).unwrap())
+                let id: Vec<u8> = line
+                    .as_bytes()
+                    .chunks(2)
+                    .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
                     .collect();
                 let id: [u8; 16] = id.try_into().unwrap();
                 assert_eq!(

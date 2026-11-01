@@ -348,3 +348,69 @@ fn retirement_delays_are_uniform() {
     }
     evidence("SE-03-ks", &report.join("\n"));
 }
+
+/// SE-04 on the virtual driver (§10.2): a client in Balanced mode whose recv-queues are at the rate bound — four queues at
+/// 10 s, the ones in overlap included — does not start a rotation: `Rotated(false)` and `RotationDeferred`, nothing is
+/// asked of the scheduler (no `hub_errors`, which a refused fifth queue would be), and the queues are as they were.
+#[test]
+fn rotation_deferred_at_the_rate_bound() {
+    use secmp_client_core::api::Event;
+    use secmp_client_core::scheduler::params::Mode;
+    use secmp_proto::wire::Period;
+
+    use super::m7_world::{add_party, add_party_period, invite_pair};
+
+    let mut d = driver();
+    let client = add_party_period(&mut d, "se04-x", 6, (Mode::Balanced, 31), Period::S10);
+    let first = add_party(&mut d, "se04-p1", 3, 41);
+    let second = add_party(&mut d, "se04-p2", 3, 42);
+    invite_pair(&mut d, &client, &first);
+    invite_pair(&mut d, &client, &second);
+    let t = d.now();
+    d.run_until(t + 600_000);
+    // two contacts, each with its pool queue and the invitation queue in overlap: four recv-queues at 10 s
+    let Response::Contacts(list) = hub(&mut d, client.idx)
+        .core_mut()
+        .handle(Request::Contacts)
+        .unwrap()
+    else {
+        unreachable!("Contacts is answered with Contacts")
+    };
+    assert_eq!(list.len(), 2);
+    let contact = list.first().unwrap().id;
+    let before = hub(&mut d, client.idx)
+        .profile_store()
+        .lock()
+        .unwrap()
+        .contact_queues(contact.0)
+        .unwrap()
+        .unwrap()
+        .to_vec();
+    let answer = hub(&mut d, client.idx)
+        .core_mut()
+        .handle(Request::Rotate { contact, relay: 1 })
+        .unwrap();
+    assert!(matches!(answer, Response::Rotated(false)));
+    let events: Vec<Event> = hub(&mut d, client.idx)
+        .core_mut()
+        .take_events()
+        .into_iter()
+        .map(|e| e.event)
+        .collect();
+    assert!(
+        events.contains(&Event::RotationDeferred(contact)),
+        "{events:?}"
+    );
+    let t = d.now();
+    d.run_until(t + 120_000);
+    assert_eq!(d.client_ref(client.idx).hub_errors, Vec::<String>::new());
+    let after = hub(&mut d, client.idx)
+        .profile_store()
+        .lock()
+        .unwrap()
+        .contact_queues(contact.0)
+        .unwrap()
+        .unwrap()
+        .to_vec();
+    assert_eq!(before, after, "the queues are as they were");
+}

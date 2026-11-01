@@ -105,7 +105,9 @@ pub struct Hub<C: Clock, S: EntropySource> {
     /// The queue each contact sent to before its latest route update.
     previous_sends: BTreeMap<i64, QueueId>,
     next_send: u32,
-    periods: BTreeMap<QueueId, u64>,
+    /// The period of every recv-queue the hub has registered and not removed: the rate bound of a rotation counts them all
+    /// (§10.2), also the ones in overlap.
+    recv_periods: BTreeMap<QueueId, u64>,
     actions: Vec<Action>,
     rng: crate::timing::TimingRng,
 }
@@ -129,7 +131,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             retiring_sends: Vec::new(),
             previous_sends: BTreeMap::new(),
             next_send: 0,
-            periods: BTreeMap::new(),
+            recv_periods: BTreeMap::new(),
             actions: Vec::new(),
             rng: crate::timing::TimingRng::os(),
         };
@@ -213,7 +215,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             return;
         }
         if let Ok(seed) = SecretBytes::from_slice(seed.expose_secret()) {
-            self.periods.insert(queue, period_ms);
+            self.recv_periods.insert(queue, period_ms);
+            self.sync_view();
             self.actions.push(Action::AddRecv {
                 queue,
                 relay,
@@ -221,6 +224,11 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 period_ms,
             });
         }
+    }
+
+    /// What the core's rotation sees of the scheduler's recv-queues.
+    fn sync_view(&mut self) {
+        self.core.view.recv_periods_ms = self.recv_periods.values().copied().collect();
     }
 
     fn alloc_send(&mut self) -> QueueId {
@@ -281,8 +289,6 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             return Ok(());
         };
         let queue = self.alloc_send();
-        self.periods
-            .insert(queue, u64::from(route.period_s.seconds()) * 1_000);
         self.actions.push(Action::AddSend {
             queue,
             relay: self.config.relay,
@@ -510,7 +516,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// [`Error::Unavailable`] if the store cannot be written.
     pub fn queue_deleted(&mut self, queue: QueueId) -> Result<(), Error> {
         self.inv_queues.remove(&queue);
-        self.periods.remove(&queue);
+        self.recv_periods.remove(&queue);
+        self.sync_view();
         let contacts: Vec<(i64, usize)> = self.core.index.iter().map(|(c, i)| (*c, *i)).collect();
         for (contact, at) in contacts {
             let bytes = self

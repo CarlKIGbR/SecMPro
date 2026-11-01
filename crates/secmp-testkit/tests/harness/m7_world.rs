@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 
+use secmp_client_core::api::{Request, Response};
 use secmp_client_core::clock::ManualClock;
 use secmp_client_core::hub::{Hub, HubConfig};
 use secmp_client_core::invitations::SparePool;
@@ -135,7 +136,15 @@ pub fn add_party_period(
     for (_, recv, send) in spares.seeds(RelayId(1)).unwrap() {
         d.new_queue_with(idx, &recv, &send);
     }
-    let hub = hub_of(name, profile, &clock, 0, period);
+    let mut hub = hub_of(name, profile, &clock, 0, period);
+    // the profile's mode is the scheduler's (the user's choice, persisted)
+    let Response::Settings(mut settings) = hub.core_mut().handle(Request::Settings).unwrap() else {
+        unreachable!("Settings is answered with Settings")
+    };
+    settings.mode = mode;
+    hub.core_mut()
+        .handle(Request::SetSettings(settings))
+        .unwrap();
     d.attach_hub(idx, Box::new(hub));
     Party {
         _root: root,

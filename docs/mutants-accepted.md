@@ -94,6 +94,7 @@ PR. Runtimes: nextest on the 32-core container, 2026-10-15 (harness) and the CI 
 | `recipient_retires_old_queue` (SE-03; TEST-SPEC-M7 B-5: a rotation and the `QUEUE_DEL` of the old queue, 2.1 h virtual over two profiles) | `secmp-testkit` harness | 144 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `retirement_survives_restart` (SE-03, Q194: the same with a restart of the recipient in the overlap) | `secmp-testkit` harness | 96 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `relay_restart_with_store` (SE-14; TEST-SPEC-M7 B-5: the relay and both clients restart, five messages delivered once) | `secmp-testkit` harness | 14 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `rotation_deferred_at_the_rate_bound` (SE-04 on the virtual driver; TEST-SPEC-M7 B-5: Balanced at the rate bound, a rotation that does not start) | `secmp-testkit` harness | 10 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `no_identifiers_in_request_plaintexts` (AP-05; TEST-SPEC-M7 B-6: three profiles, two invitations, a rotation and a key change, every request plaintext searched for the canary set) | `secmp-testkit` harness | 65 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `store_backed_source_activity_independent` (SE-19; TEST-SPEC-M7 B-6: 3 modes x idle and active x 6 h virtual over four profiles each, six runs in parallel) | `secmp-testkit` harness | 551 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `lifetime_end_reconnects_fresh` (S-17; M7 B-SC2, Q186: drifted past 10 s) | `secmp-testkit` harness | 16.8 s | `MUTANT_HARNESS_SKIP_TESTS` |

@@ -806,6 +806,10 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "SE-14, the relay and both clients restart: 14 s",
     ),
     (
+        "rotation_deferred_at_the_rate_bound",
+        "SE-04 on the driver, Balanced at the rate bound over three profiles: 10 s",
+    ),
+    (
         "no_identifiers_in_request_plaintexts",
         "AP-05, three profiles, two invitations, a rotation and a key change, 1.1 h virtual: 65 s",
     ),

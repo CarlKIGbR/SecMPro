@@ -60,6 +60,10 @@ pub enum SchedError {
     TooManyQueues,
     /// No such queue.
     UnknownQueue,
+    /// A queue with this id is already registered.
+    DuplicateQueue,
+    /// A key does not give a capability.
+    BadKey,
     /// No randomness (fail closed).
     Unavailable,
     /// `frame_written` named a frame that is not the oldest one handed out on the link (a duplicate or unknown report;
@@ -80,6 +84,8 @@ impl core::fmt::Display for SchedError {
             Self::RateBound => "recv-queue rate bound exceeded",
             Self::TooManyQueues => "too many recv-queues for one FETCH_MULTI",
             Self::UnknownQueue => "unknown queue",
+            Self::DuplicateQueue => "queue id in use",
+            Self::BadKey => "not a queue key",
             Self::Unavailable => "randomness unavailable",
             Self::UnknownFrame => "not the oldest frame handed out",
         })
@@ -1389,6 +1395,63 @@ impl Scheduler {
         let id = self.next_queue_id();
         self.add_recv_with_id(now, id, relay, cap, period_ms, false)?;
         Ok(id)
+    }
+
+    /// Add the queue we receive on as `id` (a stable id the host keeps: a pool queue, a contact's queue), from the recipient
+    /// seed — the capability is made here, so the host names no transport type. The queue is fetched at `period_ms`.
+    ///
+    /// # Errors
+    /// [`SchedError::DuplicateQueue`], [`SchedError::BadKey`], and those of [`Scheduler::add_recv_queue`].
+    pub fn add_recv_queue_seed(
+        &mut self,
+        now: u64,
+        id: QueueId,
+        relay: RelayId,
+        seed: &secmp_crypto::SecretBytes<32>,
+        period_ms: u64,
+    ) -> Result<(), SchedError> {
+        if self.world.recv_mut(id).is_some() || self.world.send_mut(id).is_some() {
+            return Err(SchedError::DuplicateQueue);
+        }
+        let cap = RecvCap::from_seed(seed).map_err(|_| SchedError::BadKey)?;
+        self.add_recv_with_id(now, id, relay, cap, period_ms, false)
+    }
+
+    /// Add the queue we send to as `id`, from a route's `sid` and sender seed (spec §9.8).
+    ///
+    /// # Errors
+    /// [`SchedError::DuplicateQueue`], [`SchedError::BadKey`], and those of [`Scheduler::add_send_queue`].
+    pub fn add_send_queue_route(
+        &mut self,
+        now: u64,
+        id: QueueId,
+        relay: RelayId,
+        route: (secmp_proto::wire::Id, &secmp_crypto::SecretBytes<32>),
+        period_ms: u64,
+    ) -> Result<(), SchedError> {
+        if self.world.recv_mut(id).is_some() || self.world.send_mut(id).is_some() {
+            return Err(SchedError::DuplicateQueue);
+        }
+        if !self.world.params.period_valid(period_ms) {
+            return Err(SchedError::BadPeriod);
+        }
+        let cap = SendCap::from_route(route.0, route.1).map_err(|_| SchedError::BadKey)?;
+        self.world.sends.push(SendQ {
+            id,
+            relay,
+            period_ms,
+            cap,
+            last_send: None,
+            dead: false,
+        });
+        self.sync_links(now)
+    }
+
+    /// Whether `queue` is registered (as a send or a recv queue).
+    #[must_use]
+    pub fn has_queue(&self, queue: QueueId) -> bool {
+        self.world.sends.iter().any(|s| s.id == queue)
+            || self.world.recvs.iter().any(|r| r.id == queue)
     }
 
     fn add_recv_with_id(

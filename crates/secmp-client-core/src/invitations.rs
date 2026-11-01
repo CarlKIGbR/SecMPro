@@ -57,7 +57,7 @@ use crate::profile::{Profile, Retired};
 use crate::retention::{RETAIN_MAX, retain};
 use crate::scheduler::control::{OpSpec, When};
 use crate::scheduler::types::{ControlKind, QueueId, RelayId};
-use crate::sessions::rotation::QueueSet;
+use crate::sessions::rotation::{QueueEntry, QueueSet};
 
 /// Flag: the owner status said that the link data was consumed (§9.4); with no handshake before `expires` the user is told
 /// the invitation was used by someone else (§5.2).
@@ -1046,7 +1046,7 @@ impl Invitations {
                 let (contact, events) = commit_accept(
                     &mut store,
                     ld_id,
-                    &loaded.stored.record,
+                    &loaded.stored,
                     &accepted,
                     clock.unix_secs().saturating_mul(1_000),
                 )?;
@@ -1102,13 +1102,14 @@ fn after_commit(round: Round) -> Round {
 fn commit_accept(
     store: &mut Store,
     ld_id: &Id,
-    record: &InvitationRecord,
+    stored: &Stored,
     accepted: &Accepted,
     now_ms: u64,
 ) -> Result<(ContactId, Vec<Event>), Error> {
+    let record = &stored.record;
     let planned = contacts::plan(store, &accepted.peer)?;
     let routes = encode_routes(&accepted.routes)?;
-    let queues = encode_queues(record, now_ms)?;
+    let queues = encode_queues(stored, now_ms)?;
     let session = planned.id.0;
     let new = NewContact {
         peer: &accepted.peer,
@@ -1139,8 +1140,20 @@ fn encode_routes(routes: &[RouteDescriptor]) -> Result<Zeroizing<Vec<u8>>, Error
 
 /// `contacts.queues` ([`QueueSet`]): the recv-queues of the session so far: the invitation queue, until the first reply
 /// moves the session to a queue of its own (§6.6 step 4).
-fn encode_queues(record: &InvitationRecord, now_ms: u64) -> Result<Zeroizing<Vec<u8>>, Error> {
-    QueueSet::first(&record.invq_recv_seed, now_ms)?.encode()
+fn encode_queues(stored: &Stored, now_ms: u64) -> Result<Zeroizing<Vec<u8>>, Error> {
+    QueueSet::first(
+        QueueEntry {
+            relay: stored.relay.0,
+            queue: stored.queue.0,
+            seed: SecretBytes::from_slice(stored.record.invq_recv_seed.expose_secret())?,
+            // the invitation queue is replaced by the first reply and is not re-created after a relay restart
+            send_seed: None,
+            period_s: Period::S10.seconds(),
+            retire_at_ms: None,
+        },
+        now_ms,
+    )
+    .encode()
 }
 
 /// §5.5 as the invitee runs it on the invitation it was given and the link data `LINK_GET` returned, in this order
@@ -1231,6 +1244,7 @@ impl Invitations {
         )?;
         let (queue, rest) = take_oldest(&store, req.relay)?.ok_or(Error::Unavailable)?;
         let recv_seed = SecretBytes::<32>::from_slice(queue.recv_seed.expose_secret())?;
+        let send_seed = SecretBytes::<32>::from_slice(queue.send_seed.expose_secret())?;
         let reply_queue = queue.queue;
         let route = RelayQueue::derived(
             own_relay,
@@ -1255,7 +1269,18 @@ impl Invitations {
             period_s: invitation.inv_period_s,
         });
         let routes = encode_routes(&[inviter_route])?;
-        let queues = QueueSet::first(&recv_seed, now.saturating_mul(1_000))?.encode()?;
+        let queues = QueueSet::first(
+            QueueEntry {
+                relay: req.relay.0,
+                queue: reply_queue.0,
+                seed: recv_seed,
+                send_seed: Some(send_seed),
+                period_s: req.reply_period.seconds(),
+                retire_at_ms: None,
+            },
+            now.saturating_mul(1_000),
+        )
+        .encode()?;
         let link_data = accepted.link_data();
         let planned = contacts::plan(&store, &link_data.inviter_iks)?;
         let new = NewContact {

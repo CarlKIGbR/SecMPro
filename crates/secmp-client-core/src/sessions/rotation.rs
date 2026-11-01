@@ -22,22 +22,41 @@ use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
 use crate::scheduler::types::{ControlKind, QueueId, RelayId};
 use crate::timing::TimingRng;
 
+/// `PERIODS` in seconds (spec §9.8).
+const PERIODS_S: [u16; 4] = [10, 20, 40, 80];
+
 /// A recv-queue is rotated at the latest after 30 days (`docs/02:115`).
 pub const ROTATION_INTERVAL_MS: u64 = 30 * 24 * 3_600_000;
 
 /// How long the previous queue is fetched after a rotation, `U[1 h, 24 h]` (§10.6 (4)).
 pub const OVERLAP_MS: (u64, u64) = (3_600_000, 86_400_000);
 
-/// One recv-queue of a contact: its recipient seed, and while it is in overlap the end of its fetch window.
+/// One recv-queue of a contact: where it lives, its keys (the recipient seed, and the sender seed if the queue can be
+/// re-created identically after a relay restart, spec §9.1), its period, and — while it is in overlap — the end of its fetch
+/// period.
 pub struct QueueEntry {
+    /// The relay (a row of `relays`).
+    pub relay: u32,
+    /// The scheduler's id of the queue.
+    pub queue: u32,
     /// The Ed25519 seed of the recipient key.
     pub seed: SecretBytes<32>,
+    /// The Ed25519 seed of the sender key; `None` for an invitation queue (it is replaced by the first reply and not
+    /// re-created).
+    pub send_seed: Option<SecretBytes<32>>,
+    /// The queue's period in seconds (`PERIODS`).
+    pub period_s: u16,
     /// When the queue stops being fetched (Unix milliseconds); `None` for the current queue.
     pub retire_at_ms: Option<u64>,
 }
 
-/// `contacts.queues`: `count u8 ‖ rotated_ms u64 ‖ {seed [32] ‖ flag u8 ‖ retire_at_ms u64} × count`. The newest entry is the
-/// current queue, the others are in overlap; `flag` is 0 (and `retire_at_ms` 0) for the current queue, 1 otherwise.
+/// One entry of `contacts.queues` on the wire: `relay u32 ‖ queue u32 ‖ seed [32] ‖ send_seed [32] ‖ period_s u16 ‖ flags u8 ‖
+/// retire_at_ms u64`.
+const ENTRY_LEN: usize = 83;
+
+/// `contacts.queues`: `count u8 ‖ rotated_ms u64 ‖ entry × count`. The newest entry is the current queue, the others are in
+/// overlap; `flags` bit 0 is set (and `retire_at_ms` given) for a queue in overlap, bit 1 when the sender seed is known (else
+/// its 32 bytes are zero); no other bit.
 pub struct QueueSet {
     /// When the current queue was made current (Unix milliseconds).
     pub rotated_ms: u64,
@@ -45,19 +64,20 @@ pub struct QueueSet {
     pub entries: Vec<QueueEntry>,
 }
 
+fn be32(b: &[u8]) -> Result<u32, Error> {
+    Ok(u32::from_be_bytes(
+        b.try_into().map_err(|_| Error::Unavailable)?,
+    ))
+}
+
 impl QueueSet {
     /// The set of a contact's first queue.
-    ///
-    /// # Errors
-    /// [`Error::Unavailable`] if the seed does not copy.
-    pub fn first(seed: &SecretBytes<32>, now_ms: u64) -> Result<Self, Error> {
-        Ok(Self {
+    #[must_use]
+    pub fn first(entry: QueueEntry, now_ms: u64) -> Self {
+        Self {
             rotated_ms: now_ms,
-            entries: vec![QueueEntry {
-                seed: SecretBytes::from_slice(seed.expose_secret())?,
-                retire_at_ms: None,
-            }],
-        })
+            entries: vec![entry],
+        }
     }
 
     /// The encoding.
@@ -66,18 +86,31 @@ impl QueueSet {
     /// [`Error::Unavailable`] for more than 255 entries.
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, Error> {
         let count = u8::try_from(self.entries.len()).map_err(|_| Error::Unavailable)?;
-        let mut v = Zeroizing::new(vec![count]);
+        let mut v = Zeroizing::new(Vec::with_capacity(
+            self.entries
+                .len()
+                .saturating_mul(ENTRY_LEN)
+                .saturating_add(9),
+        ));
+        v.push(count);
         v.extend_from_slice(&self.rotated_ms.to_be_bytes());
         for e in &self.entries {
+            v.extend_from_slice(&e.relay.to_be_bytes());
+            v.extend_from_slice(&e.queue.to_be_bytes());
             v.extend_from_slice(e.seed.expose_secret());
-            v.push(u8::from(e.retire_at_ms.is_some()));
+            match &e.send_seed {
+                Some(s) => v.extend_from_slice(s.expose_secret()),
+                None => v.extend_from_slice(&[0; 32]),
+            }
+            v.extend_from_slice(&e.period_s.to_be_bytes());
+            v.push(u8::from(e.retire_at_ms.is_some()) | (u8::from(e.send_seed.is_some()) << 1));
             v.extend_from_slice(&e.retire_at_ms.unwrap_or(0).to_be_bytes());
         }
         Ok(v)
     }
 
-    /// Decode (total and canonical: exact length, at least one entry, the flag 0 or 1, 0 with a zero deadline, only the last
-    /// entry without a deadline).
+    /// Decode (total and canonical: exact length, at least one entry, a period of `PERIODS`, the flags as above, a zero
+    /// deadline and zero sender seed where there is none, a deadline on every entry but the last and on no other).
     ///
     /// # Errors
     /// [`Error::Unavailable`] for anything else.
@@ -87,21 +120,50 @@ impl QueueSet {
         let rotated_ms = u64::from_be_bytes(rotated.try_into().map_err(|_| Error::Unavailable)?);
         let mut entries = Vec::with_capacity(usize::from(*count));
         for i in 0..usize::from(*count) {
-            let (seed, tail) = rest.split_at_checked(32).ok_or(Error::Unavailable)?;
-            let (flag, tail) = tail.split_first().ok_or(Error::Unavailable)?;
-            let (at, tail) = tail.split_at_checked(8).ok_or(Error::Unavailable)?;
-            let at = u64::from_be_bytes(at.try_into().map_err(|_| Error::Unavailable)?);
-            let retire_at_ms = match (*flag, at) {
-                (0, 0) => None,
-                (1, at) => Some(at),
-                _ => return Err(Error::Unavailable),
+            let (entry, tail) = rest.split_at_checked(ENTRY_LEN).ok_or(Error::Unavailable)?;
+            let relay = be32(entry.get(..4).ok_or(Error::Unavailable)?)?;
+            let queue = be32(entry.get(4..8).ok_or(Error::Unavailable)?)?;
+            let recv = entry.get(8..40).ok_or(Error::Unavailable)?;
+            let sender = entry.get(40..72).ok_or(Error::Unavailable)?;
+            let period_s = u16::from_be_bytes(
+                entry
+                    .get(72..74)
+                    .ok_or(Error::Unavailable)?
+                    .try_into()
+                    .map_err(|_| Error::Unavailable)?,
+            );
+            let flags = *entry.get(74).ok_or(Error::Unavailable)?;
+            let at = u64::from_be_bytes(
+                entry
+                    .get(75..83)
+                    .ok_or(Error::Unavailable)?
+                    .try_into()
+                    .map_err(|_| Error::Unavailable)?,
+            );
+            if flags & !0b11 != 0 || !PERIODS_S.contains(&period_s) {
+                return Err(Error::Unavailable);
+            }
+            let retire_at_ms = (flags & 1 == 1).then_some(at);
+            if retire_at_ms.is_none() && at != 0 {
+                return Err(Error::Unavailable);
+            }
+            let send_seed = if flags & 2 == 2 {
+                Some(SecretBytes::from_slice(sender)?)
+            } else if sender.iter().all(|b| *b == 0) {
+                None
+            } else {
+                return Err(Error::Unavailable);
             };
             let last = i.checked_add(1) == Some(usize::from(*count));
             if last == retire_at_ms.is_some() {
                 return Err(Error::Unavailable);
             }
             entries.push(QueueEntry {
-                seed: SecretBytes::from_slice(seed)?,
+                relay,
+                queue,
+                seed: SecretBytes::from_slice(recv)?,
+                send_seed,
+                period_s,
                 retire_at_ms,
             });
             rest = tail;
@@ -229,7 +291,11 @@ pub fn rotate<S: EntropySource>(
         SecretBytes::<32>::from_slice(last.seed.expose_secret())?
     };
     set.entries.push(QueueEntry {
+        relay: req.relay.0,
+        queue: taken.queue.0,
         seed: SecretBytes::from_slice(recv_seed.expose_secret())?,
+        send_seed: Some(SecretBytes::from_slice(taken.send_seed.expose_secret())?),
+        period_s: req.period.seconds(),
         retire_at_ms: None,
     });
     set.rotated_ms = now_ms;

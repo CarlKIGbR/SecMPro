@@ -788,51 +788,69 @@ fn rotation_every_30_days_or_on_demand() -> R {
     })
 }
 
-/// `contacts.queues` ([`rotation::QueueSet`]) is total and canonical: a set round-trips; a flag other than 0 or 1, a deadline
-/// on the current queue, none on an old one, a wrong length and an empty set are refused.
+/// `contacts.queues` ([`rotation::QueueSet`]) is total and canonical: a set round-trips; a flag other than the two bits, a
+/// deadline on the current queue, none on an old one, a period outside `PERIODS`, a sender seed that is there without its
+/// flag, a wrong length and an empty set are refused.
 #[cfg(feature = "kat")]
 #[test]
 fn queue_set_codec_is_canonical() -> R {
     use secmp_crypto::SecretBytes;
 
+    const E0: usize = 9;
+    const LEN: usize = 83;
     let seed = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]);
+    let entry = |queue: u32, b: u8, send: bool, retire: Option<u64>| -> Result<_, E> {
+        Ok(rotation::QueueEntry {
+            relay: 1,
+            queue,
+            seed: seed(b)?,
+            send_seed: send.then(|| seed(b + 1)).transpose()?,
+            period_s: 20,
+            retire_at_ms: retire,
+        })
+    };
     let set = rotation::QueueSet {
         rotated_ms: 77,
-        entries: vec![
-            rotation::QueueEntry {
-                seed: seed(1)?,
-                retire_at_ms: Some(99),
-            },
-            rotation::QueueEntry {
-                seed: seed(2)?,
-                retire_at_ms: None,
-            },
-        ],
+        entries: vec![entry(4, 1, false, Some(99))?, entry(5, 2, true, None)?],
     };
     let bytes = set.encode()?;
-    assert_eq!(bytes.len(), 1 + 8 + 2 * 41);
+    assert_eq!(bytes.len(), E0 + 2 * LEN);
     let back = rotation::QueueSet::decode(&bytes)?;
     assert_eq!(*back.encode()?, *bytes);
-    // damaged forms
-    let mut flag = bytes.to_vec();
-    *flag.get_mut(9 + 32).ok_or("flag")? = 2;
-    assert!(rotation::QueueSet::decode(&flag).is_err());
-    let mut zero_flag_deadline = bytes.to_vec();
-    *zero_flag_deadline.get_mut(9 + 41 + 32).ok_or("flag")? = 0;
-    *zero_flag_deadline.get_mut(9 + 41 + 40).ok_or("at")? = 5;
-    assert!(rotation::QueueSet::decode(&zero_flag_deadline).is_err());
-    let mut last_old = bytes.to_vec();
-    *last_old.get_mut(9 + 41 + 32).ok_or("flag")? = 1;
+    assert_eq!(back.entries.first().map(|e| e.queue), Some(4));
+    assert!(back.entries.first().is_some_and(|e| e.send_seed.is_none()));
+    assert!(back.entries.get(1).is_some_and(|e| e.send_seed.is_some()));
+    let damaged = |at: usize, v: u8| -> Result<Vec<u8>, E> {
+        let mut b = bytes.to_vec();
+        *b.get_mut(at).ok_or("offset")? = v;
+        Ok(b)
+    };
+    let first = E0;
+    let second = E0 + LEN;
+    // flags of the first entry: bit 0 deadline, bit 1 sender seed known
     assert!(
-        rotation::QueueSet::decode(&last_old).is_err(),
-        "the newest queue is current"
+        rotation::QueueSet::decode(&damaged(first + 74, 0b100 | 1)?).is_err(),
+        "unknown bit"
     );
-    let mut first_current = bytes.to_vec();
-    *first_current.get_mut(9 + 32).ok_or("flag")? = 0;
-    *first_current.get_mut(9 + 40).ok_or("at")? = 0;
     assert!(
-        rotation::QueueSet::decode(&first_current).is_err(),
-        "an old queue has a deadline"
+        rotation::QueueSet::decode(&damaged(first + 74, 0)?).is_err(),
+        "old queue without a deadline"
+    );
+    assert!(
+        rotation::QueueSet::decode(&damaged(first + 40, 7)?).is_err(),
+        "seed without its flag"
+    );
+    assert!(
+        rotation::QueueSet::decode(&damaged(second + 74, 0b10 | 1)?).is_err(),
+        "current queue with a deadline"
+    );
+    assert!(
+        rotation::QueueSet::decode(&damaged(second + 75 + 7, 5)?).is_err(),
+        "deadline bytes without the flag"
+    );
+    assert!(
+        rotation::QueueSet::decode(&damaged(first + 73, 21)?).is_err(),
+        "period"
     );
     assert!(rotation::QueueSet::decode(bytes.get(..bytes.len() - 1).ok_or("cut")?).is_err());
     let mut long = bytes.to_vec();

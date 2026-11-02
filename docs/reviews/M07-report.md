@@ -1106,3 +1106,116 @@ Blocked: none. STOP: none.
 - **B-3b §3 `issue_equals_issue_invitation_on`:** runs `issue_on_parts` on both sides; pins the core's store work (lookups, OPK/rotation draw position, stored record), no longer the construction itself (that is pinned by the hx/encodings vectors).
 - **B-SC2 §7 (A4f2-BSC2 minors):** m-1 SC-08 Kani bound does not reach the F1 sequence; F1 is guarded by `pure::tests::hostile_relay_*` (same clause in D-SC10). m-2 the red-first line of the amended SC-10 scan (`bsc2-red-first.txt`) is of an earlier revision of `want` (`fetch_due`); the committed `want` (`balanced_run`) is also red on `d2b93ba` (same left side). m-3 Q186 times not re-measured: ci-fast-bsc2 shows 16.471 s / 10.762 s (`ci-fast-bsc2-69bfc24.txt:3116,3108`); the entries rest on Q44 (full-run time), not on the alone-time rule text of `expect.rs:636-640`. m-4 SC-09 covers 1 and 2 are input-only predicates; the reserved-position branch of `reserved_rr` is reached (tick 0 is always a SEND) but no cover witnesses it — follow-up: a cover "choice made against a non-empty ledger". m-5 the SC-01/R-01/SIM-02 series are summarised at B-SC2 §3, not quoted; the delta verifier re-ran them byte-identical to `bsc-series-57d7da2.txt`.
 - **TEST-SPEC / OPEN-M7:** SE-21 inserted (g 22, B 73, total 179, unconditional 174); Q196 and Q197 decided and booked (`OPEN-M7.md` B-9, B-10).
+
+
+## Phase B part 2 — B-4…B-7 (WEISUNG M7-B-4; sessions actor, `Api`, scheduled handshake, rotation, restart, boundary, activity; `modell=claude-sonnet-5-5`)
+
+### §1 Status and preconditions
+
+Phase B closed @ `1318baa`: 33 of the 34 dictated rows are built and pass (SE-13a is dictated "not built"), the three completions (ST-17 partial, BK-03, BK-07) and the follow-ups Q193, Q194, OPEN-M7-B-2/3/5/8/10 are done; Phase B is 72 of 73 rows built (B-SC 11 + part 1 28 + part 2 33). Gates: `ci-fast` PASS at `5838ed3`, `ci-full` PASS at `1318baa` (second run; the first failed on one fuzz target, D-B26), Kani 57/57, mutants 0 undocumented survivors, coverage client-core 95.6 %, store 96.1 %. Blocked: none. STOP: none.
+
+Guard of the weisung: `git status --short` empty and `HEAD` = `9b511a24167e33861a0c9ca95e91e0c7700c83c5` at the start (checked). `secmp-proto`, `vectors/`, `Cargo.lock`, `fuzz/Cargo.lock` and every `Cargo.toml` are unchanged since that head (`git diff --stat 9b511a2..HEAD -- Cargo.lock fuzz/Cargo.lock vectors crates/secmp-proto '*Cargo.toml'` is empty); since `<SC-HEAD>` the `secmp-proto` diff is B-3b's Q189 (`prekeys.rs`, `fuzz_max_len.rs`), reported there.
+
+### §2 Commits (`git log --oneline b57ca46..HEAD`, the part-2 ones)
+
+| step | commits |
+|---|---|
+| Commit 0, SE-18, Q193 | `f387d8d` (TEST-SPEC SE-21, Q196/Q197, verifier notes), `cccf4f9` (`git mv scheduler/conversation.rs sessions/actor.rs`, scans re-pointed), `281a148` (Q193, SE-21) |
+| B-4 wiring | `676e9eb` (sessions: routes, key change, reset, receipts, handshake cells, identity rotation; SE-01, SE-06…SE-09, SE-12, SE-13b, SE-15…SE-17, SE-20, IN-15), `c9ea4a1` (lint), `f0d03ad` (Q194, D-B11), `ec36bea` (OPEN-M7-B-3), `941e70f`/`575c34a` (OPEN-M7-B-10), `7336ef4` (OPEN-M7-B-2), `d603655` (OPEN-M7-B-5), `462b6a3` (SE-04, SE-05), `b497092` (SE-10, SE-11), `e3d3728` (`Api`, `Core`, relay view, restore: AP-01, AP-03, AP-07, PR-03, BK-03/ST-17 halves), `5358200` (IN-16, `AfterEmptyFetchFrom`, PR-08 through the `Core`), `a9e3a72` (scan spellings), evidence `1a93bcd`, `71f58c9`, `3343bf4` |
+| B-5 | `b2c248a` (queue entries carry relay, queue id, sender seed, period), `b824055` (the hub; IN-14, IN-17, SE-02, SE-03, SE-14; commit title as dictated) |
+| B-6 | `6f264a1` (AP-02, AP-04, AP-05, AP-06, SE-19; skip rows) |
+| B-7 | Kani evidence `325371c`, `8a10b2e` (the hub tells the core the recv-queue periods; SE-04 on the driver), `1699b44` (killers), `d164f65` (a rotated contact's retiring queue outlives another queue's deletion; accepted rows), `dae510c` (mutants evidence), `c420953` (pipes escaped in the rows), `b72a0fc` (coverage evidence), `66da1d4` (SE-19, SE-03, IN-17 evidence), `5838ed3` (red-first lines), `e365c9f` (final `ci-fast` evidence), `1318baa` (fuzz target fix) |
+
+### §3 Rows (34 dictated: 33 built, SE-13a not built — "SE-13a not built (OPEN-M7-07 B)")
+
+Times are alone-runs of the test (nextest, 32-core container); in `cargo xtask ci-fast` the harness tests run in parallel and take longer (`ci-fast-b6-6f264a1.txt`). Red-first lines: `docs/reviews/M07-evidence/b4-red-first.txt` (B-4 gates), `b6-red-first.txt` (SE-02, AP-02, AP-04).
+
+| row | test | time | notes |
+|---|---|---|---|
+| PR-03 | `profile::tests::open_wrong_passphrase_uniform` | 0.2 s | `Core::open_kat` with a wrong passphrase and with none is `Error::Unlock`, an empty directory `Error::Unavailable`; the profile directory hashes the same before and after; a profile held by a running core is `Unavailable` (the `flock`), not `Unlock` |
+| IN-14 | `harness::m7_accept::initiator_cells_byte_identical_after_restart` | 0.6 s | in-process reopen of the store (a restart of the process for the state; D-B18). After the restart the three persisted cells go out again in order — what was in flight at the crash is not known to have arrived — and a send that failed is retried with the same bytes; `tr_encrypt_calls` does not move (the one encryption of the envelope is `Initiator::start`'s, in `secmp-proto`, which has no counter: the row's "= 1" is read so) |
+| IN-15 | `sessions::tests::initiator_only_dummies_until_first_reply` | 1.5 s | |
+| IN-16 | `sessions::tests::first_reply_carries_route_update` | 1.2 s | the first reply is a `RouteUpdate` with a pool queue (the pool shrinks by one, no `QUEUE_NEW`); the invitation queue's `QUEUE_DEL` is `When::AfterEmptyFetchFrom(queue, end of U[1 h, 24 h])`: an empty `FETCH` inside the window does not count, another queue's does not, then `U[1 min, 60 min]` |
+| IN-17 | `harness::m7_scheduled::handshake_as_scheduled_ops` | 7.5 s | the invitation through the scheduler on two store-backed clients: `LINK_PUT` and `LINK_GET` on one-shot links, the invitee's first three `SEND`s to the invitation queue are the persisted cells byte for byte, the inviter accepts and replies, the invitee has the route update; `overruns()` = 0 and no tick sealed or persisted (`IN-17-tick-audit` in `in-17-tick-audit-b72a0fc.txt`: 3 links, ~220 ticks per client); no set-up link, the pool queues are made on the relay beforehand (set-up outside the run) |
+| SE-01 | `sessions::tests::route_update_applied` | 1.4 s | |
+| SE-02 | `harness::m7_rotation::sender_resends_last_real_on_new_queue` | 40 s | 3 real + 12 real among the last 128 of 200 cells; after the switch the old queue carries dummies only (`Gate` counts per queue), exactly the 12 are sent again, each message delivered once. Red first: with the `requeue` of `switch_send_queue` removed the test fails at "the 12 real messages … go again" (`left: 0, right: 12`) |
+| SE-03 | `harness::m7_rotation::recipient_retires_old_queue` (+ `retirement_survives_restart`, `retirement_delays_are_uniform`) | 144 s / 96 s / 0.02 s | overlap deadline in `[t0+1 h, t0+24 h]`; `QUEUE_DEL` once, on a control link of its own, after max(deadline, the sender's last cell + one period) + `U[1 min, 60 min]`; fetched up to the deletion and not after; gone from the queue set; the deadline is stored with the queue and re-armed after a restart (Q194). KS (seeded, n = 1000): overlap D = 0.030, p = 0.753; delay D = 0.046, p = 0.235 (`se-03-ks-b72a0fc.txt`). The run uses seeded draws (176, 234) chosen for a short run — both in range (D-B20) |
+| SE-04 | `sessions::tests::rotation_respects_rate_bound` + `harness::m7_rotation::rotation_deferred_at_the_rate_bound` | 1.3 s / 10 s | Σ and 32 entries (31 + 1 fits, 40 > 32 and 33 entries do not); on the driver a Balanced client at four queues at 10 s answers `Rotated(false)` with `RotationDeferred` and asks nothing of the scheduler |
+| SE-05 | `sessions::tests::rotation_every_30_days_or_on_demand` | 1.3 s | |
+| SE-06 | `sessions::tests::key_change_blocks_sending` | 1.7 s | the "C2R trace equal to idle (Δ ≤ 5 ms)" clause is SE-19's (a verified key change and an invalid one are part of its activity; D-B21) |
+| SE-07 | same test (re-verification unblocks) | — | the row's name `reverify_unblocks` is not a separate test (D-B21) |
+| SE-08 | `sessions::tests::invalid_key_change_freezes` | 1.9 s | bad signature, signed by another key; the "unfragmented 0x05" clause is not producible through the session (a `KeyChange` exists only as the fragmented payload; the content-body decoder refuses 0x05 in `secmp-proto`'s own tests) (D-B21) |
+| SE-09 | `profile::tests::rotate_identity_announces_key_change` | 3.5 s | |
+| SE-10 | `sessions::tests::view_once_refused_for_unverified` | 1.3 s | |
+| SE-11 | `sessions::tests::view_once_from_unverified_locked` | 1.3 s | |
+| SE-12 | `sessions::tests::receipts_defaults` | 3 s | |
+| SE-13a | not built (OPEN-M7-07 B) | — | |
+| SE-13b | `sessions::tests::unconfirmed_after_receipt_timeout` | 1.4 s | `Event::NotConfirmed` is an `Api` event (`Core::session_event`) |
+| SE-14 | `harness::m7_restart::relay_restart_with_store` | 14 s | each recv-queue re-created 10 s–5 min after the `FETCH` that found it gone, the same queue (the queue set from the store), five messages delivered once |
+| SE-15 | `sessions::tests::session_reset_request` | 1.4 s | |
+| SE-16 | `sessions::tests::scheduler_entry_after_first_step` | 2 s | |
+| SE-17 | `sessions::tests::may_send_real_single_entry` | 1.4 s | |
+| SE-18 | `xtask::testscan::session_actor_owns_ratchet` | <0.1 s | |
+| SE-19 | `harness::m7_activity::store_backed_source_activity_independent` | 543–602 s | 3 modes × (idle, active) × 6 h virtual, four profiles each, commit latency `U[0, 200] ms`; **max |Δt| C2R = 0 ms and R2C = 0 ms in every mode** (`se-19-activity-b72a0fc.txt`); same control links, same timing draws; refusals seen in each state; D-B22 |
+| SE-20 | `sessions::tests::inline_attachment_64k` | 1.6 s | |
+| SE-21 | `harness::m7_crash::receipt_effect_commits_with_receive_ratchet` | 2.6 s | scenario (i) fault on the outbox update; (ii) the crash case is the extended PC-05 `crash_between_persist_and_send_no_key_reuse` with `receipts = true` |
+| AP-01 | `api::tests::request_response_and_events` | 1.7 s | every request kind (14 incl. `Remove`), F9 (a refused outbox row: error response, history row taken back), `ViewOnceLost` first |
+| AP-02 | `xtask::testscan::api_exposes_no_secrets_or_store` | <0.01 s | red first: a public `profile_store() -> SharedStore` on `Core` is found by name (`api.rs:486`) |
+| AP-03 | `api::tests::relay_view_lists_11_3` | <0.01 s | the five items are read from `docs/03` and equal the constants; the grouping line for Balanced, Low-bandwidth and direct, the IP line for direct |
+| AP-04 | `xtask::testscan::no_identifiers_reach_transport_types` | <0.01 s | red first: `use secmp_transport::Channel;` in `hub.rs` is named (`importers` ≠ the three). The allowlist as pinned: capability and wire types `RecvCap SendCap LdId LinkBlob Cell CellId Token RelayRef Period Bucket OwnerKey`, plumbing `AsyncConnectOutcome AsyncRelayQueueTransport AsyncSession Channel Command EitherStream Error Isolation Outcome Prepared ProviderStream QueueRef StreamProvider channel counters driver evicted evicted_is_plausible seal_calls sign_calls`; grep at the B-6 head: `kani_proofs.rs:19`, `scheduler/core/mod.rs:31,340,341,366`, `scheduler/run.rs:54,58` (all other `secmp_transport` mentions are comments) |
+| AP-05 | `harness::m7_boundary::no_identifiers_in_request_plaintexts` | 65 s | three parties, two invitations, messages, a verification, a rotation, a key change; > 1 000 request plaintexts (scheduled and control links) searched for texts (ASCII, UTF-16LE), names, fingerprints (raw, hex, HEX), identity-key prefixes, the safety number, `link_key`, the URI, the passphrase and the contact ids (u64 BE/LE, a random 60-bit offset by a placeholder row); the oracle finds the invitation queue's sender id in the invitee's `SEND`s |
+| AP-06 | `xtask::testscan::transport_has_no_core_or_store_dep` | 0.3 s | normal dependencies (the dev-dependency on the test kit is the harness of its own tests) |
+| AP-07 | `api::tests::clock_injected` | 1.4 s | |
+
+Completions: ST-17 (partial: FO-01a in C) — `ViewOnceLost` is asserted in AP-01; BK-03 — `api::tests::restore_requires_reinvite_api`: `Send` → `ReinviteRequired` after an export and import, no session opened, every OPK secret differs from every pre-backup one (Q197); BK-07 `never_automatic` re-run: its last assertion said "A-4: no caller" and now says "exactly the `Api` handler" (D-B17).
+
+Follow-ups (extra tests): Q193 `invitations::tests::consumed_queue_cells_reach_session`; Q194 `invitations::tests::expired_queue_del_after_empty_fetch`; OPEN-M7-B-2 `kani_proofs::kani_prepare_link_send_before_fetch` (D-B16); OPEN-M7-B-3 `scheduler::core::tests::late_commit_of_old_generation_ignored` and the re-dictated `run.rs` tests; OPEN-M7-B-5 `invitations::tests::accept_failure_keeps_pool_queue`; OPEN-M7-B-8: IN-05 through the scheduler's real acknowledgement `harness::m7_scheduled::accept_commits_before_the_real_ack` (the scheduler's `acked` for the invitation queue never reaches the group's last cell before the contact is in the store, and does reach it), PR-08 through the `Core` `api::tests::contact_removed_keeps_schedule` (5 slots before and after, Δ = 0); OPEN-M7-B-10 `profile::tests::opk_ids_never_reused`; and `sessions::tests::queue_set_codec_is_canonical`.
+
+Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-se02.txt`): `m7_rotation.rs:112: the 12 real messages of the last 128 cells go again, not the 3 before them — left: 0, right: 12`; AP-02/AP-04 as in the table.
+
+### §4 Gates
+
+| gate | result | evidence |
+|---|---|---|
+| `cargo xtask ci-fast`, B-4 | PASS at `a9e3a72` | `ci-fast-b4-a9e3a72.txt` |
+| `cargo xtask ci-fast`, B-5 | PASS at `b824055` (run on that commit, checked out detached) | `ci-fast-b5-b824055.txt` |
+| `cargo xtask ci-fast`, B-6 | PASS at `6f264a1` | `ci-fast-b6-6f264a1.txt` |
+| Kani | 57/57, 4796 s (budget 150 min), largest peak 88.0 % (`kani_persist_contract_abstract`), none above 90 % | `kani-m7-b-3343bf4.txt`; new harness alone: `kani-m7-b4-sc-kani_prepare_link_send_before_fetch.txt` |
+| mutants | core (4 batches, `git diff b57ca46..HEAD`): 793 tested = 598 caught / 10 missed / 185 unviable / 0 timeout; store: 150 tested = 122 caught / 0 missed / 28 unviable / 0 timeout. The 10 survivors: 9 in accepted rows (2 of B-3, 7 new "M7 B-7": equivalent or unreachable, 3 test-fixture lines in `testutil.rs`), 1 killed (`hub.rs:533:50`, test extended; checked by hand with the mutation applied, not re-run by cargo-mutants). First pass before the killers: 6 + 18 + (C cut by the timeout, 68 missed of 264 of 291) core and 24 store survivors | `mutants-b-d164f65.txt` |
+| coverage | PASS: secmp-client-core 10249/10722 lines = 95.6 % (min 90 %); secmp-store 5256/5470 = 96.1 % (min 90 %) | `coverage-b-c420953.txt` |
+| `ci-fast` (last) | PASS at `5838ed3` (clean tree) | `ci-fast-b-l-5838ed3.txt` |
+| `ci-full` | PASS at `1318baa` (clean tree; Kani step 4933 s = 82 min, 57/57; 36 fuzz targets; delegated: windows-native, windows-cross, mutants, ct, proverif-link). First run at `e365c9f` FAIL (fuzz only, D-B26) | `ci-full-b-1318baa.txt` |
+
+### §5 Deviations from the weisung (new: D-B16…; D-B10 and D-B11 closed)
+
+- **D-B10 closed (Q193)**: a consumed record's queue is retired with its session; its cells go to the session's receive path and are acknowledged by its commit (`consumed_queue_cells_reach_session`, red first).
+- **D-B11 closed (Q194)**: `QUEUE_DEL` after an empty `FETCH` is a control-op dependency, `ControlOps::schedule_after_empty_fetch`/`…_from`, one implementation for the expired invitation, the rotated queue and the consumed invitation's queue.
+- **D-B16 (OPEN-M7-B-2)**: `pure::fetch_gate(tear, send_missing, fetch_missing)` plus `pure::send_missing(needs_send, has_send_part)` instead of the dictated five-boolean signature — `clippy::fn_params_excessive_bools` (limit three) denies it and the weisung forbids an `#[allow]`; the harness has three covers (not two) and a four-pass loop (`unwind(5)`) that models the SEND-first order over passes with a cell source that becomes ready at any pass, a teardown at any pass; `KANI_COVERS` has 3. The properties are the dictated ones.
+- **D-B17 (BK-07)**: `backup::tests::never_automatic` could not be re-run unchanged once the `Api` handler exists — its last assertion (`callers == []`, "A-4: no caller") contradicts its own allowed-caller list. It now asserts `callers == ["secmp-client-core/src/api.rs"]` (stronger). Reviewer to confirm.
+- **D-B18 (IN-14)**: in-process reopen instead of a child process; the three cells are sent again (cell 0 too); the "`tr_encrypt_calls` = 1" read as above.
+- **D-B19 (queue sets)**: `contacts.queues` is a `QueueSet` (`rotated_ms`, per entry relay, queue id, recipient seed, sender seed or none, period, retirement deadline) — a richer sealed column than B-1's `count ‖ seed` (nothing read the old form; the backup does not export it). An invitation queue's entry has no sender seed (replaced by the first reply, not re-created after a relay restart).
+- **D-B20 (SE-03 draws)**: the run is made short with seeded draws (the inviter's second overlap draw 1.07 h, the invitee's stop 1.08 h); the range of every draw is asserted and the KS test covers the generator.
+- **D-B21 (SE-06, SE-07, SE-08 clauses)**: see the table.
+- **D-B22 (SE-19)**: the invitation accept (hour two) and the rotation (hour three) are structural events at the same virtual time in both runs — a new queue starts a link at a random phase (§10.6 (1)), so the idle trace has them too; the activity is everything else. Peers are store-backed `Hub`s too.
+- **D-B23 (Q121 timing)**: the `MUTANT_HARNESS_SKIP_TESTS` rows of the B-5 tests (`b824055`) came one commit later (`6f264a1`), not in their own commit.
+- **D-B24 (testscan scope)**: `public_surface` (AP-02) leaves out items gated by `#[cfg(feature = "kat")]` (test-only accessors).
+- **D-B25 (mutants batching)**: the core run is split into four `--file` batches (A..D) instead of three; with three, batch C ran into the `timeout 3600` of the A-3b form (264 of 291 mutants tested, 27 untested). The command form is otherwise A-3b; the per-batch lines are in `mutants-b-d164f65.txt`.
+- **D-B26 (fuzz target)**: `fuzz/fuzz_targets/scheduler_event_sequence.rs` did not compile from `ec36bea` (OPEN-M7-B-3) to `e365c9f`: `Src` lacked the `generation` field its `deliver` and `delivery_committed` call use. `ci-fast` does not build the fuzz targets; `ci-full` found it (first run FAIL, fuzz step only, the other 35 targets passed). Fixed in `1318baa` (the field, two lines; a 120 s run: 7237 runs, no crash), the whole gate re-run. Reviewer: whether `ci-fast` should compile the fuzz targets (`cargo check --manifest-path fuzz/Cargo.toml`) is a gate question, not decided here.
+- **Found by the hub test (fixed in `1699b44`)**: `Hub::queue_material` held the store guard across `queue_of`, which locks the store again (a deadlock on first use); `drop(s)` before the call; `hub::tests::invitation_reply_route_update_and_retirement` runs it.
+
+### §6 Locks and vectors
+
+`git diff --stat b57ca46..HEAD -- Cargo.lock fuzz/Cargo.lock` is empty; no `vectors/` change; no `secmp-proto` change in part 2 (see §1).
+
+### §7 Open risks and known limitations
+
+- **R-ROT-1**: the rotation transaction (the pooled queue, the queue set) commits before the `RouteUpdate` cell is planned; a crash between them leaves a current queue the peer never learns. The old queue then retires on its stored deadline and the contact would need a reset. The `RouteUpdate` intent should be persisted with the queue set (a field of `QueueSet`) and re-planned on open — not done.
+- **R-ID-1**: pool queue ids are numbered per relay (`PoolBlob.next`), the hub's send queues from `SEND_BASE`; with more than one relay in a profile ids can collide in the scheduler. The hub is configured with one relay.
+- **R-HUB-1**: `Hub::register_route` takes the first route of a kind this version knows, on the configured relay.
+- **R-LAT-1**: the commit latency of SE-19 is modelled on the driver's worker (`Costs.jitter`), as the other costs; the real store's fsync cost is PC-13's.
+- Windows runtime of IN-07/IN-14/SE-14: the new harness tests use `flock`-free in-process stores; their Windows time is not measured.
+- Profile lock (report §7 "Profile lock and child processes"): `Core::open` on a held profile is `Unavailable` (tested in PR-03).
+
+### §8 Open / questions
+
+[REF] ST-10/BK-04, FO-01a/FO-02 (C), C-T3 (C). `OPEN-M7.md` rows B-2, B-3, B-5, B-8, B-9, B-10 are decided/done by this part; B-6 and B-7 by Commit 1 and the Q194 commit. Question for the reviewer: D-B17 (the BK-07 assertion) and D-B16 (the `fetch_gate` signature).

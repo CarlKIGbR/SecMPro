@@ -42,6 +42,18 @@ fn received(d: &mut VirtualDriver, i: usize, into: &mut BTreeMap<[u8; 16], usize
     }
 }
 
+/// `contacts.queues` of contact 1 of client `i`, as stored.
+fn queues_of(d: &mut VirtualDriver, i: usize) -> Vec<u8> {
+    hub(d, i)
+        .profile_store()
+        .lock()
+        .unwrap()
+        .contact_queues(1)
+        .unwrap()
+        .unwrap()
+        .to_vec()
+}
+
 /// SE-14: three messages arrive; two more are sent while the recipient's answers are held back, so that they are still in
 /// the relay when it restarts; then the relay and both clients restart. The recipient's `QUEUE_NEW` for its queue comes at
 /// `U[10 s, 5 min]` after the restart and names the same queue; the sender, whose `SEND` met `ERR_NOQUEUE`, sends again
@@ -70,14 +82,7 @@ fn relay_restart_with_store() {
     d.run_until(t);
     received(&mut d, host, &mut seen);
     assert_eq!(seen.len(), 3);
-    let queues_before = hub(&mut d, host)
-        .profile_store()
-        .lock()
-        .unwrap()
-        .contact_queues(1)
-        .unwrap()
-        .unwrap()
-        .to_vec();
+    let queues_before = queues_of(&mut d, host);
 
     // the relay loses everything; both clients restart from their stores
     let t_restart = d.now();
@@ -101,6 +106,10 @@ fn relay_restart_with_store() {
             continue;
         }
         let entry = set.entries.iter().find(|e| e.queue == queue.0).unwrap();
+        assert!(
+            entry.retire_at_ms.is_none(),
+            "a queue in overlap, whose QUEUE_DEL waits, is not re-created (Q201)"
+        );
         let rid = rid_of(entry.seed.expose_secret());
         let found_gone = d
             .client_ref(host)
@@ -122,16 +131,14 @@ fn relay_restart_with_store() {
         created += 1;
     }
     assert!(created > 0, "the recipient re-created a queue");
-    let queues_after = hub(&mut d, host)
-        .profile_store()
-        .lock()
-        .unwrap()
-        .contact_queues(1)
-        .unwrap()
-        .unwrap()
-        .to_vec();
+    let queues_after = queues_of(&mut d, host);
+    // the same current queue, from the store; the queue in overlap was not re-created: its retirement is complete (Q201)
+    let mut expected =
+        secmp_client_core::sessions::rotation::QueueSet::decode(&queues_before).unwrap();
+    expected.entries.retain(|e| e.retire_at_ms.is_none());
     assert_eq!(
-        queues_before, queues_after,
+        expected.encode().unwrap().as_slice(),
+        queues_after.as_slice(),
         "the same queues, from the store"
     );
     // the recipient fetches its queue again with the acknowledgement started over: a FETCH after the re-creation

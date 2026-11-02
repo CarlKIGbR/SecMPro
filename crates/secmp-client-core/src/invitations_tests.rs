@@ -1768,4 +1768,73 @@ mod extb1_review {
         );
         Ok(())
     }
+
+    #[test]
+    fn extb1_rejected_duplicate_group_not_reprocessed_after_restart() -> R {
+        use secmp_proto::hx::ACCEPT_SITE_KAT;
+        let (fx, mut e) = inviter("extb1-duplicates", 213, 3)?;
+        let invitations = Invitations::new(fx.profile.clone());
+        let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+        // A fully authentic self-handshake reaches the reflection rejection.
+        let cells = handshake(&fx, &mut e, &issued)?;
+        let mut fetched = Vec::new();
+        for (i, c) in (0_u64..).zip(cells.iter()) {
+            fetched.push((2 * i + 1, Cell::from_bytes(c.as_bytes())?));
+            fetched.push((2 * i + 2, Cell::from_bytes(c.as_bytes())?));
+        }
+        let round =
+            invitations.process_round(&issued.invitation.ld_id, &fetched, &fx.clock, &mut e)?;
+        assert_eq!(round.accepted, None);
+        assert_eq!(round.ack_through, Some(6));
+        assert_eq!(ACCEPT_SITE_KAT.get(), Some("inner checks"));
+        assert!(fx.profile.opk_ids()?.contains(&1));
+        assert_eq!(
+            invitations.retained_ids(&issued.invitation.ld_id)?,
+            Vec::<u64>::new()
+        );
+        drop(invitations);
+        let fx = fx.reopen()?;
+        let invitations = Invitations::new(fx.profile.clone());
+        let again = invitations.process_round(&issued.invitation.ld_id, &[], &fx.clock, &mut e)?;
+        assert!(again.accepted.is_none() && again.events.is_empty());
+        assert_eq!(
+            ACCEPT_SITE_KAT.get(),
+            Some("no complete group"),
+            "no new cells: an already rejected complete group must not be reconstructed from retained duplicates"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extb1_rejected_duplicate_group_spent_next_round() -> R {
+        use secmp_proto::hx::ACCEPT_SITE_KAT;
+        let (fx, mut e) = inviter("extb1-duplicates", 213, 3)?;
+        let invitations = Invitations::new(fx.profile.clone());
+        let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+        // A fully authentic self-handshake reaches the reflection rejection.
+        let cells = handshake(&fx, &mut e, &issued)?;
+        let mut fetched = Vec::new();
+        for (i, c) in (0_u64..).zip(cells.iter()) {
+            fetched.push((2 * i + 1, Cell::from_bytes(c.as_bytes())?));
+            fetched.push((2 * i + 2, Cell::from_bytes(c.as_bytes())?));
+        }
+        let round =
+            invitations.process_round(&issued.invitation.ld_id, &fetched, &fx.clock, &mut e)?;
+        assert_eq!(round.accepted, None);
+        assert_eq!(round.ack_through, Some(6));
+        assert_eq!(ACCEPT_SITE_KAT.get(), Some("inner checks"));
+        assert!(fx.profile.opk_ids()?.contains(&1));
+        assert_eq!(
+            invitations.retained_ids(&issued.invitation.ld_id)?,
+            Vec::<u64>::new()
+        );
+        let again = invitations.process_round(&issued.invitation.ld_id, &[], &fx.clock, &mut e)?;
+        assert!(again.accepted.is_none() && again.events.is_empty());
+        assert_eq!(
+            ACCEPT_SITE_KAT.get(),
+            Some("no complete group"),
+            "no new cells: an already rejected complete group must not be reconstructed from retained duplicates"
+        );
+        Ok(())
+    }
 }

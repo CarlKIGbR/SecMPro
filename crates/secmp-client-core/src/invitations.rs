@@ -1191,11 +1191,12 @@ impl Invitations {
             &identity.responder_keys(),
             entropy,
         );
-        let spent_ids: Vec<u64> = spent
+        let mut spent_ids: Vec<u64> = spent
             .indices()
             .iter()
             .filter_map(|i| ids.get(*i).copied())
             .collect();
+        spent_ids.extend(duplicates_of_spent(&ids, &cells, &spent_ids));
         match result {
             // nothing was committed: the same cells are fetched again, nothing is spent or acknowledged (VD2-7)
             Err(secmp_proto::Error::Unavailable) => Err(Error::Unavailable),
@@ -1240,6 +1241,30 @@ impl Invitations {
             }
         }
     }
+}
+
+/// The ids of the cells that are byte-identical (constant time) to a spent cell but not spent themselves (Q202, EXTB1-4): a
+/// complete group is spent after one `accept`, and a duplicate of one of its chunks in the same round's union must not be
+/// kept to form the group again.
+fn duplicates_of_spent(ids: &[u64], cells: &[Cell], spent_ids: &[u64]) -> Vec<u64> {
+    use secmp_crypto::ConstantTimeEq as _;
+
+    let spent: Vec<&Cell> = ids
+        .iter()
+        .zip(cells)
+        .filter(|(id, _)| spent_ids.contains(id))
+        .map(|(_, cell)| cell)
+        .collect();
+    ids.iter()
+        .zip(cells)
+        .filter(|(id, _)| !spent_ids.contains(id))
+        .filter(|(_, cell)| {
+            spent.iter().fold(false, |any, s| {
+                any | bool::from(s.as_bytes().ct_eq(cell.as_bytes()))
+            })
+        })
+        .map(|(id, _)| *id)
+        .collect()
 }
 
 /// Whether the invitation of `ld_id` is offered at `now` (open and unexpired, R-69, ADR-044 (d)), consumed, or expired.

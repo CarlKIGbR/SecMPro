@@ -104,6 +104,19 @@ impl ControlOps {
         self.ops.is_empty()
     }
 
+    /// Whether a `QUEUE_DEL` of `queue` waits or runs (Q201).
+    #[must_use]
+    pub fn queue_del_pending(&self, queue: crate::scheduler::types::QueueId) -> bool {
+        self.ops
+            .iter()
+            .any(|o| o.kind == ControlKind::QueueDel(queue))
+    }
+
+    /// Drop the `QUEUE_DEL`s of `queue`: the queue is gone from the schedule, there is nothing left to delete (Q201).
+    pub fn drop_queue_del(&mut self, queue: crate::scheduler::types::QueueId) {
+        self.ops.retain(|o| o.kind != ControlKind::QueueDel(queue));
+    }
+
     /// What `id` runs, while it waits or runs.
     #[must_use]
     pub fn kind_of(&self, id: OpId) -> Option<ControlKind> {

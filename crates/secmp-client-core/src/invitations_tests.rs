@@ -466,7 +466,15 @@ fn accept_only_offered_records() -> R {
     );
     let store = fx.profile.store();
     let s = store.lock().map_err(|_| "lock")?;
-    assert!(s.invitations()?.is_empty(), "the record is retired");
+    // Q201: the record is retired; the row stays as a stub of the queue's entry until the `QUEUE_DEL` is acknowledged
+    let rows = s.invitations()?;
+    let [row] = rows.as_slice() else {
+        return Err("one row".into());
+    };
+    assert_eq!(row.status, secmp_store::profile::INVITATION_RETIRING);
+    let plain = s.invitation_record(&row.ld_id)?.ok_or("the stub's entry")?;
+    let entry = crate::sessions::rotation::QueueEntry::decode_one(&plain)?;
+    assert!(entry.retire_at_ms.is_some());
     assert!(
         s.prekeys(KIND_OPK)?.iter().all(|r| r.id != 1),
         "with its one-time prekey"
@@ -1478,6 +1486,141 @@ fn open_queues_and_pool_seeds() -> R {
     Ok(())
 }
 
+/// The row of a retired unconsumed invitation after a restart: RETIRING, one entry of 83 bytes, none of the record's secrets.
+#[cfg(feature = "kat")]
+fn assert_stub_is_only_the_entry(fx: &Fixture, ld_id: &Id, before: &Stored) -> R {
+    use secmp_store::kat::contains;
+    use secmp_store::profile::INVITATION_RETIRING;
+
+    let store = fx.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    let rows = s.invitations()?;
+    let [row] = rows.as_slice() else {
+        return Err("one row".into());
+    };
+    assert_eq!(
+        (row.ld_id.as_slice(), row.status),
+        (&ld_id[..], INVITATION_RETIRING)
+    );
+    let plain = s.invitation_record(ld_id)?.ok_or("stub")?;
+    assert_eq!(plain.len(), 83, "one entry and nothing else");
+    for (name, secret) in [
+        (
+            "link_key",
+            before.record.link_key.expose_secret().as_slice(),
+        ),
+        (
+            "owner_seed",
+            before.record.owner_seed.expose_secret().as_slice(),
+        ),
+        (
+            "blob",
+            before
+                .blob
+                .as_ref()
+                .and_then(|b| b.get(..64))
+                .ok_or("blob")?,
+        ),
+    ] {
+        assert!(!contains(&plain, secret), "{name} in the stub");
+    }
+    assert!(s.invitation_retained(ld_id)?.is_none());
+    Ok(())
+}
+
+/// Q201 (EXTB1-3): an invitation that expired unused keeps a row — status RETIRING, the queue's entry and nothing else — across
+/// a restart until the `QUEUE_DEL` is acknowledged; cells fetched on it are acknowledged and dropped; the deletion removes
+/// the row.
+#[cfg(feature = "kat")]
+#[test]
+fn retiring_stub_survives_restart_until_queue_del() -> R {
+    let (fx, mut e) = inviter("q201", 61, 1)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let before = record_of(&fx, &ld_id)?;
+    let recv_seed = *before.record.invq_recv_seed.expose_secret();
+    fx.at_day(11);
+    let retired = invitations.maintain(&fx.clock)?;
+    let [op] = retired.ops.as_slice() else {
+        return Err("one QUEUE_DEL".into());
+    };
+    assert_eq!(op.kind, ControlKind::QueueDel(QueueId(1)));
+    assert_eq!(op.when, When::AfterEmptyFetch(QueueId(1)));
+    drop(invitations);
+    let fx = fx.reopen()?;
+    let invitations = Invitations::new(fx.profile.clone());
+
+    assert_stub_is_only_the_entry(&fx, &ld_id, &before)?;
+    assert!(
+        !fx.profile.opk_ids()?.contains(&before.record.opk_id),
+        "the one-time prekey is gone"
+    );
+    let stubs = invitations.retiring()?;
+    let [(stub_ld, entry)] = stubs.as_slice() else {
+        return Err("one stub".into());
+    };
+    assert_eq!(*stub_ld, ld_id);
+    assert_eq!(
+        entry.seed.expose_secret(),
+        &recv_seed,
+        "the QUEUE_DEL is signed with the record's recipient key"
+    );
+    assert_eq!(
+        entry.send_seed.as_ref().map(|s| *s.expose_secret()),
+        Some(*issued.invitation.inv_send_seed.expose_secret())
+    );
+    let day11_ms = (T0 + 11 * DAY) * 1_000;
+    let at = entry.retire_at_ms.ok_or("deadline")?;
+    assert!(
+        (day11_ms + 3_600_000..=day11_ms + 86_400_000).contains(&at),
+        "U[1 h, 24 h] after the retirement: {}",
+        at - day11_ms
+    );
+    assert!(invitations.link_put_args(link_data_n(&ld_id)).is_err());
+    let status = OwnerStatus {
+        present: false,
+        consumed: false,
+    };
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, status, &fx.clock)?
+            .is_empty()
+    );
+    assert!(
+        invitations.maintain(&fx.clock)?.ops.is_empty(),
+        "the retirement is not queued twice"
+    );
+
+    // a cell on the retiring queue is acknowledged and dropped: no answer, no event, no session
+    let cell = Cell::from_bytes(&[7_u8; 4096])?;
+    let round = invitations.process_round(&ld_id, &[(5, cell)], &fx.clock, &mut e)?;
+    assert_eq!(round.ack_through, Some(5));
+    assert!(
+        round.accepted.is_none()
+            && round.events.is_empty()
+            && round.ops.is_empty()
+            && round.to_session.is_empty()
+    );
+    // the empty FETCH: nothing to acknowledge
+    let empty = invitations.process_round(&ld_id, &[], &fx.clock, &mut e)?;
+    assert_eq!(empty, Round::default());
+
+    // the QUEUE_DEL is acknowledged: the row is deleted
+    assert!(
+        !invitations.queue_deleted(RelayId(1), QueueId(2))?,
+        "another queue"
+    );
+    assert!(invitations.queue_deleted(RelayId(1), QueueId(1))?);
+    assert!(!invitations.queue_deleted(RelayId(1), QueueId(1))?, "once");
+    drop(invitations);
+    let fx = fx.reopen()?;
+    let store = fx.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    assert!(s.invitations()?.is_empty());
+    Ok(())
+}
+
 // EXTB1 review reproductions; no product changes.
 #[cfg(feature = "kat")]
 mod extb1_review {
@@ -1496,6 +1639,14 @@ mod extb1_review {
             }
         }
         for row in s.invitations()? {
+            if row.status == secmp_store::profile::INVITATION_RETIRING {
+                let plain = s.invitation_record(&row.ld_id)?.ok_or("stub")?;
+                let entry = QueueEntry::decode_one(&plain)?;
+                if ed25519_pk_of(&entry.seed)?.as_bytes() == want.as_bytes() {
+                    return Ok(true);
+                }
+                continue;
+            }
             let record = load(&s, &ld_id_of(&row.ld_id)?)?.ok_or("record")?;
             if record.stored.record.invq_recv_pk()?.as_bytes() == want.as_bytes() {
                 return Ok(true);
@@ -1590,6 +1741,30 @@ mod extb1_review {
         assert!(
             !bool::from(ra.as_slice().ct_eq(rb.as_slice())),
             "different sender keys/sids have identical remaining pools and invitation records"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extb1_retirement_keeps_recipient_until_queue_del() -> R {
+        let (fx, mut e) = inviter("extb1-retire", 205, 2)?;
+        let invitations = Invitations::new(fx.profile.clone());
+        let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+        let recv_pk = record_of(&fx, &issued.invitation.ld_id)?
+            .record
+            .invq_recv_pk()?;
+        assert!(has_recipient(&fx, &recv_pk)?);
+        fx.at_day(11);
+        let retired = invitations.maintain(&fx.clock)?;
+        assert_eq!(retired.ops.len(), 1);
+        let op = retired.ops.first().ok_or("op")?;
+        assert_eq!(op.kind, ControlKind::QueueDel(QueueId(1)));
+        assert_eq!(op.when, When::AfterEmptyFetch(QueueId(1)));
+        drop(invitations);
+        let fx = fx.reopen()?;
+        assert!(
+            has_recipient(&fx, &recv_pk)?,
+            "retirement lost the signing key before the delayed FETCH/QUEUE_DEL can execute"
         );
         Ok(())
     }

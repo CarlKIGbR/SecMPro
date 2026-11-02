@@ -984,6 +984,11 @@ impl World {
         now: u64,
     ) -> Result<(), SchedError> {
         match error {
+            // a queue whose `QUEUE_DEL` waits is not re-created (SE-14): the relay has already forgotten it, the retirement is
+            // complete (Q201)
+            TransportError::NoQueue if self.control.queue_del_pending(queue) => {
+                self.out.push(Output::Event(LinkEvent::QueueGone(queue)));
+            }
             TransportError::NoQueue => self.recreate(queue, now)?,
             TransportError::Auth => self
                 .out
@@ -1497,6 +1502,7 @@ impl Scheduler {
         }
         self.world.sends.retain(|s| s.id != queue);
         self.world.recvs.retain(|r| r.id != queue);
+        self.world.control.drop_queue_del(queue);
         let (world, links) = (&mut self.world, &mut self.links);
         for link in links.iter_mut() {
             let gone = match link.spec {
@@ -2414,6 +2420,70 @@ mod tests {
             sched.acked(q),
             Some(1),
             "the current generation's commit counts"
+        );
+        Ok(())
+    }
+
+    /// Q201: `ERR_NOQUEUE` on a recv-queue whose `QUEUE_DEL` waits does not re-create the queue — the retirement is complete
+    /// (`LinkEvent::QueueGone`); on any other recv-queue it does (SE-14). Removing the queue drops its `QUEUE_DEL`.
+    #[test]
+    fn no_queue_on_a_retiring_queue_completes_the_retirement() -> Result<(), Fail> {
+        use crate::scheduler::types::LinkEvent;
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let mk = |b: u8| -> Result<RecvCap, &'static str> {
+            let seed = SecretBytes::from_slice(&[b; 32]).map_err(|_| "seed")?;
+            RecvCap::from_seed(&seed).map_err(|_| "cap")
+        };
+        let gone = sched
+            .add_recv_queue(0, RelayId(0), mk(0x31)?, 10_000)
+            .map_err(|_| "queue")?;
+        let other = sched
+            .add_recv_queue(0, RelayId(0), mk(0x32)?, 10_000)
+            .map_err(|_| "queue")?;
+        sched
+            .schedule_queue_del_after_empty_fetch(RelayId(0), 1, gone)
+            .map_err(|_| "del")?;
+        assert_eq!(sched.world.control.len(), 1);
+
+        sched
+            .world
+            .queue_error(gone, TransportError::NoQueue, 0)
+            .map_err(|_| "error")?;
+        let events = |out: &[Output]| {
+            out.iter()
+                .filter(|o| matches!(o, Output::Event(LinkEvent::QueueGone(_))))
+                .count()
+        };
+        assert_eq!(events(&sched.world.out), 1);
+        assert_eq!(
+            sched.world.control.len(),
+            1,
+            "no QUEUE_NEW: it is not re-created"
+        );
+        assert!(
+            !sched
+                .world
+                .recvs
+                .iter()
+                .any(|r| r.id == gone && r.recreating)
+        );
+
+        sched
+            .world
+            .queue_error(other, TransportError::NoQueue, 0)
+            .map_err(|_| "error")?;
+        assert_eq!(events(&sched.world.out), 1, "another queue raises nothing");
+        assert_eq!(sched.world.control.len(), 2, "its QUEUE_NEW is queued");
+
+        let mut src = Dummies(0);
+        sched
+            .remove_queue(0, gone, &mut src)
+            .map_err(|_| "remove")?;
+        assert!(!sched.world.control.queue_del_pending(gone));
+        assert_eq!(
+            sched.world.control.len(),
+            1,
+            "only the QUEUE_NEW of the other queue is left"
         );
         Ok(())
     }

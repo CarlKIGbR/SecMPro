@@ -79,6 +79,9 @@ pub enum LinkEvent {
     Alert(QueueId, Alert),
     /// The route of a send queue is marked dead (`ERR_NOQUEUE`; the recipient will re-create it).
     RouteDead(QueueId),
+    /// The relay has no recv-queue `QueueId`, and a `QUEUE_DEL` of it waits: the queue is not re-created, its retirement is
+    /// complete (Q201); the host deletes what it kept for it and removes the queue.
+    QueueGone(QueueId),
 }
 
 /// A control operation to run on its own one-shot link (spec §10.6 (2)); the host owns the key material.

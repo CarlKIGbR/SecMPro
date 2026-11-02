@@ -44,9 +44,9 @@ use secmp_proto::wire::{Id, Period};
 use secmp_proto::{Decode as _, Encode as _};
 use secmp_store::Store;
 use secmp_store::profile::{
-    INVITATION_CONSUMED, INVITATION_OPEN, KIND_OPK, KIND_SPK, delete_prekey, insert_invitation,
-    insert_prekey, put_invitation_record, put_invitation_retained, put_relay_pool,
-    set_invitation_status,
+    INVITATION_CONSUMED, INVITATION_OPEN, INVITATION_RETIRING, KIND_OPK, KIND_SPK,
+    delete_invitation, delete_prekey, insert_invitation, insert_prekey, put_invitation_record,
+    put_invitation_retained, put_relay_pool, set_invitation_status,
 };
 
 use crate::api::{ContactId, Error, Event, InviteReject, RetireReason};
@@ -692,6 +692,10 @@ impl Invitations {
     pub fn link_put_args(&self, n: u32) -> Result<LinkPutArgs, Error> {
         let store = self.lock()?;
         for row in store.invitations()? {
+            // a retiring invitation holds only its queue's entry (Q201)
+            if row.status == INVITATION_RETIRING {
+                continue;
+            }
             let ld_id = ld_id_of(&row.ld_id)?;
             if link_data_n(&ld_id) != n {
                 continue;
@@ -726,6 +730,10 @@ impl Invitations {
     ) -> Result<Vec<OpSpec>, Error> {
         let now = clock.unix_secs();
         let mut store = self.lock()?;
+        // a retiring invitation holds only its queue's entry, no record to open (Q201)
+        if offer_state(&store, ld_id, now)? == OfferState::Retiring {
+            return Ok(Vec::new());
+        }
         // the record is opened once, through `load` (counted while it lives, IN-21), for the whole step
         let mut loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
         let relay = loaded.stored.relay;
@@ -759,6 +767,53 @@ impl Invitations {
     /// [`Error::Unavailable`] if the store cannot be read or written.
     pub fn maintain(&self, clock: &impl Clock) -> Result<Maintained, Error> {
         Ok(retirement(&self.profile.retire(clock)?, None))
+    }
+
+    /// The queues of the invitations that were retired unconsumed and whose `QUEUE_DEL` is not yet acknowledged (Q201): each
+    /// with its invitation and the entry that signs its `FETCH` and `QUEUE_DEL` (the deadline is set). After a restart the
+    /// host fetches them again until the empty `FETCH` and re-arms the deletion.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a row does not open.
+    pub fn retiring(&self) -> Result<Vec<(Id, QueueEntry)>, Error> {
+        let store = self.lock()?;
+        let mut out = Vec::new();
+        for row in store.invitations()? {
+            if row.status != INVITATION_RETIRING {
+                continue;
+            }
+            let ld_id = ld_id_of(&row.ld_id)?;
+            let plain = store.invitation_record(&ld_id)?.ok_or(Error::Unavailable)?;
+            out.push((ld_id, QueueEntry::decode_one(&plain)?));
+        }
+        Ok(out)
+    }
+
+    /// The `QUEUE_DEL` of `queue` was acknowledged (or the relay says the queue is gone): the row of the retiring invitation
+    /// that held it is deleted, in one transaction (Q201). `Ok(false)` if no retiring invitation holds `queue`.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written.
+    pub fn queue_deleted(&self, relay: RelayId, queue: QueueId) -> Result<bool, Error> {
+        let mut store = self.lock()?;
+        let mut gone = None;
+        for row in store.invitations()? {
+            if row.status != INVITATION_RETIRING {
+                continue;
+            }
+            let ld_id = ld_id_of(&row.ld_id)?;
+            let plain = store.invitation_record(&ld_id)?.ok_or(Error::Unavailable)?;
+            let entry = QueueEntry::decode_one(&plain)?;
+            if entry.queue == queue.0 && entry.relay == relay.0 {
+                gone = Some(ld_id);
+                break;
+            }
+        }
+        let Some(ld_id) = gone else {
+            return Ok(false);
+        };
+        store.txn(|tx| delete_invitation(tx, &ld_id))?;
+        Ok(true)
     }
 
     /// The ids of the cells that invitation `ld_id` retains (ascending).
@@ -1055,7 +1110,9 @@ impl Invitations {
                     ..Round::default()
                 });
             }
-            OfferState::Retired => {
+            // retired, or retiring until its `QUEUE_DEL` is acknowledged: a handshake on it is dropped silently, never
+            // answered, no event (Q164, Q201)
+            OfferState::Retired | OfferState::Retiring => {
                 return Ok(Round {
                     ack_through: fetched_max,
                     ..Round::default()
@@ -1098,7 +1155,7 @@ impl Invitations {
             // expired: nothing is decided or acknowledged; the retirement is `maintain`'s
             OfferState::Expired => return Ok(Round::default()),
             // retired: a handshake on it is dropped silently, never answered (Q164)
-            OfferState::Retired => {
+            OfferState::Retired | OfferState::Retiring => {
                 return Ok(Round {
                     ack_through: fetched_max,
                     ..Round::default()
@@ -1192,6 +1249,9 @@ enum OfferState {
     Consumed,
     Expired,
     Retired,
+    /// Expired (or retired by an identity rotation) unconsumed; the row holds the queue's entry until the `QUEUE_DEL` is
+    /// acknowledged (Q201).
+    Retiring,
 }
 
 /// The [`OfferState`] of `ld_id` at `now` (Unix seconds), from its row.
@@ -1203,7 +1263,9 @@ fn offer_state(store: &Store, ld_id: &Id, now: u64) -> Result<OfferState, Error>
     let Some(row) = store.invitations()?.into_iter().find(|r| r.ld_id == *ld_id) else {
         return Ok(OfferState::Retired);
     };
-    Ok(if row.status != INVITATION_OPEN {
+    Ok(if row.status == INVITATION_RETIRING {
+        OfferState::Retiring
+    } else if row.status != INVITATION_OPEN {
         OfferState::Consumed
     } else if row.expires_ms / 1000 <= now {
         OfferState::Expired

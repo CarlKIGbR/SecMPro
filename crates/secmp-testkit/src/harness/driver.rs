@@ -979,7 +979,14 @@ impl VirtualDriver {
         let mut queue: VecDeque<Output> = outs.into();
         while let Some(out) = queue.pop_front() {
             match out {
-                Output::Event(e) => self.clients.get_mut(i).unwrap().events.push((t, e)),
+                Output::Event(e) => {
+                    let client = self.clients.get_mut(i).unwrap();
+                    // the retirement of a queue the relay no longer has is complete (Q201)
+                    if let (LinkEvent::QueueGone(q), Some(hub)) = (&e, client.hub.as_mut()) {
+                        hub.queue_deleted(*q);
+                    }
+                    client.events.push((t, e));
+                }
                 Output::Connect {
                     link,
                     key,
@@ -1295,7 +1302,11 @@ impl VirtualDriver {
                     .get(&queue.0)
                     .ok_or(TransportError::Invalid)?;
                 let cap = RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap())?;
-                transport.delete_queue(&cap)?;
+                // a queue the relay does not have (the `QUEUE_DEL` ran, the host did not record it) is deleted all the same
+                match transport.delete_queue(&cap) {
+                    Ok(()) | Err(TransportError::NoQueue) => {}
+                    Err(e) => return Err(e),
+                }
                 if let Some(hub) = client.hub.as_mut() {
                     hub.queue_deleted(queue);
                 }

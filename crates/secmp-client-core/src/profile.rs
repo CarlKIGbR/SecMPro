@@ -22,8 +22,9 @@ use secmp_proto::tr::Entropy;
 use secmp_proto::wire::Id;
 use secmp_store::Store;
 use secmp_store::profile::{
-    INVITATION_OPEN, KIND_OPK, KIND_SPK, delete_invitation, delete_prekey, insert_prekey,
-    max_prekey_id, meta_u32, put_identity, put_meta_u32,
+    INVITATION_OPEN, INVITATION_RETIRING, KIND_OPK, KIND_SPK, delete_invitation, delete_prekey,
+    insert_prekey, max_prekey_id, meta_u32, put_identity, put_invitation_record,
+    put_invitation_retained, put_meta_u32, set_invitation_status,
 };
 use secmp_store::wrap::{self, Unlocked};
 
@@ -54,6 +55,10 @@ pub struct Retired {
     pub relay: RelayId,
     /// The invitation queue (a pool queue, §5.2).
     pub queue: QueueId,
+    /// When the retiring queue stops being fetched (Unix milliseconds): `now + U[1 h, 24 h]`, drawn once and kept in the
+    /// row of the queue until its `QUEUE_DEL` is acknowledged (Q201); 0 for a consumed invitation (its queue is the
+    /// contact's).
+    pub retire_at_ms: u64,
 }
 
 /// The profile of the user (see the module documentation).
@@ -335,7 +340,12 @@ impl Profile {
         let mut store = self.lock()?;
         let mut dead = Vec::new();
         let mut referenced = Vec::new();
+        let mut timing = crate::timing::TimingRng::os();
         for row in store.invitations()? {
+            // a stub of an invitation retired earlier: its queue is deleted by the `QUEUE_DEL` that is waiting (Q201)
+            if row.status == INVITATION_RETIRING {
+                continue;
+            }
             let ld_id: Id = row
                 .ld_id
                 .as_slice()
@@ -345,6 +355,19 @@ impl Profile {
             let refs = (loaded.stored.record.spk_id, loaded.stored.record.opk_id);
             if row.expires_ms <= now_ms || (all_open && row.status == INVITATION_OPEN) {
                 let consumed = row.status != INVITATION_OPEN;
+                let (lo, hi) = crate::sessions::rotation::OVERLAP_MS;
+                let retire_at_ms = if consumed {
+                    0
+                } else {
+                    now_ms.saturating_add(timing.uniform(lo, hi).map_err(|_| Error::Unavailable)?)
+                };
+                let stub = if consumed {
+                    None
+                } else {
+                    let mut entry = loaded.stored.entry()?;
+                    entry.retire_at_ms = Some(retire_at_ms);
+                    Some(entry.encode_one())
+                };
                 let retired = Retired {
                     ld_id,
                     consumed,
@@ -352,8 +375,9 @@ impl Profile {
                         && loaded.stored.flags & crate::invitations::FLAG_CONSUMED_SEEN != 0,
                     relay: loaded.stored.relay,
                     queue: loaded.stored.queue,
+                    retire_at_ms,
                 };
-                dead.push((retired, refs));
+                dead.push((retired, refs, stub));
             } else if row.status == INVITATION_OPEN {
                 referenced.push(refs.0);
             }
@@ -367,8 +391,17 @@ impl Profile {
             .filter(|id| Some(*id) != current && !referenced.iter().any(|r| i64::from(*r) == *id))
             .collect();
         store.txn(|tx| {
-            for (retired, (_, opk_id)) in &dead {
-                delete_invitation(tx, &retired.ld_id)?;
+            for (retired, (_, opk_id), stub) in &dead {
+                // Q201: an unconsumed invitation keeps a row until its queue is deleted: its entry (the recipient key signs
+                // the `FETCH` and the `QUEUE_DEL`), nothing else; a consumed one's queue is the contact's
+                match stub {
+                    Some(entry) => {
+                        put_invitation_record(tx, &retired.ld_id, entry.as_slice())?;
+                        set_invitation_status(tx, &retired.ld_id, INVITATION_RETIRING)?;
+                        put_invitation_retained(tx, &retired.ld_id, None)?;
+                    }
+                    None => delete_invitation(tx, &retired.ld_id)?,
+                }
                 if !retired.consumed && opks.iter().any(|r| r.id == i64::from(*opk_id)) {
                     delete_prekey(tx, KIND_OPK, i64::from(*opk_id))?;
                 }
@@ -378,7 +411,7 @@ impl Profile {
             }
             extra(tx)
         })?;
-        Ok(dead.into_iter().map(|(retired, _)| retired).collect())
+        Ok(dead.into_iter().map(|(retired, _, _)| retired).collect())
     }
 
     /// Rotate the identity (spec §7.7, §7.8; O-28; Q164): a new `IKS` and fingerprint replace the old ones in one store
@@ -773,15 +806,25 @@ mod tests {
 
         fx.at_day(21);
         let retired = p.maintain(&fx.clock, &mut e)?;
+        let [one] = retired.as_slice() else {
+            return Err("one invitation retired".into());
+        };
+        let day21_ms = (T0 + 21 * DAY) * 1_000;
         assert_eq!(
-            retired,
-            [Retired {
-                ld_id,
-                consumed: false,
-                used_elsewhere: false,
-                relay: RelayId(1),
-                queue: QueueId(1),
-            }]
+            (
+                one.ld_id,
+                one.consumed,
+                one.used_elsewhere,
+                one.relay,
+                one.queue
+            ),
+            (ld_id, false, false, RelayId(1), QueueId(1))
+        );
+        // Q201: the queue is deleted after a deadline U[1 h, 24 h] on, drawn once
+        assert!(
+            (day21_ms + 3_600_000..=day21_ms + 86_400_000).contains(&one.retire_at_ms),
+            "{}",
+            one.retire_at_ms
         );
         assert!(!p.spk_ids()?.contains(&1), "day 21");
         assert_eq!(p.spk_ids()?.len(), 1, "only the current generation is left");
@@ -793,7 +836,23 @@ mod tests {
         {
             let store = p.store();
             let s = store.lock().map_err(|_| "lock")?;
-            assert!(s.invitations()?.is_empty());
+            // Q201: the record is gone; the row stays as a stub holding the queue's entry until the `QUEUE_DEL` is acknowledged
+            let rows = s.invitations()?;
+            let [row] = rows.as_slice() else {
+                return Err("one row".into());
+            };
+            assert_eq!(
+                (row.ld_id.as_slice(), row.status),
+                (&ld_id[..], secmp_store::profile::INVITATION_RETIRING)
+            );
+            let plain = s.invitation_record(&ld_id)?.ok_or("stub")?;
+            let entry = crate::sessions::rotation::QueueEntry::decode_one(&plain)?;
+            assert_eq!(
+                entry.seed.expose_secret(),
+                &[3_u8; 32],
+                "the record's recipient key"
+            );
+            assert_eq!(entry.retire_at_ms, Some(one.retire_at_ms));
         }
         // what is left is durable
         let spks = p.spk_ids()?;

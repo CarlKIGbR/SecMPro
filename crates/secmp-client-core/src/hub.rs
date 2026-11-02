@@ -140,6 +140,22 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             hub.register_recv(open.relay, open.queue, &open.recv_seed, period);
             hub.inv_queues.insert(open.queue, open.ld_id);
         }
+        // the queues of invitations retired unconsumed whose `QUEUE_DEL` did not run yet: fetched again until the empty
+        // `FETCH`, then deleted (Q201); their cells are acknowledged and dropped
+        let base = hub.unix_base();
+        for (ld_id, entry) in hub.invitations.retiring()? {
+            let queue = QueueId(entry.queue);
+            let period = u64::from(entry.period_s).saturating_mul(1_000);
+            hub.register_recv(RelayId(entry.relay), queue, &entry.seed, period);
+            hub.inv_queues.insert(queue, ld_id);
+            let from = entry.retire_at_ms.unwrap_or(0).saturating_sub(base);
+            hub.actions.push(Action::Control(OpSpec {
+                kind: ControlKind::QueueDel(queue),
+                relay: RelayId(entry.relay),
+                related: u64::from(queue.0),
+                when: When::AfterEmptyFetchFrom(queue, from),
+            }));
+        }
         let contacts: Vec<ContactId> = hub.core.index.keys().map(|c| ContactId(*c)).collect();
         for contact in contacts {
             hub.register_contact(contact)?;
@@ -515,6 +531,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// # Errors
     /// [`Error::Unavailable`] if the store cannot be written.
     pub fn queue_deleted(&mut self, queue: QueueId) -> Result<(), Error> {
+        // the stub of a retired unconsumed invitation goes in its own transaction (Q201)
+        self.invitations.queue_deleted(self.config.relay, queue)?;
         self.inv_queues.remove(&queue);
         self.recv_periods.remove(&queue);
         self.sync_view();
@@ -568,11 +586,24 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         }
         drop(s);
         let ld_id = self.inv_queues.get(&queue)?;
-        let open = self.invitations.queue_of(ld_id).ok()?;
-        Some((
-            *open.recv_seed.expose_secret(),
-            *open.send_seed.expose_secret(),
-        ))
+        if let Ok(open) = self.invitations.queue_of(ld_id) {
+            return Some((
+                *open.recv_seed.expose_secret(),
+                *open.send_seed.expose_secret(),
+            ));
+        }
+        // retiring: the entry in the invitation's row (Q201)
+        let (_, entry) = self
+            .invitations
+            .retiring()
+            .ok()?
+            .into_iter()
+            .find(|(_, e)| e.queue == queue.0)?;
+        let send = entry
+            .send_seed
+            .as_ref()
+            .map_or([0; 32], |s| *s.expose_secret());
+        Some((*entry.seed.expose_secret(), send))
     }
 }
 
@@ -1121,6 +1152,59 @@ mod tests {
             let (recv, send) = again.queue_material(queue).ok_or("material")?;
             assert_eq!(send, *issued.invitation.inv_send_seed.expose_secret());
             assert_ne!(recv, send);
+            Ok(())
+        })
+    }
+
+    /// Q201: the queue of an invitation retired unconsumed is, after a restart, fetched again at its period and its
+    /// `QUEUE_DEL` re-armed from the stored deadline; the material the deletion is signed with is the stub's; the
+    /// acknowledged deletion removes the stub.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn retiring_invitation_queue_is_rearmed_after_a_restart() -> R {
+        big(|| {
+            let host = party("hub-r", 77)?;
+            let mut hub = hub_with(&host, "host", 230, Period::S40)?;
+            let issued = hub.invite(T0 + 5 * DAY)?;
+            let queue = hub
+                .invitation_queue(&issued.invitation.ld_id)
+                .ok_or("queue")?;
+            hub.take_actions();
+            let material = hub.queue_material(queue).ok_or("open material")?;
+            host.at_day(6);
+            let retired = hub.invitations.maintain(&host.clock)?;
+            assert_eq!(retired.ops.len(), 1);
+            assert_eq!(
+                hub.queue_material(queue),
+                Some(material),
+                "the stub's keys are the invitation's"
+            );
+            let mut again = hub_with(&host, "host", 240, Period::S10)?;
+            let actions = again.take_actions();
+            assert!(actions.iter().any(|a| matches!(
+                a,
+                Action::AddRecv { queue: q, period_ms: 40_000, .. } if *q == queue
+            )));
+            let rearmed: Vec<u64> = actions
+                .iter()
+                .filter_map(|a| match a {
+                    Action::Control(OpSpec {
+                        kind: ControlKind::QueueDel(q),
+                        when: When::AfterEmptyFetchFrom(w, from),
+                        ..
+                    }) if *q == queue && *w == queue => Some(*from),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rearmed.len(), 1, "{} actions", actions.len());
+            assert_eq!(again.queue_material(queue), Some(material));
+            again.queue_deleted(queue)?;
+            assert!(matches!(
+                again.take_actions().as_slice(),
+                [Action::Remove { queue: q }] if *q == queue
+            ));
+            assert!(again.invitations.retiring()?.is_empty());
+            assert_eq!(again.queue_material(queue), None);
             Ok(())
         })
     }

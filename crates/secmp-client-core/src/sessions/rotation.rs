@@ -64,6 +64,87 @@ pub struct QueueSet {
     pub entries: Vec<QueueEntry>,
 }
 
+impl QueueEntry {
+    /// The entry on the wire (see [`QueueSet`]).
+    fn write(&self, v: &mut Vec<u8>) {
+        v.extend_from_slice(&self.relay.to_be_bytes());
+        v.extend_from_slice(&self.queue.to_be_bytes());
+        v.extend_from_slice(self.seed.expose_secret());
+        match &self.send_seed {
+            Some(s) => v.extend_from_slice(s.expose_secret()),
+            None => v.extend_from_slice(&[0; 32]),
+        }
+        v.extend_from_slice(&self.period_s.to_be_bytes());
+        v.push(u8::from(self.retire_at_ms.is_some()) | (u8::from(self.send_seed.is_some()) << 1));
+        v.extend_from_slice(&self.retire_at_ms.unwrap_or(0).to_be_bytes());
+    }
+
+    /// One entry of exactly [`ENTRY_LEN`] bytes: a period of `PERIODS`, the flags as in [`QueueSet`], a zero deadline and
+    /// zero sender seed where there is none.
+    fn read(entry: &[u8]) -> Result<Self, Error> {
+        if entry.len() != ENTRY_LEN {
+            return Err(Error::Unavailable);
+        }
+        let relay = be32(entry.get(..4).ok_or(Error::Unavailable)?)?;
+        let queue = be32(entry.get(4..8).ok_or(Error::Unavailable)?)?;
+        let recv = entry.get(8..40).ok_or(Error::Unavailable)?;
+        let sender = entry.get(40..72).ok_or(Error::Unavailable)?;
+        let period_s = u16::from_be_bytes(
+            entry
+                .get(72..74)
+                .ok_or(Error::Unavailable)?
+                .try_into()
+                .map_err(|_| Error::Unavailable)?,
+        );
+        let flags = *entry.get(74).ok_or(Error::Unavailable)?;
+        let at = u64::from_be_bytes(
+            entry
+                .get(75..83)
+                .ok_or(Error::Unavailable)?
+                .try_into()
+                .map_err(|_| Error::Unavailable)?,
+        );
+        if flags & !0b11 != 0 || !PERIODS_S.contains(&period_s) {
+            return Err(Error::Unavailable);
+        }
+        let retire_at_ms = (flags & 1 == 1).then_some(at);
+        if retire_at_ms.is_none() && at != 0 {
+            return Err(Error::Unavailable);
+        }
+        let send_seed = if flags & 2 == 2 {
+            Some(SecretBytes::from_slice(sender)?)
+        } else if sender.iter().all(|b| *b == 0) {
+            None
+        } else {
+            return Err(Error::Unavailable);
+        };
+        Ok(Self {
+            relay,
+            queue,
+            seed: SecretBytes::from_slice(recv)?,
+            send_seed,
+            period_s,
+            retire_at_ms,
+        })
+    }
+
+    /// The entry alone, sealed by the caller (the row of a retiring invitation, Q201): [`ENTRY_LEN`] bytes.
+    #[must_use]
+    pub fn encode_one(&self) -> Zeroizing<Vec<u8>> {
+        let mut v = Zeroizing::new(Vec::with_capacity(ENTRY_LEN));
+        self.write(&mut v);
+        v
+    }
+
+    /// The entry of [`QueueEntry::encode_one`] (total: exact length, canonical as in [`QueueSet`]).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] for anything else.
+    pub fn decode_one(bytes: &[u8]) -> Result<Self, Error> {
+        Self::read(bytes)
+    }
+}
+
 fn be32(b: &[u8]) -> Result<u32, Error> {
     Ok(u32::from_be_bytes(
         b.try_into().map_err(|_| Error::Unavailable)?,
@@ -95,16 +176,7 @@ impl QueueSet {
         v.push(count);
         v.extend_from_slice(&self.rotated_ms.to_be_bytes());
         for e in &self.entries {
-            v.extend_from_slice(&e.relay.to_be_bytes());
-            v.extend_from_slice(&e.queue.to_be_bytes());
-            v.extend_from_slice(e.seed.expose_secret());
-            match &e.send_seed {
-                Some(s) => v.extend_from_slice(s.expose_secret()),
-                None => v.extend_from_slice(&[0; 32]),
-            }
-            v.extend_from_slice(&e.period_s.to_be_bytes());
-            v.push(u8::from(e.retire_at_ms.is_some()) | (u8::from(e.send_seed.is_some()) << 1));
-            v.extend_from_slice(&e.retire_at_ms.unwrap_or(0).to_be_bytes());
+            e.write(&mut v);
         }
         Ok(v)
     }
@@ -121,51 +193,12 @@ impl QueueSet {
         let mut entries = Vec::with_capacity(usize::from(*count));
         for i in 0..usize::from(*count) {
             let (entry, tail) = rest.split_at_checked(ENTRY_LEN).ok_or(Error::Unavailable)?;
-            let relay = be32(entry.get(..4).ok_or(Error::Unavailable)?)?;
-            let queue = be32(entry.get(4..8).ok_or(Error::Unavailable)?)?;
-            let recv = entry.get(8..40).ok_or(Error::Unavailable)?;
-            let sender = entry.get(40..72).ok_or(Error::Unavailable)?;
-            let period_s = u16::from_be_bytes(
-                entry
-                    .get(72..74)
-                    .ok_or(Error::Unavailable)?
-                    .try_into()
-                    .map_err(|_| Error::Unavailable)?,
-            );
-            let flags = *entry.get(74).ok_or(Error::Unavailable)?;
-            let at = u64::from_be_bytes(
-                entry
-                    .get(75..83)
-                    .ok_or(Error::Unavailable)?
-                    .try_into()
-                    .map_err(|_| Error::Unavailable)?,
-            );
-            if flags & !0b11 != 0 || !PERIODS_S.contains(&period_s) {
-                return Err(Error::Unavailable);
-            }
-            let retire_at_ms = (flags & 1 == 1).then_some(at);
-            if retire_at_ms.is_none() && at != 0 {
-                return Err(Error::Unavailable);
-            }
-            let send_seed = if flags & 2 == 2 {
-                Some(SecretBytes::from_slice(sender)?)
-            } else if sender.iter().all(|b| *b == 0) {
-                None
-            } else {
-                return Err(Error::Unavailable);
-            };
+            let entry = QueueEntry::read(entry)?;
             let last = i.checked_add(1) == Some(usize::from(*count));
-            if last == retire_at_ms.is_some() {
+            if last == entry.retire_at_ms.is_some() {
                 return Err(Error::Unavailable);
             }
-            entries.push(QueueEntry {
-                relay,
-                queue,
-                seed: SecretBytes::from_slice(recv)?,
-                send_seed,
-                period_s,
-                retire_at_ms,
-            });
+            entries.push(entry);
             rest = tail;
         }
         if entries.is_empty() || !rest.is_empty() {

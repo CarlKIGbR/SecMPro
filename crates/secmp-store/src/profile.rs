@@ -118,6 +118,9 @@ pub const KIND_OPK: i64 = 2;
 pub const INVITATION_OPEN: i64 = 0;
 /// The `status` of an invitation whose handshake was accepted (§5.2 "until the invitation is consumed").
 pub const INVITATION_CONSUMED: i64 = 1;
+/// The `status` of an invitation that expired (or was retired by an identity rotation) unconsumed, whose queue is not yet
+/// deleted: the row holds only the queue's sealed entry until the `QUEUE_DEL` is acknowledged (Q201).
+pub const INVITATION_RETIRING: i64 = 2;
 
 /// Set the counter `key` of `meta` (a public value, e.g. `opk_next`: the next one-time prekey id, never reused, OPEN-M7-B-10)
 /// as a statement of the caller's transaction.
@@ -288,7 +291,7 @@ pub struct InvitationRow {
     pub ld_id: Vec<u8>,
     /// Unix ms at which it expires.
     pub expires_ms: u64,
-    /// [`INVITATION_OPEN`] or [`INVITATION_CONSUMED`].
+    /// [`INVITATION_OPEN`], [`INVITATION_CONSUMED`] or [`INVITATION_RETIRING`].
     pub status: i64,
 }
 

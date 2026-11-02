@@ -320,7 +320,13 @@ fn unclassified_cells_capped_24() -> R {
             .map(|id| Ok((id, garbage(id.wrapping_mul(7919))?)))
             .collect::<Result<_, E>>()?;
         all.extend(fetched.iter().map(|(id, _)| *id));
-        let out = invitations.process_round(&ld_id, &fetched, &fx.clock, &mut e)?;
+        let out = invitations.process_round(
+            &ld_id,
+            crate::testutil::round_on(&invitations, &ld_id)?,
+            &fetched,
+            &fx.clock,
+            &mut e,
+        )?;
         assert_eq!(
             out.ack_through,
             fetched.last().map(|(id, _)| *id),
@@ -366,7 +372,13 @@ fn complete_group_spent_after_one_accept() -> R {
         (7, garbage(104)?),
     ];
     let before = accept_calls_kat();
-    let out = invitations.process_round(&ld_id, &fetched, &fx.clock, &mut e)?;
+    let out = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &fetched,
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(accept_calls_kat(), before + 1);
     assert_eq!(out.accepted, Some(ContactId(1)));
     assert_eq!(out.ack_through, Some(7));
@@ -395,7 +407,13 @@ fn complete_group_spent_after_one_accept() -> R {
     // the next round: the group's cells arrive again (the relay re-delivers; a thief replays them) — nothing is decided
     let mut again: Vec<(u64, Cell)> = (8..).zip(replay).collect();
     again.push((11, garbage(105)?));
-    let out = invitations.process_round(&ld_id, &again, &fx.clock, &mut e)?;
+    let out = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &again,
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(accept_calls_kat(), before + 1, "accept is not called again");
     assert!(out.accepted.is_none());
     assert_eq!(
@@ -431,12 +449,24 @@ fn accept_only_offered_records() -> R {
     let ld_id = issued.invitation.ld_id;
 
     fx.clock.set_ms(99_000);
-    let step = invitations.process_round(&ld_id, &[(1, garbage(1)?)], &fx.clock, &mut e)?;
+    let step = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &[(1, garbage(1)?)],
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(accept_calls_kat(), 1, "offered at t − 1");
     assert!(step.ops.is_empty() && step.accepted.is_none());
 
     fx.clock.set_ms(101_000);
-    let step = invitations.process_round(&ld_id, &[(2, garbage(2)?)], &fx.clock, &mut e)?;
+    let step = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &[(2, garbage(2)?)],
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(
         accept_calls_kat(),
         1,
@@ -834,7 +864,13 @@ fn link_key_lifetime() -> R {
                 invitations.on_owner_status(&ld_id, status, &fx.clock)?;
             }
             2 => {
-                invitations.process_round(&ld_id, &[(1, garbage(1)?)], &fx.clock, &mut e)?;
+                invitations.process_round(
+                    &ld_id,
+                    crate::testutil::round_on(&invitations, &ld_id)?,
+                    &[(1, garbage(1)?)],
+                    &fx.clock,
+                    &mut e,
+                )?;
             }
             _ => {
                 invitations.maintain(&fx.clock)?;
@@ -987,7 +1023,13 @@ fn opk_and_record_in_one_txn() -> R {
     }
 
     secmp_store::kat::reset_counters();
-    let out = invitations.process_round(&ld_id, &[(1, c0), (2, c1), (3, c2)], &fx.clock, &mut e)?;
+    let out = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &[(1, c0), (2, c1), (3, c2)],
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(out.accepted, Some(ContactId(1)));
     let log = secmp_store::kat::txn_log();
     let seq_of = |table: &str, verb: &str| -> Vec<u64> {
@@ -1138,11 +1180,13 @@ fn killers_rounds_and_contact() -> R {
     let invitations = Invitations::new(fx.profile.clone());
     let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
     let ld_id = issued.invitation.ld_id;
+    let on = crate::testutil::round_on(&invitations, &ld_id)?;
     let status = |present, consumed| OwnerStatus { present, consumed };
 
     // retained cells are the fetched ones
     invitations.process_round(
         &ld_id,
+        on,
         &[(1, garbage(1)?), (2, garbage(2)?)],
         &fx.clock,
         &mut e,
@@ -1170,10 +1214,10 @@ fn killers_rounds_and_contact() -> R {
     let many = |from: u64, n: u64| -> Result<Vec<(u64, Cell)>, E> {
         (from..from + n).map(|i| Ok((i, garbage(i)?))).collect()
     };
-    let fill = invitations.process_round(&ld_id, &many(50, 40)?, &fx.clock, &mut e)?;
+    let fill = invitations.process_round(&ld_id, on, &many(50, 40)?, &fx.clock, &mut e)?;
     assert_eq!(fill.ack_through, Some(89));
     assert_eq!(invitations.retained_ids(&ld_id)?.len(), 24);
-    let ok = invitations.process_round(&ld_id, &many(100, 128)?, &fx.clock, &mut e)?;
+    let ok = invitations.process_round(&ld_id, on, &many(100, 128)?, &fx.clock, &mut e)?;
     assert_eq!(
         ok.ack_through,
         Some(227),
@@ -1181,7 +1225,7 @@ fn killers_rounds_and_contact() -> R {
     );
     assert_eq!(
         invitations
-            .process_round(&ld_id, &many(300, 129)?, &fx.clock, &mut e)
+            .process_round(&ld_id, on, &many(300, 129)?, &fx.clock, &mut e)
             .err(),
         Some(Error::Unavailable),
         "24 retained and 129 fetched"
@@ -1206,7 +1250,7 @@ fn killers_rounds_and_contact() -> R {
     let cells = handshake(&peer, &mut pe, &issued)?;
     let record = record_of(&fx, &ld_id)?;
     let fetched: Vec<(u64, Cell)> = (1000..).zip(cells).collect();
-    let out = invitations.process_round(&ld_id, &fetched, &fx.clock, &mut e)?;
+    let out = invitations.process_round(&ld_id, on, &fetched, &fx.clock, &mut e)?;
     assert_eq!(out.accepted, Some(ContactId(1)));
     {
         let store = fx.profile.store();
@@ -1267,7 +1311,13 @@ fn killers_expired_invitation() -> R {
             .is_empty(),
         "expired: not put again"
     );
-    let round = invitations.process_round(&ld_id, &[(1, garbage(1)?)], &fx.clock, &mut e)?;
+    let round = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &[(1, garbage(1)?)],
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(round.events, [Event::InvitationUsedElsewhere]);
     assert_eq!(round.ops.len(), 1);
     assert_eq!(round.ack_through, None);
@@ -1364,7 +1414,14 @@ fn decide_rechecks_status_after_lock() -> R {
     }
     let before = accept_calls_kat();
     let fetched = [(1, c0), (2, c1), (3, c2)];
-    let out = invitations.decide(&ld_id, &fetched, Some(3), &fx.clock, &mut e)?;
+    let out = invitations.decide(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &fetched,
+        Some(3),
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(accept_calls_kat(), before, "consumed: accept is not called");
     assert!(out.accepted.is_none());
     assert_eq!(
@@ -1392,7 +1449,14 @@ fn decide_rechecks_status_after_lock() -> R {
     fx.at_day(11);
     let before = accept_calls_kat();
     let fetched = [(1, c0), (2, c1), (3, c2)];
-    let out = invitations.decide(&ld_id, &fetched, Some(3), &fx.clock, &mut e)?;
+    let out = invitations.decide(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &fetched,
+        Some(3),
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(accept_calls_kat(), before, "expired: accept is not called");
     assert_eq!(out.ack_through, None);
     assert!(out.accepted.is_none());
@@ -1426,7 +1490,13 @@ fn consumed_queue_cells_reach_session() -> R {
             .map(|id| Ok((id, next(&mut g, id.saturating_mul(1_000))?)))
             .collect::<Result<_, E>>()?;
         let before = accept_calls_kat();
-        let out = invitations.process_round(&ld_id, &fetched, &host.clock, &mut entropy(402))?;
+        let out = invitations.process_round(
+            &ld_id,
+            crate::testutil::round_on(&invitations, &ld_id)?,
+            &fetched,
+            &host.clock,
+            &mut entropy(402),
+        )?;
         assert!(
             out.ack_through.is_none(),
             "the invitation path acknowledges nothing"
@@ -1439,6 +1509,44 @@ fn consumed_queue_cells_reach_session() -> R {
         }
         assert_eq!(h.discarded(), 0, "both were cells of the session");
         let _ = &mut g;
+        Ok(())
+    })
+}
+
+/// Q207 (VERIFY-B4 P1 B-3, probe P4; Q193): the expiry sweep keeps a consumed record while its queue is a session's
+/// recv-queue — after `expires` (T0 + 10 d) and a `maintain` on day 11, the session's cells on the invitation queue still
+/// go to the session and nothing is acknowledged by the round; and a record that is gone while the queue is routed fails
+/// closed: the round is `Err(Unavailable)`, nothing acknowledged or decided.
+#[cfg(feature = "kat")]
+#[test]
+fn consumed_queue_survives_expiry_sweep() -> R {
+    use crate::sessions::tests::{Link, big, connect, next, party};
+
+    big(|| {
+        let host = party("q207-h", 75)?;
+        let guest = party("q207-g", 77)?;
+        let Link { mut g, ld_id, .. } = connect(&host, &guest, 410)?;
+        let invitations = Invitations::new(host.profile.clone());
+        let on = crate::testutil::round_on(&invitations, &ld_id)?;
+        for i in 1..=3_u64 {
+            next(&mut g, i.saturating_mul(1_000))?;
+        }
+        let fetched: Vec<(u64, Cell)> = (10..12_u64)
+            .map(|id| Ok((id, next(&mut g, id.saturating_mul(1_000))?)))
+            .collect::<Result<_, E>>()?;
+        host.at_day(11);
+        invitations.maintain(&host.clock)?;
+        let out =
+            invitations.process_round(&ld_id, on, &fetched, &host.clock, &mut entropy(412))?;
+        assert_eq!((out.ack_through, out.to_session), (None, vec![10, 11]));
+        // the row removed by hand while the queue is routed: not decided, not acknowledged
+        host.profile
+            .store()
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| delete_invitation(tx, &ld_id))?;
+        let gone = invitations.process_round(&ld_id, on, &fetched, &host.clock, &mut entropy(414));
+        assert_eq!(gone.err(), Some(Error::Unavailable));
         Ok(())
     })
 }
@@ -1657,7 +1765,13 @@ fn retiring_stub_survives_restart_until_queue_del() -> R {
 
     // a cell on the retiring queue is acknowledged and dropped: no answer, no event, no session
     let cell = Cell::from_bytes(&[7_u8; 4096])?;
-    let round = invitations.process_round(&ld_id, &[(5, cell)], &fx.clock, &mut e)?;
+    let round = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &[(5, cell)],
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(round.ack_through, Some(5));
     assert!(
         round.accepted.is_none()
@@ -1666,7 +1780,13 @@ fn retiring_stub_survives_restart_until_queue_del() -> R {
             && round.to_session.is_empty()
     );
     // the empty FETCH: nothing to acknowledge
-    let empty = invitations.process_round(&ld_id, &[], &fx.clock, &mut e)?;
+    let empty = invitations.process_round(
+        &ld_id,
+        crate::testutil::round_on(&invitations, &ld_id)?,
+        &[],
+        &fx.clock,
+        &mut e,
+    )?;
     assert_eq!(empty, Round::default());
 
     // the QUEUE_DEL is acknowledged: the row is deleted
@@ -1845,8 +1965,13 @@ mod extb1_review {
             fetched.push((2 * i + 1, Cell::from_bytes(c.as_bytes())?));
             fetched.push((2 * i + 2, Cell::from_bytes(c.as_bytes())?));
         }
-        let round =
-            invitations.process_round(&issued.invitation.ld_id, &fetched, &fx.clock, &mut e)?;
+        let round = invitations.process_round(
+            &issued.invitation.ld_id,
+            crate::testutil::round_on(&invitations, &issued.invitation.ld_id)?,
+            &fetched,
+            &fx.clock,
+            &mut e,
+        )?;
         assert_eq!(round.accepted, None);
         assert_eq!(round.ack_through, Some(6));
         assert_eq!(ACCEPT_SITE_KAT.get(), Some("inner checks"));
@@ -1858,7 +1983,13 @@ mod extb1_review {
         drop(invitations);
         let fx = fx.reopen()?;
         let invitations = Invitations::new(fx.profile.clone());
-        let again = invitations.process_round(&issued.invitation.ld_id, &[], &fx.clock, &mut e)?;
+        let again = invitations.process_round(
+            &issued.invitation.ld_id,
+            crate::testutil::round_on(&invitations, &issued.invitation.ld_id)?,
+            &[],
+            &fx.clock,
+            &mut e,
+        )?;
         assert!(again.accepted.is_none() && again.events.is_empty());
         assert_eq!(
             ACCEPT_SITE_KAT.get(),
@@ -1881,8 +2012,13 @@ mod extb1_review {
             fetched.push((2 * i + 1, Cell::from_bytes(c.as_bytes())?));
             fetched.push((2 * i + 2, Cell::from_bytes(c.as_bytes())?));
         }
-        let round =
-            invitations.process_round(&issued.invitation.ld_id, &fetched, &fx.clock, &mut e)?;
+        let round = invitations.process_round(
+            &issued.invitation.ld_id,
+            crate::testutil::round_on(&invitations, &issued.invitation.ld_id)?,
+            &fetched,
+            &fx.clock,
+            &mut e,
+        )?;
         assert_eq!(round.accepted, None);
         assert_eq!(round.ack_through, Some(6));
         assert_eq!(ACCEPT_SITE_KAT.get(), Some("inner checks"));
@@ -1891,7 +2027,13 @@ mod extb1_review {
             invitations.retained_ids(&issued.invitation.ld_id)?,
             Vec::<u64>::new()
         );
-        let again = invitations.process_round(&issued.invitation.ld_id, &[], &fx.clock, &mut e)?;
+        let again = invitations.process_round(
+            &issued.invitation.ld_id,
+            crate::testutil::round_on(&invitations, &issued.invitation.ld_id)?,
+            &[],
+            &fx.clock,
+            &mut e,
+        )?;
         assert!(again.accepted.is_none() && again.events.is_empty());
         assert_eq!(
             ACCEPT_SITE_KAT.get(),

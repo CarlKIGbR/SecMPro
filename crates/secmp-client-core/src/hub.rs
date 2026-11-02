@@ -443,7 +443,13 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         let mut source = (self.core.make_source)();
         let round = self
             .invitations
-            .process_round(&ld_id, &[(id, copy)], &self.core.clock, source.entropy())
+            .process_round(
+                &ld_id,
+                (self.config.relay, queue),
+                &[(id, copy)],
+                &self.core.clock,
+                source.entropy(),
+            )
             .map_err(|_| SourceError)?;
         for event in round.events {
             self.core.raise(event);
@@ -531,33 +537,31 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// # Errors
     /// [`Error::Unavailable`] if the store cannot be written.
     pub fn queue_deleted(&mut self, queue: QueueId) -> Result<(), Error> {
-        // the stub of a retired unconsumed invitation goes in its own transaction (Q201)
-        self.invitations.queue_deleted(self.config.relay, queue)?;
-        self.inv_queues.remove(&queue);
-        self.recv_periods.remove(&queue);
-        self.sync_view();
-        let contacts: Vec<(i64, usize)> = self.core.index.iter().map(|(c, i)| (*c, *i)).collect();
-        for (contact, at) in contacts {
+        // the sessions that receive on `queue` in overlap: their entry goes in the store below, here in memory after it
+        let mut overlapping = Vec::new();
+        for (contact, at) in &self.core.index {
             let bytes = self
                 .core
                 .store
                 .lock()
                 .map_err(|_| Error::Unavailable)?
-                .contact_queues(contact)?;
+                .contact_queues(*contact)?;
             let Some(bytes) = bytes else { continue };
-            let mut set = QueueSet::decode(&bytes)?;
-            let before = set.entries.len();
-            set.entries
-                .retain(|e| !(e.queue == queue.0 && e.retire_at_ms.is_some()));
-            if set.entries.len() == before {
-                continue;
+            if QueueSet::decode(&bytes)?
+                .entries
+                .iter()
+                .any(|e| e.queue == queue.0 && e.retire_at_ms.is_some())
+            {
+                overlapping.push(*at);
             }
-            let encoded = set.encode()?;
-            self.core
-                .store
-                .lock()
-                .map_err(|_| Error::Unavailable)?
-                .txn(|tx| secmp_store::contacts::put_contact_queues(tx, contact, &encoded))?;
+        }
+        // one transaction: the retiring entries of `queue` and the invitation row that held it — a stub (Q201) or a
+        // consumed record (Q207)
+        self.invitations.queue_deleted(self.config.relay, queue)?;
+        self.inv_queues.remove(&queue);
+        self.recv_periods.remove(&queue);
+        self.sync_view();
+        for at in overlapping {
             if let Some(c) = self.core.convs.get_mut(at) {
                 c.drop_recv_queue(queue);
             }
@@ -1059,7 +1063,19 @@ mod tests {
         assert!(matches!(rotated, Response::Rotated(true)));
         host.pump()?;
         host.take_actions();
+        let invitation_rows =
+            |host: &Hub<ManualClock, Fixed>| -> Result<usize, crate::testutil::E> {
+                Ok(host
+                    .profile_store()
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .invitations()?
+                    .len())
+            };
+        let rows = invitation_rows(host)?;
         host.queue_deleted(inv_queue)?;
+        // the consumed record goes in the transaction that removes the queue's entry (Q207)
+        assert_eq!(invitation_rows(host)?, rows.saturating_sub(1));
         let actions = host.take_actions();
         assert!(matches!(actions.as_slice(), [Action::Remove { queue }] if *queue == inv_queue));
         let set = {

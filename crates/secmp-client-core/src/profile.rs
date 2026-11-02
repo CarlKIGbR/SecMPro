@@ -353,6 +353,13 @@ impl Profile {
                 .map_err(|_| Error::Unavailable)?;
             let loaded = crate::invitations::load(&store, &ld_id)?.ok_or(Error::Unavailable)?;
             let refs = (loaded.stored.record.spk_id, loaded.stored.record.opk_id);
+            // a consumed record stays while its queue is a session's recv-queue: its row goes with the queue's entry on the
+            // `QUEUE_DEL` OK (`Invitations::queue_deleted`, Q207); its cells reach the session until then (Q193)
+            if row.status != INVITATION_OPEN
+                && crate::invitations::routed(&store, loaded.stored.relay, loaded.stored.queue)?
+            {
+                continue;
+            }
             if row.expires_ms <= now_ms || (all_open && row.status == INVITATION_OPEN) {
                 let consumed = row.status != INVITATION_OPEN;
                 let (lo, hi) = crate::sessions::rotation::OVERLAP_MS;
@@ -708,6 +715,7 @@ mod tests {
             let fetched: Vec<(u64, Cell)> = (1..).zip(cells).collect();
             let round = invitations.process_round(
                 &open.invitation.ld_id,
+                crate::testutil::round_on(&invitations, &open.invitation.ld_id)?,
                 &fetched,
                 &host.clock,
                 &mut entropy(306),

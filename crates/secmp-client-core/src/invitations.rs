@@ -731,13 +731,13 @@ impl Invitations {
         let now = clock.unix_secs();
         let mut store = self.lock()?;
         // a retiring invitation holds only its queue's entry, no record to open (Q201)
-        if offer_state(&store, ld_id, now)? == OfferState::Retiring {
+        if offer_state(&store, ld_id, None, now)? == OfferState::Retiring {
             return Ok(Vec::new());
         }
         // the record is opened once, through `load` (counted while it lives, IN-21), for the whole step
         let mut loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
         let relay = loaded.stored.relay;
-        if offer_state(&store, ld_id, now)? != OfferState::Offered {
+        if offer_state(&store, ld_id, None, now)? != OfferState::Offered {
             return Ok(Vec::new());
         }
         if status.consumed {
@@ -789,8 +789,10 @@ impl Invitations {
         Ok(out)
     }
 
-    /// The `QUEUE_DEL` of `queue` was acknowledged (or the relay says the queue is gone): the row of the retiring invitation
-    /// that held it is deleted, in one transaction (Q201). `Ok(false)` if no retiring invitation holds `queue`.
+    /// The `QUEUE_DEL` of `queue` was acknowledged (or the relay says the queue is gone), in one transaction: the retiring
+    /// entry of `queue` leaves every contact's `contacts.queues`, and the row of the invitation that held it goes — a
+    /// retiring one (Q201) or a consumed one, which the expiry sweep keeps while its queue is routed (Q207). `Ok(false)` if
+    /// no invitation row holds `queue`.
     ///
     /// # Errors
     /// [`Error::Unavailable`] if the store cannot be read or written.
@@ -798,22 +800,47 @@ impl Invitations {
         let mut store = self.lock()?;
         let mut gone = None;
         for row in store.invitations()? {
-            if row.status != INVITATION_RETIRING {
+            if row.status == INVITATION_OPEN {
                 continue;
             }
             let ld_id = ld_id_of(&row.ld_id)?;
-            let plain = store.invitation_record(&ld_id)?.ok_or(Error::Unavailable)?;
-            let entry = QueueEntry::decode_one(&plain)?;
-            if entry.queue == queue.0 && entry.relay == relay.0 {
+            let (r, q) = if row.status == INVITATION_RETIRING {
+                let plain = store.invitation_record(&ld_id)?.ok_or(Error::Unavailable)?;
+                let entry = QueueEntry::decode_one(&plain)?;
+                (entry.relay, entry.queue)
+            } else {
+                let loaded = load(&store, &ld_id)?.ok_or(Error::Unavailable)?;
+                (loaded.stored.relay.0, loaded.stored.queue.0)
+            };
+            if q == queue.0 && r == relay.0 {
                 gone = Some(ld_id);
                 break;
             }
         }
-        let Some(ld_id) = gone else {
-            return Ok(false);
-        };
-        store.txn(|tx| delete_invitation(tx, &ld_id))?;
-        Ok(true)
+        let mut sets = Vec::new();
+        for c in store.contacts()? {
+            let Some(bytes) = store.contact_queues(c.id)? else {
+                continue;
+            };
+            let mut set = QueueSet::decode(&bytes)?;
+            let before = set.entries.len();
+            set.entries.retain(|e| {
+                !(e.queue == queue.0 && e.relay == relay.0 && e.retire_at_ms.is_some())
+            });
+            if set.entries.len() != before {
+                sets.push((c.id, set.encode()?));
+            }
+        }
+        store.txn(|tx| {
+            for (contact, encoded) in &sets {
+                secmp_store::contacts::put_contact_queues(tx, *contact, encoded)?;
+            }
+            match &gone {
+                Some(ld_id) => delete_invitation(tx, ld_id),
+                None => Ok(()),
+            }
+        })?;
+        Ok(gone.is_some())
     }
 
     /// The ids of the cells that invitation `ld_id` retains (ascending).
@@ -1076,8 +1103,8 @@ impl PrekeyStore for StagedPrekeys {
 }
 
 impl Invitations {
-    /// One fetch round of the invitation queue of `ld_id` (§6.5, §6.6, RT-1, F-M7): `fetched` are the cells `FETCH` returned,
-    /// with their `cell_id`s.
+    /// One fetch round of the invitation queue of `ld_id` (§6.5, §6.6, RT-1, F-M7) — `on`, the queue the host fetched it
+    /// from (relay, queue): `fetched` are the cells `FETCH` returned, with their `cell_id`s.
     ///
     /// Only a record that is **offered** — open and unexpired — reaches `accept` (R-69, ADR-044 (d)); for an expired one
     /// the invitation is retired instead ([`Invitations::maintain`]: `QUEUE_DEL` in `Round::ops`). The fetched cells and
@@ -1089,20 +1116,26 @@ impl Invitations {
     /// after it is durable is `Round::ack_through` set (persist-before-ack, CLAUDE.md §1.7). If the commit fails the call is
     /// [`Error::Unavailable`], nothing was changed and nothing is acknowledged: the same cells come again.
     ///
+    /// A record that is gone while its queue is still a session's recv-queue (in a contact's `contacts.queues`) is not
+    /// decided (Q207, fail closed): nothing is acknowledged, the round is [`Error::Unavailable`] — its cells may be the
+    /// session's (Q193).
+    ///
     /// # Errors
-    /// [`Error::Unavailable`] if the record, the prekeys or the store are unavailable, or `accept` could not be made
-    /// durable.
+    /// [`Error::Unavailable`] if the record, the prekeys or the store are unavailable, `accept` could not be made durable,
+    /// or the record is gone while `on` is routed.
     pub fn process_round(
         &self,
         ld_id: &Id,
+        on: (RelayId, QueueId),
         fetched: &[(u64, Cell)],
         clock: &impl Clock,
         entropy: &mut impl Entropy,
     ) -> Result<Round, Error> {
         let fetched_max = fetched.iter().map(|(id, _)| *id).max();
-        let state = offer_state(&*self.lock()?, ld_id, clock.unix_secs())?;
+        let state = offer_state(&*self.lock()?, ld_id, Some(on), clock.unix_secs())?;
         match state {
             OfferState::Offered => {}
+            OfferState::Unavailable => return Err(Error::Unavailable),
             // consumed: the cells are TR cells of the session (Q193, §6.6 step 4), decided by its receive path
             OfferState::Consumed => {
                 return Ok(Round {
@@ -1127,7 +1160,7 @@ impl Invitations {
                 });
             }
         }
-        self.decide(ld_id, fetched, fetched_max, clock, entropy)
+        self.decide(ld_id, on, fetched, fetched_max, clock, entropy)
     }
 
     /// The classification and the commit of one round of an offered record. The record's status and expiry are checked
@@ -1136,6 +1169,7 @@ impl Invitations {
     fn decide(
         &self,
         ld_id: &Id,
+        on: (RelayId, QueueId),
         fetched: &[(u64, Cell)],
         fetched_max: Option<u64>,
         clock: &impl Clock,
@@ -1143,8 +1177,10 @@ impl Invitations {
     ) -> Result<Round, Error> {
         let identity = self.profile.identity()?;
         let mut store = self.lock()?;
-        match offer_state(&store, ld_id, clock.unix_secs())? {
+        match offer_state(&store, ld_id, Some(on), clock.unix_secs())? {
             OfferState::Offered => {}
+            // gone while routed: not decided (Q207)
+            OfferState::Unavailable => return Err(Error::Unavailable),
             // consumed: the cells are TR cells of the session (Q193, §6.6 step 4), decided by its receive path
             OfferState::Consumed => {
                 return Ok(Round {
@@ -1277,16 +1313,28 @@ enum OfferState {
     /// Expired (or retired by an identity rotation) unconsumed; the row holds the queue's entry until the `QUEUE_DEL` is
     /// acknowledged (Q201).
     Retiring,
+    /// No row, but the queue is still a session's recv-queue: a consumed record the sweep must have kept (Q207). Nothing is
+    /// decided.
+    Unavailable,
 }
 
-/// The [`OfferState`] of `ld_id` at `now` (Unix seconds), from its row.
+/// The [`OfferState`] of `ld_id` at `now` (Unix seconds), from its row; `on` is the queue a round fetched it from.
 ///
 /// # Errors
-/// [`Error::Unavailable`] if there is no such invitation or the store cannot be read.
-fn offer_state(store: &Store, ld_id: &Id, now: u64) -> Result<OfferState, Error> {
-    // no row: the invitation was retired (expired and swept, or an identity rotation, Q164)
+/// [`Error::Unavailable`] if the store cannot be read.
+fn offer_state(
+    store: &Store,
+    ld_id: &Id,
+    on: Option<(RelayId, QueueId)>,
+    now: u64,
+) -> Result<OfferState, Error> {
     let Some(row) = store.invitations()?.into_iter().find(|r| r.ld_id == *ld_id) else {
-        return Ok(OfferState::Retired);
+        // no row while the queue is routed to a session: fail closed (Q207); otherwise retired (an unconsumed invitation
+        // whose `QUEUE_DEL` completed, Q164, Q201)
+        return Ok(match on {
+            Some((relay, queue)) if routed(store, relay, queue)? => OfferState::Unavailable,
+            _ => OfferState::Retired,
+        });
     };
     Ok(if row.status == INVITATION_RETIRING {
         OfferState::Retiring
@@ -1297,6 +1345,24 @@ fn offer_state(store: &Store, ld_id: &Id, now: u64) -> Result<OfferState, Error>
     } else {
         OfferState::Offered
     })
+}
+
+/// Whether `queue` of `relay` is a recv-queue of a session: an entry of a contact's `contacts.queues` (Q207).
+///
+/// # Errors
+/// [`Error::Unavailable`] if the store cannot be read or a set does not decode.
+pub(crate) fn routed(store: &Store, relay: RelayId, queue: QueueId) -> Result<bool, Error> {
+    for c in store.contacts()? {
+        if let Some(bytes) = store.contact_queues(c.id)?
+            && QueueSet::decode(&bytes)?
+                .entries
+                .iter()
+                .any(|e| e.relay == relay.0 && e.queue == queue.0)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// After the commit, before the acknowledgement (`CrashAt::AfterCommitBeforeAck`).

@@ -74,8 +74,13 @@ pub(crate) fn connect(host: &Fixture, guest: &Fixture, seed: u64) -> Result<Link
         &mut ge,
     )?;
     let fetched: Vec<(u64, Cell)> = (1..).zip(start.cells).collect();
-    let round =
-        invitations.process_round(&issued.invitation.ld_id, &fetched, &host.clock, &mut he)?;
+    let round = invitations.process_round(
+        &issued.invitation.ld_id,
+        crate::testutil::round_on(&invitations, &issued.invitation.ld_id)?,
+        &fetched,
+        &host.clock,
+        &mut he,
+    )?;
     let contact = round.accepted.ok_or("accepted")?;
     let h = open_conversation(
         &host.profile.store(),

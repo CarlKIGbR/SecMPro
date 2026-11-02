@@ -234,8 +234,11 @@ fn world(name: &str) -> (Party, Issuance, Relay, Party) {
 /// One accept round over the whole queue.
 fn round(host: &mut Party, issued: &Issuance, relay: &mut Relay) -> Result<Round, Error> {
     let fetched = relay.fetch();
-    Invitations::new(host.profile.clone()).process_round(
+    let invitations = Invitations::new(host.profile.clone());
+    let on = invitations.queue_of(&issued.invitation.ld_id)?;
+    invitations.process_round(
         &issued.invitation.ld_id,
+        (on.relay, on.queue),
         &fetched,
         &host.clock,
         &mut host.e,
@@ -439,8 +442,11 @@ fn child() {
         .collect();
     let clock = ManualClock::new(T0);
     secmp_store::kat::arm_crash(point, 1);
-    let r = Invitations::new(profile).process_round(
+    let invitations = Invitations::new(profile);
+    let on = invitations.queue_of(&ld_id).unwrap();
+    let r = invitations.process_round(
         &ld_id,
+        (on.relay, on.queue),
         &fetched,
         &clock,
         &mut entropy("in07-child"),

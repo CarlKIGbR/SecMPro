@@ -244,3 +244,27 @@ pub(crate) fn insert_record(
     })?;
     Ok(())
 }
+
+/// The (relay, queue) an invitation's round is fetched from (`Invitations::process_round`'s `on`; Q207), read while its
+/// row exists: from the record (open or consumed) or from the stub of a retiring one (Q201).
+pub(crate) fn round_on(
+    invitations: &crate::invitations::Invitations,
+    ld_id: &secmp_proto::wire::Id,
+) -> Result<
+    (
+        crate::scheduler::types::RelayId,
+        crate::scheduler::types::QueueId,
+    ),
+    E,
+> {
+    use crate::scheduler::types::{QueueId, RelayId};
+    if let Ok(q) = invitations.queue_of(ld_id) {
+        return Ok((q.relay, q.queue));
+    }
+    let (_, entry) = invitations
+        .retiring()?
+        .into_iter()
+        .find(|(id, _)| id == ld_id)
+        .ok_or("no invitation row")?;
+    Ok((RelayId(entry.relay), QueueId(entry.queue)))
+}

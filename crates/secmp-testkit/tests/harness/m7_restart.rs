@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use secmp_client_core::api::{ContactId, Event, Request, Response};
-use secmp_client_core::scheduler::types::ControlKind;
+use secmp_client_core::scheduler::types::{ControlKind, QueueId};
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{CONTROL_SLOT_BASE, VirtualDriver};
@@ -131,6 +131,7 @@ fn relay_restart_with_store() {
         created += 1;
     }
     assert!(created > 0, "the recipient re-created a queue");
+    recreated_once(&d, host, &set, t_restart);
     let queues_after = queues_of(&mut d, host);
     // the same current queue, from the store; the queue in overlap was not re-created: its retirement is complete (Q201)
     let mut expected =
@@ -162,4 +163,42 @@ fn relay_restart_with_store() {
         assert_eq!(seen.get(id), Some(&1), "message {id:?}");
     }
     assert_eq!(seen.len(), 5);
+}
+
+/// Q212 (6) (VERIFY-B4 P2 m-3): after the restart at `t_restart` each current queue of `set` is re-created exactly once,
+/// and its first `FETCH` acknowledges nothing — the acknowledgement started over.
+fn recreated_once(
+    d: &VirtualDriver,
+    host: usize,
+    set: &secmp_client_core::sessions::rotation::QueueSet,
+    t_restart: u64,
+) {
+    for entry in set.entries.iter().filter(|e| e.retire_at_ms.is_none()) {
+        let news = d
+            .client_ref(host)
+            .controls_started
+            .iter()
+            .filter(|(t, _, k)| {
+                *t >= t_restart && *k == ControlKind::QueueNew(QueueId(entry.queue))
+            })
+            .count();
+        assert_eq!(news, 1, "one QUEUE_NEW for queue {}", entry.queue);
+        let rid = rid_of(entry.seed.expose_secret());
+        let first_ack = d
+            .client_ref(host)
+            .requests
+            .iter()
+            .filter(|(at, slot, _)| *at > t_restart && *slot < CONTROL_SLOT_BASE)
+            .find_map(|(_, _, r)| match &r.cmd {
+                RequestCmd::Fetch {
+                    rid: fetched, ack, ..
+                } if *fetched == rid => Some(*ack),
+                _ => None,
+            })
+            .expect("a FETCH of the queue after the restart");
+        assert_eq!(
+            first_ack, 0,
+            "the first FETCH after the restart acknowledges nothing"
+        );
+    }
 }

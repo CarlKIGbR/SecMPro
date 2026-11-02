@@ -676,6 +676,17 @@ fn accept_failure_keeps_pool_queue() -> R {
     let contacts =
         crate::contacts::Contacts::new(peer.profile.store(), peer.profile.fingerprint()?);
     assert!(contacts.list()?.is_empty(), "no contact row");
+    // and no session or handshake row (Q212 (10), VERIFY-B4 P1 m-5): the contact would have id 1
+    {
+        let store = peer.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        assert!(s.session_rows(1)?.is_none(), "no session row");
+        assert!(s.handshake(1)?.is_none(), "no handshake row");
+        let rows: i64 = s
+            .connection_kat()
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))?;
+        assert_eq!(rows, 0, "no row of any session");
+    }
 
     drop(contacts);
     // the success half (Q200): the contact, its reply queue's entry and the session are there after a reopen
@@ -1551,8 +1562,40 @@ fn consumed_queue_survives_expiry_sweep() -> R {
     })
 }
 
-/// Q194 / OPEN-M7-B-7 (D-B11; Q163; red first: on the tree where the `QUEUE_DEL` was merely `Delayed` it was due at once, so
-/// `awaits_empty_fetch` is false): the `QUEUE_DEL` of an expired invitation's queue is queued behind an empty `FETCH` — a
+/// Q212 (3) (VERIFY-B4 P3 M-1/§Q4; Q192, Q164): `decide` re-checks the row under its lock — a record deleted between
+/// `process_round`'s look and the decision (its queue in no contact's set) is retired: the round acknowledges the fetched
+/// cells and drops them, `accept` is not called, no contact. The killer of the `delete field ack_through` mutant of the
+/// `Retired | Retiring` arm of `Invitations::decide`.
+#[cfg(feature = "kat")]
+#[test]
+fn decide_retired_acks() -> R {
+    let (fx, mut e) = inviter("q212-retired", 65, 1)?;
+    let (peer, mut pe) = invitee("q212-retired-peer", 67, 2)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let on = crate::testutil::round_on(&invitations, &ld_id)?;
+    let [c0, c1, c2] = handshake(&peer, &mut pe, &issued)?;
+    {
+        let store = fx.profile.store();
+        let mut s = store.lock().map_err(|_| "lock")?;
+        s.txn(|tx| delete_invitation(tx, &ld_id))?;
+    }
+    let before = accept_calls_kat();
+    let fetched = [(1, c0), (2, c1), (3, c2)];
+    let out = invitations.decide(&ld_id, on, &fetched, Some(3), &fx.clock, &mut e)?;
+    assert_eq!(out.ack_through, Some(3));
+    assert_eq!(accept_calls_kat(), before, "retired: accept is not called");
+    assert!(out.accepted.is_none() && out.to_session.is_empty() && out.events.is_empty());
+    let store = fx.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    assert!(s.contacts()?.is_empty(), "no contact");
+    Ok(())
+}
+
+/// Q194 / OPEN-M7-B-7 (D-B11; Q163; red first by a compiling mutation, WEISUNG M7-B-4c Q212 (2): with `ControlOps::schedule`
+/// treating `AfterEmptyFetch` as `Delayed`, `awaits_empty_fetch` is false — `b4c-red-first.txt`): the `QUEUE_DEL` of an
+/// expired invitation's queue is queued behind an empty `FETCH` — a
 /// `FETCH` that still holds a cell does not release it, the first one that holds none does, and its `U[1 min, 60 min]`
 /// delay runs from that `FETCH`.
 #[cfg(feature = "kat")]

@@ -78,16 +78,20 @@ fn activity(seed: u64) -> Vec<(u64, Act)> {
     ));
     events.push((within(&mut mix, hour(4), after(4, half)), Act::ThirdReset));
     events.push((within(&mut mix, hour(5), after(5, half)), Act::ThirdRemove));
+    // a send to the contact that removed us, after its `Control{1}` (Q212 (8), VERIFY-B4 P2 m-6, P3 m-11)
+    events.push((within(&mut mix, after(5, half), end), Act::UserSend(2)));
     events.sort_by_key(|(time, _)| *time);
     events
 }
 
-/// How many sends were refused, by reason.
+/// How many sends were refused, by reason. There is no `Error::Removed`: a send to a contact that sent `Control{1}` is
+/// `Blocked` (as one to a changed identity), counted apart by its target's state (Q212 (8)).
 #[derive(Clone, Copy, Debug, Default)]
 struct Refused {
     frozen: usize,
     reset: usize,
     blocked: usize,
+    removed: usize,
     reinvite: usize,
 }
 
@@ -232,6 +236,16 @@ impl Rig {
         assert!(matches!(answer, Response::Rotated(true)));
     }
 
+    /// Whether the client's contact `id` is `Removed` (the peer sent `Control{1}`).
+    fn removed(&mut self, id: i64) -> bool {
+        let list = hub(&mut self.sim, self.client.idx)
+            .core_mut()
+            .handle(Request::Contacts)
+            .unwrap();
+        matches!(list, Response::Contacts(c) if c.iter().any(|c| c.id.0 == id
+            && c.state == secmp_client_core::contacts::ContactState::Removed))
+    }
+
     fn note(&mut self, outcome: Result<(), Error>) {
         match outcome {
             Ok(()) => self.sent = self.sent.saturating_add(1),
@@ -258,8 +272,13 @@ impl Rig {
                     .or_else(|| self.contacts.first())
                     .copied()
                     .unwrap();
+                let removed = self.removed(target);
                 let outcome = send(&mut self.sim, &self.client, target, count);
-                self.note(outcome);
+                if removed && outcome == Err(Error::Blocked) {
+                    self.refused.removed = self.refused.removed.saturating_add(1);
+                } else {
+                    self.note(outcome);
+                }
                 // and to the contact that came from a backup, once it exists: refused, the slots are untouched
                 if let Some(row) = self.backup_row {
                     let refused = send(&mut self.sim, &self.client, row, count);
@@ -456,6 +475,7 @@ fn store_backed_source_activity_independent() {
             ("Frozen", refused.frozen),
             ("ResetRequested", refused.reset),
             ("Blocked", refused.blocked),
+            ("Removed", refused.removed),
             ("ReinviteRequired", refused.reinvite),
         ] {
             assert!(count > 0, "{mode:?}: no send was refused as {state}");

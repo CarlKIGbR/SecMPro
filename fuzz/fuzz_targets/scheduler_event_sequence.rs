@@ -59,11 +59,14 @@ struct Src {
     next: u64,
     /// The answer for cells not committed yet: 0 committed, 1 pending, 2 storage failure.
     answer: u8,
-    handed: BTreeMap<QueueId, BTreeSet<u64>>,
-    committed: BTreeMap<QueueId, BTreeSet<u64>>,
-    pending: BTreeSet<(QueueId, u64)>,
-    /// The generation each delivery carried, for the later `delivery_committed`.
-    generation: BTreeMap<(QueueId, u64), u64>,
+    /// What was handed over and committed, and what waits, by `(queue, generation, id)` (Q212 (7), VERIFY-B4 P2 m-7): a
+    /// delivery of an old generation stays pending across a re-creation, and its late commit reaches the scheduler with
+    /// its own generation.
+    handed: BTreeSet<(QueueId, u64, u64)>,
+    committed: BTreeSet<(QueueId, u64, u64)>,
+    pending: BTreeSet<(QueueId, u64, u64)>,
+    /// The newest generation a delivery carried, per queue.
+    current: BTreeMap<QueueId, u64>,
 }
 
 impl CellSource for Src {
@@ -86,19 +89,21 @@ impl CellSource for Src {
         id: u64,
         _: &Cell,
     ) -> Result<Delivered, SourceError> {
-        self.generation.insert((queue, id), generation);
-        self.handed.entry(queue).or_default().insert(id);
-        if self.committed.get(&queue).is_some_and(|c| c.contains(&id)) {
+        let newest = self.current.entry(queue).or_insert(generation);
+        *newest = (*newest).max(generation);
+        let key = (queue, generation, id);
+        self.handed.insert(key);
+        if self.committed.contains(&key) {
             return Ok(Delivered::Committed);
         }
         match self.answer {
             0 => {
-                self.committed.entry(queue).or_default().insert(id);
-                self.pending.remove(&(queue, id));
+                self.committed.insert(key);
+                self.pending.remove(&key);
                 Ok(Delivered::Committed)
             }
             1 => {
-                self.pending.insert((queue, id));
+                self.pending.insert(key);
                 Ok(Delivered::Pending)
             }
             _ => Err(SourceError),
@@ -135,7 +140,8 @@ struct World {
     next_cell_id: u64,
     /// The recv-queues by `rid`, and the `ack` of the latest `FETCH` of each the relay opened.
     rids: BTreeMap<Id, QueueId>,
-    relay_ack: BTreeMap<QueueId, u64>,
+    /// The `ack` of the latest `FETCH` of each queue, with the newest generation delivered when the relay opened it.
+    relay_ack: BTreeMap<QueueId, (u64, u64)>,
 }
 
 impl World {
@@ -172,13 +178,15 @@ impl World {
                             }
                             RequestCmd::Fetch { rid, ack, .. } => {
                                 if let Some(q) = self.rids.get(rid) {
-                                    self.relay_ack.insert(*q, *ack);
+                                    let g = self.src.current.get(q).copied().unwrap_or(0);
+                                    self.relay_ack.insert(*q, (g, *ack));
                                 }
                             }
                             RequestCmd::FetchMulti { entries } => {
                                 for e in entries {
                                     if let Some(q) = self.rids.get(&e.rid) {
-                                        self.relay_ack.insert(*q, e.ack);
+                                        let g = self.src.current.get(q).copied().unwrap_or(0);
+                                        self.relay_ack.insert(*q, (g, e.ack));
                                     }
                                 }
                             }
@@ -200,13 +208,18 @@ impl World {
 
     /// Persist-before-ack (CLAUDE.md §1.7): every handed cell at or below the acknowledgement the relay saw is committed.
     fn check_acks(&self) {
-        for (queue, ack) in &self.relay_ack {
-            let Some(handed) = self.src.handed.get(queue) else { continue };
-            for id in handed.iter().filter(|id| **id <= *ack) {
-                assert!(
-                    self.src.committed.get(queue).is_some_and(|c| c.contains(id)),
-                    "queue {queue:?}: id {id} acknowledged ({ack}) but not committed"
-                );
+        // the acknowledgement of a queue's current generation covers only that generation's commits
+        for (queue, (generation, ack)) in &self.relay_ack {
+            if self.src.current.get(queue) != Some(generation) {
+                continue;
+            }
+            for (q, g, id) in &self.src.handed {
+                if q == queue && g == generation && id <= ack {
+                    assert!(
+                        self.src.committed.contains(&(*q, *g, *id)),
+                        "queue {queue:?} generation {g}: id {id} acknowledged ({ack}) but not committed"
+                    );
+                }
             }
         }
     }
@@ -404,12 +417,13 @@ fuzz_target!(|data: &[u8]| {
             }
             10 => {
                 let pick = b.u8();
-                let pending: Vec<(QueueId, u64)> = w.src.pending.iter().copied().collect();
+                // a pending delivery of any generation commits late — also one of a generation the queue has left
+                let pending: Vec<(QueueId, u64, u64)> = w.src.pending.iter().copied().collect();
                 if !pending.is_empty() {
-                    let (queue, id) = pending[usize::from(pick) % pending.len()];
-                    w.src.pending.remove(&(queue, id));
-                    w.src.committed.entry(queue).or_default().insert(id);
-                    let generation = w.src.generation.get(&(queue, id)).copied().unwrap_or(0);
+                    let key = pending[usize::from(pick) % pending.len()];
+                    let (queue, generation, id) = key;
+                    w.src.pending.remove(&key);
+                    w.src.committed.insert(key);
                     w.sched.delivery_committed(queue, generation, id);
                 }
                 w.poll();

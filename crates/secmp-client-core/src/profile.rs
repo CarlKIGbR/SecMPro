@@ -632,7 +632,8 @@ mod tests {
     }
 
     /// The events and operations of an identity rotation's retirement of `ld_id` (Q164): `InvitationRetired` with the
-    /// reason, one `QUEUE_DEL` on the IN-11 schedule (`Delayed`).
+    /// reason, one `QUEUE_DEL` on the IN-11 schedule (`AfterEmptyFetch`: after an empty `FETCH`, then `U[1 min, 60 min]`,
+    /// Q194; VERIFY-B4 P1 m-9).
     #[cfg(feature = "kat")]
     fn assert_retirement(ld_id: &[u8; 16], retired: &[Retired]) {
         let gone = crate::invitations::retirement(

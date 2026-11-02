@@ -20,7 +20,7 @@ use std::sync::Arc;
 use secmp_client_core::outbox::StoreOutbox;
 use secmp_client_core::persist::{SharedStore, StorePersist};
 use secmp_client_core::scheduler::outbox::{Outbox, Persist, PersistKind};
-use secmp_client_core::scheduler::types::{CellSource, QueueId};
+use secmp_client_core::scheduler::types::{CellSource, Delivered, QueueId};
 use secmp_client_core::sessions::actor::{Conversation, Conversations, EntropySource};
 use secmp_crypto::SecretBytes;
 use secmp_proto::tr::{Entropy, FixedEntropy, RatchetState};
@@ -647,11 +647,14 @@ fn fixed_part(store: &SharedStore) -> Vec<u8> {
         .to_vec()
 }
 
-/// SE-21 (Q176, EXT1-1, F9b; M07-report §7): the effect of a receipt commits with the receive ratchet.
-/// (i) With a fault on the `outbox` DELIVERED update (an SQL trigger), the receipt cell is not decided: the ratchet's fixed
-/// part is byte-equal, the row stays `Relayed`, the cell is not acknowledged; with the fault removed the same cell commits
-/// and a reopened `StoreOutbox` reads `Delivered`. (ii) With a crash right after the receive commit (a child process),
-/// the reopened `StoreOutbox` reads `Delivered` and the ratchet is at the committed state.
+/// SE-21 (Q176, EXT1-1, F9b; M07-report §7; REDICT-B4-Q176): the effect of a receipt commits with the receive ratchet.
+/// (i) With a fault on the `outbox` DELIVERED update (an SQL trigger), the receipt cell — sent through the fixture's file
+/// relay `relay/ba`, acknowledged only when its decision is `Committed` (as the PC-05 loop) — is not decided: the
+/// ratchet's fixed part is byte-equal, the row stays `Relayed`, the queue's ack stays 0 and the cell is fetched again
+/// (Q212 (1), VERIFY-B4 P1 M-7); with the fault removed the same cell commits, is acknowledged, and a reopened
+/// `StoreOutbox` reads `Delivered`. (ii) With a crash right after the receive commit (a child process), the reopened
+/// `StoreOutbox` reads `Delivered` and the ratchet is at the committed state. The test asserts durable state and the ack,
+/// not `deliver`'s `Err`.
 #[test]
 fn receipt_effect_commits_with_receive_ratchet() {
     if secmp_store::kat::child_role().as_deref() == Some(ROLE_SE21) {
@@ -670,6 +673,19 @@ fn receipt_effect_commits_with_receive_ratchet() {
         Some(secmp_store::outbox::state::RELAYED)
     );
     let before = fixed_part(&a.store);
+    let ba = FileQueue::new(root.path().join("relay/ba"));
+    assert_eq!(ba.send(&receipt), 1);
+    // A's receive step: fetch, decide, acknowledge only what is committed
+    let receive = |a: &mut SideRun| -> Vec<u64> {
+        let mut fetched = Vec::new();
+        for (id, cell) in ba.fetch() {
+            fetched.push(id);
+            if matches!(a.convs.deliver(BA, 0, id, &cell), Ok(Delivered::Committed)) {
+                ba.ack(id);
+            }
+        }
+        fetched
+    };
     a.store
         .lock()
         .unwrap()
@@ -680,10 +696,7 @@ fn receipt_effect_commits_with_receive_ratchet() {
             secmp_store::outbox::state::DELIVERED
         ))
         .unwrap();
-    assert!(
-        a.convs.deliver(BA, 0, 1, &receipt).is_err(),
-        "the receive is not decided"
-    );
+    assert_eq!(receive(&mut a), [1]);
     assert_eq!(
         fixed_part(&a.store),
         before,
@@ -693,16 +706,22 @@ fn receipt_effect_commits_with_receive_ratchet() {
         outbox_state(&a.store),
         Some(secmp_store::outbox::state::RELAYED)
     );
-    let q = FileQueue::new(root.path().join("relay"));
-    assert_eq!(q.read_u64("ack"), 0, "the cell is not acknowledged");
+    assert_eq!(ba.read_u64("ack"), 0, "the cell is not acknowledged");
+    assert_eq!(
+        ba.fetch().iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        [1],
+        "the cell is fetched again"
+    );
     a.store
         .lock()
         .unwrap()
         .connection_kat()
         .execute_batch("DROP TRIGGER fault")
         .unwrap();
-    a.convs.deliver(BA, 0, 1, &receipt).unwrap();
+    assert_eq!(receive(&mut a), [1], "the same cell, again");
     assert_ne!(fixed_part(&a.store), before, "the same cell commits");
+    assert_eq!(ba.read_u64("ack"), 1, "and is acknowledged");
+    assert!(ba.is_empty());
     let reopened = StoreOutbox::open(Arc::clone(&a.store), SESSION).unwrap();
     assert_eq!(
         reopened.state(&[1; 16]),

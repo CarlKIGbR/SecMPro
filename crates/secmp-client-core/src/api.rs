@@ -437,8 +437,9 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     /// Open the profile in `dir` under `passphrase`.
     ///
     /// # Errors
-    /// [`Error::Unlock`] — uniformly — for a wrong passphrase or a directory that holds no profile; [`Error::Unavailable`]
-    /// otherwise (also for a profile another process holds). Nothing is written then.
+    /// [`Error::Unlock`] — uniformly — for a wrong passphrase (or none); [`Error::Unavailable`] otherwise: a directory that
+    /// holds no profile, a profile another process holds, a store that does not open (PR-03; VERIFY-B4 P1 m-4). Nothing is
+    /// written then.
     pub fn open(
         dir: &std::path::Path,
         passphrase: &[u8],

@@ -695,9 +695,11 @@ mod scan;
 
 /// TEST-SPEC-M7 SE-18 (`docs/02:104`; Q152, Q171): the ratchet is driven in one place — no file of `secmp-client-core/src`
 /// but `sessions/actor.rs` calls a `RatchetState` constructor or method (`RatchetState::…`, `.encrypt_with(`,
-/// `.decrypt_with(`, `.decrypt_first_with(`, `.to_parts(`). The `#[cfg(test)] mod tests` of a file (V-18), the test
-/// helper files (`testutil.rs`, `*_tests.rs`) and `kani_proofs.rs` are excluded; the scan finds the calls where they are
-/// (the actor) and a fixture with a call outside it.
+/// `.decrypt_with(`, `.decrypt_first_with(`, `.to_parts(`, and — Q212 (9), VERIFY-B4 P3 m-5 — `.encrypt(`, `.decrypt(`,
+/// `.to_bytes(`). The `#[cfg(test)] mod tests` of a file (V-18), the test helper files (`testutil.rs`, `*_tests.rs`) and
+/// `kani_proofs.rs` are excluded; `.to_bytes(` is a name other types share, so the two calls of it on other types are
+/// pinned exceptions (an addition is a change of this test). A text scan: a call through an alias or a re-export is not
+/// seen. The scan finds the calls where they are (the actor) and a fixture with a call outside it, one per needle.
 #[cfg(test)]
 #[test]
 fn session_actor_owns_ratchet() -> Result<()> {
@@ -714,12 +716,25 @@ fn session_actor_owns_ratchet() -> Result<()> {
             concat!(".decrypt", "_with("),
             concat!(".decrypt_first", "_with("),
             concat!(".to_", "parts("),
+            concat!(".encrypt", "("),
+            concat!(".decrypt", "("),
+            concat!(".to_", "bytes("),
+        ];
+        // the `.to_bytes(` calls on other types (Q212 (9)): an `InvitationRecord`, the joining of `RatchetParts` by the
+        // in-memory `Persist`
+        let other_types = [
+            concat!("v.extend_from_slice(&self.record.to_", "bytes());"),
+            concat!(
+                "let bytes = parts.ratchet.to_",
+                "bytes().map_err(|_| PersistError)?;"
+            ),
         ];
         product
             .lines()
             .enumerate()
             .filter(|(_, l)| !l.trim_start().starts_with("//"))
             .filter(|(_, l)| needles.iter().any(|n| l.contains(n)))
+            .filter(|(_, l)| !other_types.contains(&l.trim()))
             .map(|(i, l)| (i.saturating_add(1), l.trim().to_owned()))
             .collect()
     }
@@ -755,6 +770,25 @@ fn session_actor_owns_ratchet() -> Result<()> {
         concat!(".to_", "parts()")
     );
     assert_eq!(calls(&fixture).len(), 1);
+    // one fixture per needle of Q212 (9); a pinned other-type call is not one
+    for call in [
+        concat!(".encrypt", "(c)"),
+        concat!(".decrypt", "(b)"),
+        concat!(".to_", "bytes()"),
+    ] {
+        assert_eq!(
+            calls(&format!("fn a() {{ state{call}; }}\n")).len(),
+            1,
+            "{call}"
+        );
+    }
+    assert!(
+        calls(concat!(
+            "        v.extend_from_slice(&self.record.to_",
+            "bytes());\n"
+        ))
+        .is_empty()
+    );
     Ok(())
 }
 

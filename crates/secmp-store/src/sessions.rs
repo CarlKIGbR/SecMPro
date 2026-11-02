@@ -486,13 +486,14 @@ mod tests {
     fn trust_writer_keeps_frozen_and_block() -> R {
         let dir = TempDir::new("trust-guard")?;
         let mut store = Store::open(dir.path(), &TestKey::db_key())?;
-        let row = |store: &Store| -> core::result::Result<Vec<u8>, Error> {
+        let row_of = |store: &Store, session: i64| -> core::result::Result<Vec<u8>, Error> {
             Ok(store
-                .inbox_trust(5)?
+                .inbox_trust(session)?
                 .1
                 .map(|t| t.to_vec())
                 .unwrap_or_default())
         };
+        let row = |store: &Store| row_of(store, 5);
         store.txn(|tx| init_trust(tx, 5, TRUST_UNVERIFIED))?;
         assert_eq!(row(&store)?, [TRUST_UNVERIFIED, BLOCK_NONE]);
         assert_eq!(
@@ -534,6 +535,13 @@ mod tests {
         }
         assert_eq!(
             store.txn(|tx| update_trust(tx, 5, Some(4), None)),
+            Err(Error::Unavailable)
+        );
+        // B-4c killer (`init_trust`): every known code starts a session, an unknown one none
+        store.txn(|tx| init_trust(tx, 7, TRUST_FROZEN))?;
+        assert_eq!(row_of(&store, 7)?, [TRUST_FROZEN, BLOCK_NONE]);
+        assert_eq!(
+            store.txn(|tx| init_trust(tx, 8, 4)),
             Err(Error::Unavailable)
         );
         // a raw row that does not decode is refused by the guard, nothing is written over it

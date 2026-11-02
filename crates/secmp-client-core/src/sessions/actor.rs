@@ -579,12 +579,6 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
     }
 
-    /// The block of this session, if any.
-    #[must_use]
-    pub const fn block(&self) -> Option<Refusal> {
-        self.block
-    }
-
     /// The one entry through which real content (a message, a fragment, a receipt) reaches a cell: `Ok` if it may be
     /// sealed now. SE-17 (F29): everything that is not a dummy asks here, and [`Conversation::seal`] is the only seal.
     ///
@@ -1911,6 +1905,97 @@ mod tests {
             vec![(true, None), (true, None), (false, None)],
             "fragment, completing fragment, one-cell message"
         );
+        Ok(())
+    }
+
+    /// What a recording `Persist` saw of each receive commit's block (Q210 b).
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Blocks(Vec<Option<u8>>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Blocks {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            if kind == crate::scheduler::outbox::PersistKind::Receive {
+                self.0.push(parts.block);
+            }
+            Ok(())
+        }
+    }
+
+    /// B-4c killers (`effects`, Q210 b): the receive commit of a `Control{ContactRemoved}` carries the block `Removed` only
+    /// without an argument, of a `Control{SessionResetRequest}` the block `Reset`; another content carries none.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn receive_commit_carries_the_block() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        use secmp_proto::wire::cell::{ContentBody, ControlBody, ControlCode};
+        let (mut a, mut convs) = session(Blocks::default())?;
+        for (id, (code, arg)) in (1_u64..).zip([
+            (ControlCode::ContactRemoved, vec![1_u8]),
+            (ControlCode::ContactRemoved, Vec::new()),
+            (ControlCode::SessionResetRequest, Vec::new()),
+        ]) {
+            a.plan_control(
+                ContentBody::Control(ControlBody {
+                    code,
+                    arg: secmp_crypto::Zeroizing::new(arg),
+                }),
+                None,
+            );
+            let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+            convs
+                .deliver(QueueId(1), 0, id, &cell)
+                .map_err(|_| "deliver")?;
+        }
+        let dummy = a.prepare_direct(0).map_err(|_| "dummy")?.cell;
+        convs
+            .deliver(QueueId(1), 0, 4, &dummy)
+            .map_err(|_| "deliver")?;
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.persist().0, vec![None, Some(1), Some(2), None]);
+        Ok(())
+    }
+
+    /// B-4c killer (`prepare`, Q210 c): a cell that is not sealed (the persist refuses) puts back only what it carried —
+    /// a dummy nothing, a control content to the front of the plan, where the next slot finds it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn failed_seal_keeps_only_control_content() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.persist_mut().set_failing(true);
+        assert!(a.prepare_direct(0).is_err());
+        assert!(!a.has_pending_real(), "a dummy leaves nothing planned");
+        a.queue_control(secmp_proto::wire::cell::ControlCode::ContactRemoved);
+        assert!(a.prepare_direct(0).is_err());
+        assert!(a.has_pending_real(), "the control content stays planned");
+        a.persist_mut().set_failing(false);
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        convs
+            .deliver(QueueId(1), 0, 1, &cell)
+            .map_err(|_| "deliver")?;
+        assert!(matches!(
+            convs
+                .get_mut(0)
+                .ok_or("conversation")?
+                .take_events()
+                .as_slice(),
+            [super::SessionEvent::ContactRemoved]
+        ));
+        assert!(!a.has_pending_real());
         Ok(())
     }
 

@@ -1153,6 +1153,22 @@ mod tests {
         );
         assert!(set.entries.iter().all(|e| QueueId(e.queue) != inv_queue));
         assert!(host.queue_material(inv_queue).is_none());
+        // B-4c killer (`queue_deleted`, Q207): a queue that is no retiring entry — the current one — stays its session's
+        // recv-queue, also while another entry of the set is retiring
+        let current = set
+            .entries
+            .iter()
+            .find(|e| e.retire_at_ms.is_none())
+            .map(|e| QueueId(e.queue))
+            .ok_or("current")?;
+        host.queue_deleted(current)?;
+        let conv = host
+            .core_mut()
+            .conversations_mut()
+            .get(0)
+            .ok_or("conversation")?;
+        assert_eq!(conv.recv_queues_kat().0, Some(current));
+        assert!(conv.recv_queues_kat().1.contains(&pooled));
         Ok(())
     }
 

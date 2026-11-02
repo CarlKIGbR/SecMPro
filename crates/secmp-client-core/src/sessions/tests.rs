@@ -989,6 +989,46 @@ fn pending_control_codec_is_strict() -> R {
     Ok(())
 }
 
+/// B-4c killers (`set_verified`, `send_period_ms`; Q205, Q210 d): a refused verification is `Frozen` when the stored trust
+/// is `Frozen` — also when the conversation in memory does not know it — and `Unavailable` for any other failed write;
+/// the send period is the one of the contact's route.
+#[cfg(feature = "kat")]
+#[test]
+fn set_verified_maps_the_store_refusal() -> R {
+    use secmp_store::sessions::{TRUST_FROZEN, update_trust};
+
+    big(|| {
+        let mut w = established("b4c-k-sv", 85)?;
+        let guest_store = w.guest.profile.store();
+        // the host's reply moved the guest to `route(1)`, 20 s
+        assert_eq!(send_period_ms(&guest_store, ContactId(1))?, Some(20_000));
+        guest_store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| update_trust(tx, 1, Some(TRUST_FROZEN), None))?;
+        assert_eq!(
+            set_verified(&guest_store, &mut w.g, ContactId(1)).err(),
+            Some(Error::Frozen),
+            "frozen in the store only"
+        );
+        let host_store = w.host.profile.store();
+        host_store
+            .lock()
+            .map_err(|_| "lock")?
+            .connection_kat()
+            .execute_batch(
+                "CREATE TEMP TRIGGER refuse BEFORE UPDATE OF verified ON contacts \
+                 BEGIN SELECT RAISE(ABORT, 'refused'); END",
+            )?;
+        assert_eq!(
+            set_verified(&host_store, &mut w.h, ContactId(1)).err(),
+            Some(Error::Unavailable),
+            "another refusal"
+        );
+        Ok(())
+    })
+}
+
 /// The `rotate` request of the host's contact 1 on relay 1.
 #[cfg(feature = "kat")]
 fn rotate_request<'a>(

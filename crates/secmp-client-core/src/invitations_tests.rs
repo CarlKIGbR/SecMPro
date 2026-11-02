@@ -1593,6 +1593,57 @@ fn decide_retired_acks() -> R {
     Ok(())
 }
 
+/// B-4c killers (`Invitations::next_expiry`, `routed`; Q208, Q207): the hub's next check is the earliest `expires` of an
+/// open invitation (none without one; a consumed one does not count); a queue is routed exactly when an entry of a
+/// contact's `contacts.queues` names it on its relay.
+#[cfg(feature = "kat")]
+#[test]
+fn next_expiry_and_routed() -> R {
+    use crate::sessions::tests::{Link, big, connect, party};
+
+    big(|| {
+        let host = party("b4c-k-h", 81)?;
+        let guest = party("b4c-k-g", 83)?;
+        let invitations = Invitations::new(host.profile.clone());
+        assert_eq!(invitations.next_expiry()?, None, "no invitation");
+        let Link {
+            invitation_queue, ..
+        } = connect(&host, &guest, 420)?;
+        assert_eq!(
+            invitations.next_expiry()?,
+            None,
+            "the consumed one does not count"
+        );
+        let mut e = entropy(422);
+        let mut req = IssueRequest {
+            relay: RelayId(1),
+            inv_period: Period::S10,
+            profile: wire_profile("host")?,
+            expires: T0 + 5 * DAY,
+        };
+        invitations.issue(&req, &host.clock, &mut e)?;
+        req.expires = T0 + 3 * DAY;
+        invitations.issue(&req, &host.clock, &mut e)?;
+        assert_eq!(invitations.next_expiry()?, Some(T0 + 3 * DAY));
+        let (relay, queue) = invitation_queue.ok_or("invitation queue")?;
+        let store = host.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        assert!(
+            routed(&s, relay, queue)?,
+            "the consumed invitation's queue is the session's"
+        );
+        assert!(
+            !routed(&s, relay, QueueId(999))?,
+            "another queue on the same relay"
+        );
+        assert!(
+            !routed(&s, RelayId(9), queue)?,
+            "the same id on another relay"
+        );
+        Ok(())
+    })
+}
+
 /// Q194 / OPEN-M7-B-7 (D-B11; Q163; red first by a compiling mutation, WEISUNG M7-B-4c Q212 (2): with `ControlOps::schedule`
 /// treating `AfterEmptyFetch` as `Delayed`, `awaits_empty_fetch` is false — `b4c-red-first.txt`): the `QUEUE_DEL` of an
 /// expired invitation's queue is queued behind an empty `FETCH` — a

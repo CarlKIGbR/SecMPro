@@ -1540,6 +1540,35 @@ mod tests {
         })
     }
 
+    /// B-4c killer (`<Event as Debug>::fmt`, Q206): an event prints its variant's name and nothing of its fields.
+    #[test]
+    fn event_debug_names_the_variant_only() {
+        assert_eq!(
+            format!("{:?}", Event::KeyChanged(ContactId(7))),
+            "KeyChanged"
+        );
+        let received = Event::MessageReceived {
+            contact: ContactId(7),
+            msg_id: [0xab; 16],
+            kind: 1,
+        };
+        assert_eq!(format!("{received:?}"), "MessageReceived");
+        assert_eq!(
+            format!(
+                "{:?}",
+                Event::InvitationRetired {
+                    id: 99,
+                    reason: RetireReason::IdentityRotated
+                }
+            ),
+            "InvitationRetired"
+        );
+        assert_eq!(
+            format!("{:?}", Event::ViewOnceLost([1; 16])),
+            "ViewOnceLost"
+        );
+    }
+
     /// Q206 (VERIFY-B4 P1 B-2, probe P3; CLAUDE.md §1.6): the `Debug` of a request or a response that carries a passphrase,
     /// a message or a view-once prints neither its bytes (as numbers) nor its text — the variant and the length only.
     #[test]

@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 B-4 / B-4c: the 57th Kani harness `kani_prepare_link_send_before_fetch` (OPEN-M7-B-2; in B-4c its liveness check on the pre-update state, Q212 (5)); ci-fast's last step `fuzz-check` (`cargo check --locked` of the fuzz package on the pinned stable, ADR-045 Amendment 14, Q204).
 - M7 A-3b: `kani_q_frame_plaintext_exact_fit` split into `…_request`, `…_response_fetch`, `…_response_fetch_multi` and `tr_header_selection` into `…_k0_2`, `…_k3`, `…_k4` (OPEN-M7-26 B, Q135), one cover per q_frame harness; evidence `docs/reviews/M07-evidence/kani-m7-a3b-split-150d997.txt`. M7 A-3e: their bounds unwind 5 / 5 / 6 (Q138), `…_k4` the documented exception; evidence `kani-m7-a3e-tr-8ce73d9.txt`.
 - M7 A-2: ADR-055 effective — `rusqlite` (bundled SQLCipher/OpenSSL) in `secmp-store`, `argon2` in `secmp-crypto`; supply-chain records (provisional, Q129), ADR-051 Amendment 7; gates G7-01…G7-04.
 - M7 A1e/A1f: `kani_commit_accept_atomic` split into `…_record_names_opk1` and `…_record_names_deleted_opk2` (OPEN-M7-26 B, Q132/Q133), one cover per harness; evidence `docs/reviews/M07-evidence/kani-m7-a1e-9eac343.txt`, `kani-m7-a1f-commit-accept-9eac343.txt`.

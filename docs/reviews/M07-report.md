@@ -22,7 +22,7 @@ G7-15a, G7-16, G7-18, K7-02, K7-03, FZ-01, FZ-02.
 | A-2 | A | After the A0 report, "ADR-055 accepted" and the owner's vet records: `rusqlite` in `secmp-store`, `argon2` in `secmp-crypto`, allowlist rows, vet/deny/cooldown | G7-01, G7-02, G7-03, G7-04, ST-08 | done @ `bf54d98` |
 | A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
 | A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes with the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
-| B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC closed @ `923b9ee` (SC-01…SC-10, K7-03b; G7-15b opened); B-1…B-3 next (Q146) |
+| B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC closed @ `923b9ee` (SC-01…SC-10, K7-03b; G7-15b opened); B-1…B-3 built (Q146); B-4 built @ `1318baa` (verifier: DO NOT PUSH, 3 B/16 M); Phase B closes with B-4c |
 | C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) |
 
 ## 2. What was built
@@ -884,11 +884,13 @@ Mutants (`mutants-bsc2-0b9a5ed.txt`; one run per package over the whole B-SC in-
 - **D-SC7**: an id seen but never handed (the ledger was full) may be passed by the acknowledgement once the floor's id is recorded — equivalent to the relay omitting it (docs/01: the relay may drop cells); no §1.7 violation.
 - **D-SC8** (Q183): the core sees an opaque `PreparedCell` (`core/mod.rs:749`); real versus dummy is the cell source's (`Conversation::prepare`) and is carried by AI-01…AI-06, SE-19 and ProVerif L12 — a type-level fact, not an SC-09 input. A source not ready at the tick is an overrun (`types.rs:248`, `core/mod.rs:577-584`), covered by the overrun tests.
 - **D-SC9** (Q183): `pure::fetch_due` (`prepare_link`) and `pure::note_sent` (`World::tick`) extracted; `fetch_lead_deadline` is reached from `prepare_link` through `pure::fetch_due`; the SC-10 scan pins the chain `prepare_link → fetch_due → fetch_lead_deadline` (WEISUNG M7-B-SC2b). Each SC-09 tick starts from a fresh ledger after `report_all` (the production ledger is empty there too).
-- **D-SC10** (Q184): SC-08 widened and kept (88.4 % alone ≤ 90 %); no `kani_persist_contract_hostile`.
+- **D-SC10** (Q184): SC-08 widened and kept (88.4 % alone ≤ 90 %); no `kani_persist_contract_hostile`. *[B-4c (VERIFY-B4 P3 m-8): the SC-08 Kani bound does not reach the F1 sequence; F1 is guarded by `pure::tests::hostile_relay_*` (A4f2-BSC2 m-1).]*
 - **D-SC11** (Q185): FZ-04 relay with real cells, hostile response modes, late commits, frame reports and the §1.7 oracle; event budget ≤ 5 bytes, `FUZZ_MAX_LEN` 970 unchanged.
 - **D-SC12** (Q186): the reviewer extends Q44 to drifted tests: `lifetime_end_reconnects_fresh` (16.8 s) and `link_lifetime_uniform_6h_24h` (10.9 s) in `MUTANT_HARNESS_SKIP_TESTS` (times of the full harness run of `ci-fast-bsc-l-923b9ee`; alone 8.5 s and 5.8 s).
 
 ### §7 risks
+
+*[B-4c (VERIFY-B4 P3 m-8): the A4f2-BSC2 minors m-1…m-5 of the B-4 Commit-0 block (below, §Commit 0 corrections) belong here: m-1 the SC-08 Kani bound vs F1 (D-SC10); m-2 the SC-10 red-first line is of an earlier `want`, the committed `want` is red on `d2b93ba` too; m-3 the Q186 times rest on Q44; m-4 SC-09 covers 1 and 2 are input-only, the reserved branch of `reserved_rr` has no cover; m-5 the SC-01/R-01/SIM-02 series are summarised.]*
 
 - KANI-M6-C-1: items 1–3 and 5 closed; item 4 closed by the re-dictated SC-09 (Q183); the SEND-before-FETCH guard (`core/mod.rs:670-671`, M06-report:791) is not harness-covered — OPEN-M7-B-2.
 - SC-07: late commits of an old generation are routed by `Deferred`'s counter (`run.rs:451-492`); `Scheduler::delivery_committed` takes no generation — OPEN-M7-B-3.
@@ -1000,14 +1002,14 @@ Return to the reviewer: D-B6 (proto `from_parts` or the assembly kept).
 `6ae6f44` test(harness): m0_early killers of the timing.rs rejection-sampling mutants (Q187, G7-10) · `aa89fd5` ci(win-ondemand): probe perl and cargo-nextest before the build (Q188). Guard `<G>` = `7d80d6a`.
 
 ### §3 The tests
-`m0_early::accept_ceiling_is_the_largest_multiple_of_span`, `sample_with_accepts_below_the_ceiling_and_rejects_at_it`, `sample_round_composes_ceiling_and_sample` (three; the weisung says four but lists three and excludes `uniform_counts_one_draw_per_call`). `cargo nextest run -p secmp-testkit --features harness -E 'test(/^m0_early::/)'`: 7 passed, new tests 0.007–0.011 s each, slowest 0.147 s. Q188: steps "Probe perl" and "Probe cargo-nextest" after "Probe the runner toolchain"; `cargo nextest run -p xtask -E 'test(/win_|vm_up|vm_down|nasm|id_token|oidc|workflow|ondemand/)'`: 30 passed.
+`m0_early::accept_ceiling_is_the_largest_multiple_of_span`, `sample_with_accepts_below_the_ceiling_and_rejects_at_it`, `sample_round_composes_ceiling_and_sample` (three; the weisung says four but lists three and excludes `uniform_counts_one_draw_per_call`). `cargo nextest run -p secmp-testkit --features harness -E 'test(/^m0_early::/)'`: 7 passed, new tests 0.007–0.011 s each, slowest 0.147 s. Q188: steps "Probe perl" and "Probe cargo-nextest" after "Probe the runner toolchain"; `cargo nextest run -p xtask -E 'test(/win_|vm_up|vm_down|nasm|id_token|oidc|workflow|ondemand/)'`: 30 passed. *[Corrected by B-4 Commit 0, amended in place by B-4c (VERIFY-B4 P3 m-8): the two filters on the start head `9b511a2`: `m0_early::` 7 passed; the xtask filter 30 passed (`ci1-m0early-xtask-9b511a2.txt`).]*
 
 ### §4 Evidence
-`mutants-ci1-timing-aa89fd5.txt`: RED (old `m0_early.rs`, `--timeout 120`) 40 mutants: 30 caught, 4 unviable, **6 timeouts** — exactly `accept_ceiling` None/Some(0)/Some(1), `sample_with` None and `>=`→`<`, `sample_round` None (reproduced locally). GREEN (HEAD): 40 mutants, 36 caught, 4 unviable, **0 timeouts, 0 missed**; of the timing.rs mutants 30 caught, 3 unviable. Command deviation (documented in the file): the weisung's `--features harness --package secmp-client-core --file timing.rs` fails in the unmutated tree (no such feature in that package), so `--package secmp-transport` was added and `--re` replaces `--file`; `--re` let 7 non-timing mutants through.
+`mutants-ci1-timing-aa89fd5.txt`: RED (old `m0_early.rs`, `--timeout 120`) 40 mutants: 30 caught, 4 unviable, **6 timeouts** — exactly `accept_ceiling` None/Some(0)/Some(1), `sample_with` None and `>=`→`<`, `sample_round` None (reproduced locally). GREEN (HEAD): 40 mutants, 36 caught, 4 unviable, **0 timeouts, 0 missed**; of the timing.rs mutants 30 caught, 3 unviable. Command deviation (documented in the file): the weisung's `--features harness --package secmp-client-core --file timing.rs` fails in the unmutated tree (no such feature in that package), so `--package secmp-transport` was added and `--re` replaces `--file`; `--re` let 7 non-timing mutants through. *[Corrected by B-4 Commit 0, amended in place by B-4c (VERIFY-B4 P3 m-8): `timing.rs`: 30 caught / 3 unviable / 0 timeout of 33; the whole run 36 / 4 / 0 of 40; the CI1c footer reading "30/3/0, 40 run" is superseded by this.]*
 ci-fast-ci1-aa89fd5.txt red at fmt; ci-fast-ci1c-f32e8e8.txt green (after `f32e8e8` style(harness): rustfmt of the m0_early killers, formatting only).
 
 ### §5 Deviations
-D-CI1: the Q186 skips removed the accidental early killers of the `timing.rs` mutants; explicit `m0_early` killers (G7-10) replace them; the skips stay.
+D-CI1: the Q186 skips removed the accidental early killers of the `timing.rs` mutants; explicit `m0_early` killers (G7-10) replace them; the skips stay. *[Corrected by B-4 Commit 0, amended in place by B-4c (VERIFY-B4 P3 m-8): D-CI2: the CI1 mutants command deviated (`--package secmp-transport` added, `--re` instead of `--file`; recorded in CI1 §4).]*
 
 ### §6 win-test
 win-test 41128820834 failed in 15 min (perl + nextest invisible to the SYSTEM runner service); with Q188 the next failure is at the probe; `vm-down` skipped by design (`was_running == true`).
@@ -1046,18 +1048,18 @@ Guard (2026-10-31, session M7-B3b2; single commands, each exit 0): `git status -
 | ruling | test | commit | evidence |
 |---|---|---|---|
 | Q189 | `secmp-proto` `prekeys::tests::identity_section_round_trip` | `373869b` | green; `generate_with_section` and `generate` from one `FixedEntropy` stream give the same `IKSPublic`; `from_section` gives it back; version 0x02 and 96 bytes `Rejected` |
-| Q189 | `invitations::tests::issue_equals_issue_invitation_on` (extended) | `373869b` | green on three paths, each blob, invitation, URI **and stored `InvitationRecord` (`to_bytes`)** byte-equal to `MemoryPrekeyStore::issue_invitation_on`: reused OPK; `opk_is_new` (the creation's OPK row deleted first); SPK rotated inside the issue (day 8; reference `spk_id` 2). The rotation case runs on the `opk_is_new` path: the reference rotates before it draws the OPK, the product draws the reused OPK at creation — reused-OPK + rotation has no reference draw order |
+| Q189 | `invitations::tests::issue_equals_issue_invitation_on` (extended) | `373869b` | green on three paths, each blob, invitation, URI **and stored `InvitationRecord` (`to_bytes`)** byte-equal to `MemoryPrekeyStore::issue_invitation_on`: reused OPK; `opk_is_new` (the creation's OPK row deleted first); SPK rotated inside the issue (day 8; reference `spk_id` 2). The rotation case runs on the `opk_is_new` path: the reference rotates before it draws the OPK, the product draws the reused OPK at creation — reused-OPK + rotation has no reference draw order | *[Corrected by B-4 Commit 0, amended in place by B-4c (VERIFY-B4 P3 m-8): it runs `issue_on_parts` on both sides and pins the core's store work (lookups, OPK/rotation draw position, stored record), no longer the construction itself (pinned by the hx/encodings vectors).]*
 | Q190 | `invitations::tests::commit_accept_twice_is_rejected` | `323b209` | red 1/3 (`left: Ok(())`, `right: Err(Rejected)`) |
 | Q190 | `invitations::tests::check_invitation_refuses_bad_version_before_kind` | `323b209` | red 2/3 (`left: Some(Unsupported)`, `right: Some(Invalid)`) |
 | Q190 | `retention::tests::offer_ignores_a_prefilled_out` | `323b209` | red 3/3 (`left: Some([18446744073709551615])`, `right: Some([1])`) |
 | Q191 | `retention::tests::retain_is_fold_of_offer` (10 000 LCG runs) | `1057964` | green |
 | Q191 | `kani_proofs::kani_retention_bound_24` (K7-01, unwind 25, 4 covers) | `1057964` | `VERIFICATION:- SUCCESSFUL`, 0 of 343 failed, 4 of 4 covers |
-| Q192 | `invitations::tests::live_counter_counts_owner_status_open` | `c70827c` | green; peak 1, live 0 after, flag written. Green on the old code too (the old path's raw plaintext was not counted, so no counter test can see it); it pins the single open |
+| Q192 | `invitations::tests::live_counter_counts_owner_status_open` | `c70827c` | green; peak 1, live 0 after, flag written. Green on the old code too (the old path's raw plaintext was not counted, so no counter test can see it); it pins the single open | *[Corrected by B-4 Commit 0, amended in place by B-4c (VERIFY-B4 P3 m-8): it pins peak 1 / live 0 / the persisted flag; the no-raw-read property is structural (read in `invitations.rs`); the test stays green with a raw read reintroduced.]*
 | Q192 | `invitations::tests::decide_rechecks_status_after_lock` | `c70827c`, `5d2be5f` | green; with the re-check disabled by hand: `consumed: accept is not called` fails (sanity, not committed); (a) also asserts `ack_through == Some(3)` (`5d2be5f`, the mutants killer; red with the field deleted: `left: None`) |
 | Q192 | `harness::m7_accept::k_id_independent_end_to_end` (IN-20) | `c70827c` | green; now also asserts the two sealed records byte-identical (D-B13) |
 | Q191 | `xtask::expect::tests::fuzz_and_kani_lists_core`, `gates::tests::{kani_refuses_fifteen_harnesses, kani_cover_count_is_pinned}` | `1057964` | green (56; the pin reads `kani-m7-b3b-sc-kani_retention_bound_24.txt`) |
 
-All new tests green on the final code (`cargo nextest run -p secmp-client-core -p secmp-proto --features kat`: 487 passed at `c70827c`; the m7_accept harness 4/4; ci-fast at `5d2be5f`).
+All new tests green on the final code (`cargo nextest run -p secmp-client-core -p secmp-proto --features kat`: 487 passed at `c70827c`; the m7_accept harness 4/4; ci-fast at `5d2be5f`). *[Corrected by B-4 Commit 0, amended in place by B-4c (VERIFY-B4 P3 m-8): on the start head `9b511a2`: 487 passed; `m7_accept::` 4 passed (`nextest-b3b-9b511a2.txt`).]*
 
 ### §4 Kani, mutants, coverage, vectors
 
@@ -1098,6 +1100,8 @@ Blocked: none. STOP: none.
 
 ## Commit 0 corrections (WEISUNG M7-B-4; VERIFY-DELTA-B3b, VERIFY-DELTA-A4f2-BSC2; `modell=claude-sonnet-5-5`)
 
+*[B-4c (VERIFY-B4 P3 m-8): each correction below is now also amended in place at its line (CI1 §3, §4, §5; B-3b §3 `issue_equals…`, `live_counter…`, the 487-passed line; B-SC2 §5 D-SC10 and §7); this block stays as the record.]*
+
 - **CI1 §4:** `timing.rs`: 30 caught / 3 unviable / 0 timeout of 33; the whole run 36 / 4 / 0 of 40 (`mutants-ci1-timing-aa89fd5.txt`); the CI1c footer reading "30/3/0, 40 run" is superseded by this line.
 - **CI1 §3:** the two filters it names, on the start head: `m0_early::` 7 passed; the xtask `win_|vm_up|vm_down|nasm|id_token|oidc|workflow|ondemand` filter 30 passed (`ci1-m0early-xtask-9b511a2.txt`).
 - **B-3b §3 ("487 passed at `c70827c`; the m7_accept harness 4/4"):** on the start head `9b511a2`: `cargo nextest run -p secmp-client-core -p secmp-proto --features kat` 487 passed; `m7_accept::` 4 passed (`nextest-b3b-9b511a2.txt`).
@@ -1112,7 +1116,7 @@ Blocked: none. STOP: none.
 
 ### §1 Status and preconditions
 
-Phase B closed @ `1318baa`: 33 of the 34 dictated rows are built and pass (SE-13a is dictated "not built"), the three completions (ST-17 partial, BK-03, BK-07) and the follow-ups Q193, Q194, OPEN-M7-B-2/3/5/8/10 are done; Phase B is 72 of 73 rows built (B-SC 11 + part 1 28 + part 2 33). Gates: `ci-fast` PASS at `5838ed3`, `ci-full` PASS at `1318baa` (second run; the first failed on one fuzz target, D-B26), Kani 57/57, mutants 0 undocumented survivors, coverage client-core 95.6 %, store 96.1 %. Blocked: none. STOP: none.
+~~Phase B closed @ `1318baa`~~ (withdrawn, WEISUNG M7-B-4c Q212 (11): VERIFY-B4 found 3 blockers and 16 majors; Phase B closes with B-4c): 33 of the 34 dictated rows are built and pass (SE-13a is dictated "not built"), the three completions (ST-17 partial, BK-03, BK-07) and the follow-ups Q193, Q194, OPEN-M7-B-2/3/5/8/10 are done; Phase B is 72 of 73 rows built (B-SC 11 + part 1 28 + part 2 33). Gates: `ci-fast` PASS at `5838ed3`, `ci-full` PASS at `1318baa` (second run; the first failed on one fuzz target, D-B26), Kani 57/57, mutants 0 undocumented survivors, coverage client-core 95.6 %, store 96.1 %. Blocked: none. STOP: none.
 
 Guard of the weisung: `git status --short` empty and `HEAD` = `9b511a24167e33861a0c9ca95e91e0c7700c83c5` at the start (checked). `secmp-proto`, `vectors/`, `Cargo.lock`, `fuzz/Cargo.lock` and every `Cargo.toml` are unchanged since that head (`git diff --stat 9b511a2..HEAD -- Cargo.lock fuzz/Cargo.lock vectors crates/secmp-proto '*Cargo.toml'` is empty); since `<SC-HEAD>` the `secmp-proto` diff is B-3b's Q189 (`prekeys.rs`, `fuzz_max_len.rs`), reported there.
 
@@ -1162,7 +1166,7 @@ Times are alone-runs of the test (nextest, 32-core container); in `cargo xtask c
 | AP-01 | `api::tests::request_response_and_events` | 1.7 s | every request kind (14 incl. `Remove`), F9 (a refused outbox row: error response, history row taken back), `ViewOnceLost` first |
 | AP-02 | `xtask::testscan::api_exposes_no_secrets_or_store` | <0.01 s | red first: a public `profile_store() -> SharedStore` on `Core` is found by name (`api.rs:486`) |
 | AP-03 | `api::tests::relay_view_lists_11_3` | <0.01 s | the five items are read from `docs/03` and equal the constants; the grouping line for Balanced, Low-bandwidth and direct, the IP line for direct |
-| AP-04 | `xtask::testscan::no_identifiers_reach_transport_types` | <0.01 s | red first: `use secmp_transport::Channel;` in `hub.rs` is named (`importers` ≠ the three). The allowlist as pinned: capability and wire types `RecvCap SendCap LdId LinkBlob Cell CellId Token RelayRef Period Bucket OwnerKey`, plumbing `AsyncConnectOutcome AsyncRelayQueueTransport AsyncSession Channel Command EitherStream Error Isolation Outcome Prepared ProviderStream QueueRef StreamProvider channel counters driver evicted evicted_is_plausible seal_calls sign_calls`; grep at the B-6 head: `kani_proofs.rs:19`, `scheduler/core/mod.rs:31,340,341,366`, `scheduler/run.rs:54,58` (all other `secmp_transport` mentions are comments) |
+| AP-04 | `xtask::testscan::no_identifiers_reach_transport_types` | <0.01 s | red first: `use secmp_transport::Channel;` in `hub.rs` is named (`importers` ≠ the three). The allowlist as pinned: capability and wire types `RecvCap SendCap LdId LinkBlob Cell CellId Token RelayRef Period Bucket OwnerKey`, plumbing `AsyncConnectOutcome AsyncRelayQueueTransport AsyncSession Channel Command EitherStream Error Isolation Outcome Prepared ProviderStream QueueRef StreamProvider channel counters driver evicted evicted_is_plausible seal_calls sign_calls`; grep at the B-6 head: `kani_proofs.rs:19`, `scheduler/core/mod.rs:31,340,341,366`, `scheduler/run.rs:54,58` (all other `secmp_transport` mentions are comments, except the import of the `#[cfg(test)] #[cfg(feature = "kat")] mod tests` of `scheduler/core/mod.rs` (then `:2211`), which the scan reads too — its names are allowlisted; VERIFY-B4 P3 m-10) |
 | AP-05 | `harness::m7_boundary::no_identifiers_in_request_plaintexts` | 65 s | three parties, two invitations, messages, a verification, a rotation, a key change; > 1 000 request plaintexts (scheduled and control links) searched for texts (ASCII, UTF-16LE), names, fingerprints (raw, hex, HEX), identity-key prefixes, the safety number, `link_key`, the URI, the passphrase and the contact ids (u64 BE/LE, a random 60-bit offset by a placeholder row); the oracle finds the invitation queue's sender id in the invitee's `SEND`s |
 | AP-06 | `xtask::testscan::transport_has_no_core_or_store_dep` | 0.3 s | normal dependencies (the dev-dependency on the test kit is the harness of its own tests) |
 | AP-07 | `api::tests::clock_injected` | 1.4 s | |
@@ -1172,6 +1176,8 @@ Completions: ST-17 (partial: FO-01a in C) — `ViewOnceLost` is asserted in AP-0
 Follow-ups (extra tests): Q193 `invitations::tests::consumed_queue_cells_reach_session`; Q194 `invitations::tests::expired_queue_del_after_empty_fetch`; OPEN-M7-B-2 `kani_proofs::kani_prepare_link_send_before_fetch` (D-B16); OPEN-M7-B-3 `scheduler::core::tests::late_commit_of_old_generation_ignored` and the re-dictated `run.rs` tests; OPEN-M7-B-5 `invitations::tests::accept_failure_keeps_pool_queue`; OPEN-M7-B-8: IN-05 through the scheduler's real acknowledgement `harness::m7_scheduled::accept_commits_before_the_real_ack` (the scheduler's `acked` for the invitation queue never reaches the group's last cell before the contact is in the store, and does reach it), PR-08 through the `Core` `api::tests::contact_removed_keeps_schedule` (5 slots before and after, Δ = 0); OPEN-M7-B-10 `profile::tests::opk_ids_never_reused`; and `sessions::tests::queue_set_codec_is_canonical`.
 
 Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-se02.txt`): `m7_rotation.rs:112: the 12 real messages of the last 128 cells go again, not the 3 before them — left: 0, right: 12`; AP-02/AP-04 as in the table.
+
+*[B-4c (VERIFY-B4 P3 m-9): the Q193 killer of `delete field to_session from struct Round expression in Invitations::decide` is at `invitations.rs:1057:21` @`d77fb3c` (`:1202:21` at the B-4c head, the `Consumed` arm of `decide`), killed by `invitations::tests::decide_rechecks_status_after_lock`; re-dictated in B-4: IN-10 and `decide_rechecks_status_after_lock` (`to_session == [1, 2, 3]`, `ack_through == None`), `scheduler::run::tests::late_delivery_of_an_old_generation_commits_nothing` and `scheduler::run::tests::committed_ids_are_a_set` (OPEN-M7-B-3). Red-first of SE-18: none in B-4 — B-4c's is in `b4c-red-first.txt` (a `.to_bytes(` call planted in `hub.rs`); of AP-06: none — a red needs a temporary dependency edge (`Cargo.toml`, `Cargo.lock`), which WEISUNG M7-B-4c forbids; its positive controls (transport reaches proto/crypto, core reaches transport and store) stand.]*
 
 ### §4 Gates
 
@@ -1187,6 +1193,12 @@ Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-s
 | `ci-full` | PASS at `1318baa` (clean tree; Kani step 4933 s = 82 min, 57/57; 36 fuzz targets; delegated: windows-native, windows-cross, mutants, ct, proverif-link). First run at `e365c9f` FAIL (fuzz only, D-B26) | `ci-full-b-1318baa.txt` |
 
 ### §5 Deviations from the weisung (new: D-B16…; D-B10 and D-B11 closed)
+
+*[B-4c (VERIFY-B4 P3 m-9): the entries dictated earlier and missing here —]*
+- **D-B1**: no ruling, weisung or report of the tree or the material names a D-B1 (`grep -rn 'D-B1[^0-9]'`); the number is unused.
+- **D-B2** (Q153): AP-04 scans no `net` module (there is none): the boundary is the importer set {`scheduler::core`, `scheduler::run`, `kani_proofs`} and the pinned allowlist; AP-05 is the dynamic oracle.
+- **D-B4** (Q159): `T_RS` = max(24 h, 2·QUEUE_CAPACITY·P_q) is a named constant citing OPEN-M7-07, not normative; once per `msg_id`; verified contacts with receipts only (B-4c Q210 d: our verification of the contact is the proxy).
+- **D-B5** (Q164): an identity rotation retires every unconsumed invitation (`Event::InvitationRetired { reason: IdentityRotated }`, `QUEUE_DEL` on the IN-11 schedule); a handshake on a retired invitation is dropped silently. **Owner memo:** an identity rotation ends every open invitation — the user has to send new ones (Q164, owner informed).
 
 - **D-B10 closed (Q193)**: a consumed record's queue is retired with its session; its cells go to the session's receive path and are acknowledged by its commit (`consumed_queue_cells_reach_session`, red first).
 - **D-B11 closed (Q194)**: `QUEUE_DEL` after an empty `FETCH` is a control-op dependency, `ControlOps::schedule_after_empty_fetch`/`…_from`, one implementation for the expired invitation, the rotated queue and the consumed invitation's queue.
@@ -1215,6 +1227,7 @@ Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-s
 - **R-LAT-1**: the commit latency of SE-19 is modelled on the driver's worker (`Costs.jitter`), as the other costs; the real store's fsync cost is PC-13's.
 - Windows runtime of IN-07/IN-14/SE-14: the new harness tests use `flock`-free in-process stores; their Windows time is not measured.
 - Profile lock (report §7 "Profile lock and child processes"): `Core::open` on a held profile is `Unavailable` (tested in PR-03).
+- *[B-4c (VERIFY-B4 P3 m-9):]* F9 (a refused outbox row) is closed by AP-01's F9 clause; F9b (a receipt's effect outside the receive commit) is closed by SE-21 (`receipt_effect_commits_with_receive_ratchet`, through the file relay since B-4c); F14 (activity-dependent schedule) is SE-19's; the write cost of the sealed columns (`contacts.routes`/`queues`, `sessions.data`: one AEAD seal per write) is measured only inside PC-13's bytes, not on its own.
 
 ### §8 Open / questions
 
@@ -1223,7 +1236,7 @@ Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-s
 
 ## §B-4b — Nachtrag to B-4 from the external review EXTB1 (WEISUNG M7-B-4b; rulings Q199–Q203; `modell=claude-sonnet-5-5`)
 
-`<B4-END>` = `d77fb3c` ("Phase B closed @ 1318baa"; superseded by "Phase B closed @ 75d7bb6", the B-4b code head); the guard held at the start (`git status --short` empty, branch `m07-client-core`). Anchors below are as found at `d77fb3c` / the final code head with `grep -n`; Astra's anchors are @9b511a2 and have all moved.
+`<B4-END>` = `d77fb3c` ("Phase B closed @ 1318baa"; superseded by "Phase B closed @ 75d7bb6", the B-4b code head — both claims withdrawn by WEISUNG M7-B-4c Q212 (11)); the guard held at the start (`git status --short` empty, branch `m07-client-core`). Anchors below are as found at `d77fb3c` / the final code head with `grep -n`; Astra's anchors are @9b511a2 and have all moved.
 
 ### §B-4b.1 Findings
 

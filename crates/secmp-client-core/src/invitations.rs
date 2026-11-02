@@ -312,8 +312,8 @@ pub struct PoolQueue {
     pub send_seed: SecretBytes<32>,
 }
 
-/// A spare queue's id and seeds `(queue, recipient, sender)`.
-pub type PoolSeeds = (QueueId, [u8; 32], [u8; 32]);
+/// A spare queue's id and seeds `(queue, recipient, sender)`, typed and zeroized (Q211).
+pub type PoolSeeds = (QueueId, SecretBytes<32>, SecretBytes<32>);
 
 /// The pool of one relay as `relays.pool` holds it: `next u32 ‖ count u8 ‖ {queue u32 ‖ recv_seed ‖ send_seed} × count`.
 struct PoolBlob {
@@ -422,17 +422,17 @@ impl SparePool {
     /// [`Error::Unavailable`] if the store cannot be read.
     pub fn seeds(&self, relay: RelayId) -> Result<Vec<PoolSeeds>, Error> {
         let store = self.lock()?;
-        Ok(PoolBlob::read(&store, relay)?
+        PoolBlob::read(&store, relay)?
             .queues
             .iter()
             .map(|q| {
-                (
+                Ok((
                     q.queue,
-                    *q.recv_seed.expose_secret(),
-                    *q.send_seed.expose_secret(),
-                )
+                    SecretBytes::from_slice(q.recv_seed.expose_secret())?,
+                    SecretBytes::from_slice(q.send_seed.expose_secret())?,
+                ))
             })
-            .collect())
+            .collect()
     }
 
     /// The spare queues of `relay`.

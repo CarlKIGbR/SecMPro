@@ -274,7 +274,7 @@ fn write_parts(
     }
     // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
     for id in parts.receipted {
-        secmp_store::outbox::set_delivered(tx, id)?;
+        secmp_store::outbox::set_delivered(tx, session, id)?;
     }
     // the routes of a `RouteUpdate` (SE-01); the session's id is its contact's
     if let Some(routes) = parts.routes {

@@ -1619,7 +1619,7 @@ fn open_queues_and_pool_seeds() -> R {
         assert_eq!(&found.ld_id, ld_id);
         assert_eq!(found.relay, RelayId(1));
         assert_eq!(found.queue, *queue);
-        assert_eq!(found.recv_seed.expose_secret(), recv);
+        assert_eq!(found.recv_seed.expose_secret(), recv.expose_secret());
         assert_eq!(found.n, link_data_n(ld_id));
     }
     assert_eq!(pool.seeds(RelayId(1))?.len(), 1);

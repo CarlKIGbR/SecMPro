@@ -1037,6 +1037,142 @@ fn no_derive_debug_on_secret_carriers() -> Result<()> {
     Ok(())
 }
 
+/// The public signatures of the product part of `src` (`pub fn`, `pub const fn`, `pub type`), each joined to one line up to
+/// its `{` or `;`, as `(line, text)`; an item right after `#[cfg(feature = "kat")]` (doc comments between) is left out.
+#[cfg(test)]
+fn public_signatures(src: &str) -> Vec<(usize, String)> {
+    let text = product(src);
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut gated = false;
+    let mut i = 0_usize;
+    while let Some(line) = lines.get(i) {
+        let t = line.trim();
+        if t == r#"#[cfg(feature = "kat")]"# {
+            gated = true;
+        } else if ["pub fn ", "pub const fn ", "pub type "]
+            .iter()
+            .any(|k| t.starts_with(k))
+        {
+            let mut sig = String::new();
+            let mut k = i;
+            while let Some(l) = lines.get(k) {
+                sig.push_str(l.trim());
+                sig.push(' ');
+                if l.contains('{') || l.trim_end().ends_with(';') {
+                    break;
+                }
+                k = k.saturating_add(1);
+            }
+            if !gated {
+                out.push((i.saturating_add(1), sig.trim().to_owned()));
+            }
+            gated = false;
+            i = k;
+        } else if !t.starts_with("///") && !t.starts_with("#[") && !t.is_empty() {
+            gated = false;
+        }
+        i = i.saturating_add(1);
+    }
+    out
+}
+
+/// The public functions of `src` (outside `kat`-gated items and the test module, [`public_signatures`]) that hand out
+/// queue seeds as plain bytes: a name or the file's path holds one of the needles (`seed`, `material`) and the return type
+/// holds `[u8; 32]` or a public type alias of `src` that does — plus every such alias whose name holds a needle.
+#[cfg(test)]
+fn plain_seed_returns(path: &str, src: &str) -> Vec<(usize, String)> {
+    const NEEDLES: &[&str] = &["seed", "material"];
+    const PLAIN: &str = "[u8; 32]";
+    let items = public_signatures(src);
+    let named = |text: &str| NEEDLES.iter().any(|n| text.to_lowercase().contains(n));
+    let mut aliases = Vec::new();
+    let mut out = Vec::new();
+    for (line, text) in &items {
+        if let Some(rest) = text.strip_prefix("pub type ")
+            && let Some((name, def)) = rest.split_once('=')
+            && def.contains(PLAIN)
+        {
+            let name = name.trim().to_owned();
+            if named(&name) {
+                out.push((*line, text.clone()));
+            }
+            aliases.push(name);
+        }
+    }
+    for (line, text) in &items {
+        let Some(signature) = text
+            .strip_prefix("pub fn ")
+            .or_else(|| text.strip_prefix("pub const fn "))
+        else {
+            continue;
+        };
+        let name: String = signature
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let Some((_, returns)) = signature.split_once("->") else {
+            continue;
+        };
+        let plain = returns.contains(PLAIN) || aliases.iter().any(|a| has_word(returns, a));
+        if plain && (named(&name) || named(path)) {
+            out.push((*line, text.clone()));
+        }
+    }
+    out
+}
+/// Q211 (VERIFY-B4 P1 M-5 = P2 M-4; CLAUDE.md §1.6): no public function of `secmp-client-core/src` outside `kat`/test
+/// items returns queue seeds as plain `[u8; 32]` (or through a type alias that holds one) — they are `SecretBytes<32>`,
+/// an absent sender seed is `None`. The needles are pinned here; the scan finds a fixture's plain return and alias.
+#[cfg(test)]
+#[test]
+fn no_plain_seed_returns() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let src = root.join("crates/secmp-client-core/src");
+    let mut found = Vec::new();
+    let mut fns = 0_usize;
+    for file in crate::util::walk_files(&src, &|p| p.extension().is_some_and(|x| x == "rs"))? {
+        let rel = crate::util::rel(&root, &file);
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name == "testutil.rs" || name == "kani_proofs.rs" || name.ends_with("tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&file)?;
+        fns = fns.saturating_add(
+            public_signatures(&text)
+                .iter()
+                .filter(|(_, t)| t.starts_with("pub fn "))
+                .count(),
+        );
+        found.extend(
+            plain_seed_returns(&rel, &text)
+                .into_iter()
+                .map(|(n, t)| format!("{rel}:{n}: {t}")),
+        );
+    }
+    assert!(found.is_empty(), "plain seed returns: {found:?}");
+    assert!(fns > 100, "the scan sees the public functions: {fns}");
+    // the fixtures: a plain return by name, through an alias, by path; a typed one and a kat-gated one pass
+    let fixture = "pub type PoolSeeds = (QueueId, [u8; 32], [u8; 32]);\n\
+                   pub fn queue_material(&self) -> Option<([u8; 32], [u8; 32])> {\n    None\n}\n\
+                   pub fn seeds(&self) -> Vec<PoolSeeds> {\n    Vec::new()\n}\n\
+                   pub fn typed_seed(&self) -> SecretBytes<32> {\n    todo()\n}\n\
+                   #[cfg(feature = \"kat\")]\n\
+                   pub fn seed_kat(&self) -> [u8; 32] {\n    [0; 32]\n}\n";
+    let hits = plain_seed_returns("crates/x/src/a.rs", fixture);
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    let by_path = "pub fn fingerprint(&self) -> [u8; 32] {\n    [0; 32]\n}\n";
+    assert!(plain_seed_returns("crates/x/src/a.rs", by_path).is_empty());
+    assert_eq!(
+        plain_seed_returns("crates/x/src/seeds.rs", by_path).len(),
+        1
+    );
+    Ok(())
+}
+
 /// The names `secmp_transport` items are used under in `src` (CRLF-normalised, tests and comments left out): every
 /// identifier of a `secmp_transport::…` path or `use` list, without the aliases after `as`.
 #[cfg(test)]

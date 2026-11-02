@@ -245,7 +245,7 @@ pub trait StoreHub: Source {
     /// The material of the `LINK_PUT` of link data `n`.
     fn link_put(&mut self, n: u32) -> Option<LinkMaterial>;
     /// The seeds `(recipient, sender)` of `queue`.
-    fn queue_material(&self, queue: QueueId) -> Option<([u8; 32], [u8; 32])>;
+    fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)>;
     /// The consuming `LINK_GET` of `n` returned `blob`.
     ///
     /// # Errors
@@ -285,7 +285,7 @@ impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
         })
     }
 
-    fn queue_material(&self, queue: QueueId) -> Option<([u8; 32], [u8; 32])> {
+    fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
         Hub::queue_material(self, queue)
     }
 
@@ -1370,8 +1370,15 @@ impl VirtualDriver {
         };
         match kind {
             ControlKind::QueueNew(queue) | ControlKind::QueueDel(queue) => {
-                if let Some(m) = hub.queue_material(queue) {
-                    client.material.queues.entry(queue.0).or_insert(m);
+                // the driver's own copy of the material (Q211: the hub hands it out typed, an absent sender seed as
+                // `None`; the driver's map keeps zero bytes for it, as before — only a `QUEUE_DEL` uses such an entry)
+                if let Some((recv, send)) = hub.queue_material(queue) {
+                    let send = send.map_or([0; 32], |s| *s.expose_secret());
+                    client
+                        .material
+                        .queues
+                        .entry(queue.0)
+                        .or_insert((*recv.expose_secret(), send));
                 }
             }
             ControlKind::LinkPut(n) => {

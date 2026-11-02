@@ -134,7 +134,7 @@ pub fn add_party_period(
     let idx = d.add_client(mode, Params::default(), seed);
     d.client(idx).relay = RelayId(1);
     for (_, recv, send) in spares.seeds(RelayId(1)).unwrap() {
-        d.new_queue_with(idx, &recv, &send);
+        d.new_queue_with(idx, recv.expose_secret(), send.expose_secret());
     }
     let mut hub = hub_of(name, profile, &clock, 0, period);
     // the profile's mode is the scheduler's (the user's choice, persisted)

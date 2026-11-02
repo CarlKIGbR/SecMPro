@@ -54,16 +54,20 @@ fn u64_of(v: i64) -> rusqlite::Result<u64> {
     u64::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, v))
 }
 
-/// Set the message `msg_id` `Delivered` as a statement of the caller's transaction (SE-21): the receive commit that carries
-/// the receipt makes it durable with the ratchet state. A message that has no row (a view-once, held in memory) is not an
-/// error.
+/// Set the message `msg_id` of `contact_id` `Delivered` as a statement of the caller's transaction (SE-21): the receive
+/// commit that carries the receipt makes it durable with the ratchet state. A message that has no row of that contact (a
+/// view-once, held in memory, or an id another contact's receipt names, VERIFY-B4 P1 m-3) is not an error.
 ///
 /// # Errors
 /// [`Error::Unavailable`] if the statement fails.
-pub fn set_delivered(tx: &mut crate::store::Tx<'_>, msg_id: &[u8; 16]) -> Result<()> {
+pub fn set_delivered(
+    tx: &mut crate::store::Tx<'_>,
+    contact_id: i64,
+    msg_id: &[u8; 16],
+) -> Result<()> {
     tx.exec(
-        "UPDATE outbox SET state = ?2, cell_id = NULL WHERE msg_id = ?1",
-        params![msg_id.as_slice(), state::DELIVERED],
+        "UPDATE outbox SET state = ?3, cell_id = NULL WHERE msg_id = ?1 AND contact_id = ?2",
+        params![msg_id.as_slice(), contact_id, state::DELIVERED],
     )?;
     Ok(())
 }
@@ -260,13 +264,37 @@ mod tests {
         store.outbox_insert(1, &row(2, 2, 20))?;
         store.outbox_set_state(&[1; 16], state::RELAYED, Some(41), Some(15))?;
         store.outbox_set_state(&[2; 16], state::RELAYED, Some(42), Some(25))?;
-        store.txn(|tx| set_delivered(tx, &[1; 16]))?;
-        store.txn(|tx| set_delivered(tx, &[9; 16]))?;
+        store.txn(|tx| set_delivered(tx, 1, &[1; 16]))?;
+        store.txn(|tx| set_delivered(tx, 1, &[9; 16]))?;
         let rows = store.outbox_rows(1)?;
         let first = rows.first().ok_or("row 1")?;
         assert_eq!((first.state, first.cell_id), (state::DELIVERED, None));
         let second = rows.get(1).ok_or("row 2")?;
         assert_eq!((second.state, second.cell_id), (state::RELAYED, Some(42)));
+        Ok(())
+    }
+
+    /// Q211 (VERIFY-B4 P1 m-3): a receipt marks only the receiving contact's own message — contact 2's receipt that names
+    /// the id of contact 1's message (a forged id: the two share nothing else) leaves it `Relayed`; contact 1's marks it.
+    #[test]
+    fn set_delivered_needs_the_contact() -> R {
+        let dir = TempDir::new("outbox-delivered-contact")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.outbox_insert(1, &row(3, 1, 10))?;
+        store.outbox_set_state(&[3; 16], state::RELAYED, Some(43), Some(15))?;
+        store.txn(|tx| set_delivered(tx, 2, &[3; 16]))?;
+        let state_of = |store: &Store| -> core::result::Result<(i64, Option<u64>), Box<dyn std::error::Error>> {
+            let rows = store.outbox_rows(1)?;
+            let r = rows.first().ok_or("row")?;
+            Ok((r.state, r.cell_id))
+        };
+        assert_eq!(
+            state_of(&store)?,
+            (state::RELAYED, Some(43)),
+            "another contact's receipt"
+        );
+        store.txn(|tx| set_delivered(tx, 1, &[3; 16]))?;
+        assert_eq!(state_of(&store)?, (state::DELIVERED, None));
         Ok(())
     }
 }

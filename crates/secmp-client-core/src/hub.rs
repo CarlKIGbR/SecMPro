@@ -616,9 +616,13 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     }
 
     /// The seeds `(recipient, sender)` of the queue `queue`, for a `QUEUE_NEW` or `QUEUE_DEL` the scheduler asks for: the
-    /// stored entry's (Q199), also for an invitation queue.
+    /// stored entry's (Q199), also for an invitation queue — typed and zeroized; `None` for an entry without a sender seed
+    /// (Q211).
     #[must_use]
-    pub fn queue_material(&self, queue: QueueId) -> Option<([u8; 32], [u8; 32])> {
+    pub fn queue_material(
+        &self,
+        queue: QueueId,
+    ) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
         let s = self.core.store.lock().ok()?;
         for contact in self.core.index.keys() {
             let Ok(Some(bytes)) = s.contact_queues(*contact) else {
@@ -628,18 +632,13 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 continue;
             };
             if let Some(e) = set.entries.iter().find(|e| e.queue == queue.0) {
-                let recv = *e.seed.expose_secret();
-                let send = e.send_seed.as_ref().map_or([0; 32], |s| *s.expose_secret());
-                return Some((recv, send));
+                return typed(&e.seed, e.send_seed.as_ref());
             }
         }
         drop(s);
         let ld_id = self.inv_queues.get(&queue)?;
         if let Ok(open) = self.invitations.queue_of(ld_id) {
-            return Some((
-                *open.recv_seed.expose_secret(),
-                *open.send_seed.expose_secret(),
-            ));
+            return typed(&open.recv_seed, Some(&open.send_seed));
         }
         // retiring: the entry in the invitation's row (Q201)
         let (_, entry) = self
@@ -648,12 +647,21 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             .ok()?
             .into_iter()
             .find(|(_, e)| e.queue == queue.0)?;
-        let send = entry
-            .send_seed
-            .as_ref()
-            .map_or([0; 32], |s| *s.expose_secret());
-        Some((*entry.seed.expose_secret(), send))
+        typed(&entry.seed, entry.send_seed.as_ref())
     }
+}
+
+/// Copies of a queue's seeds, typed (`queue_material`).
+fn typed(
+    recv: &SecretBytes<32>,
+    send: Option<&SecretBytes<32>>,
+) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
+    let recv = SecretBytes::from_slice(recv.expose_secret()).ok()?;
+    let send = match send {
+        Some(s) => Some(SecretBytes::from_slice(s.expose_secret()).ok()?),
+        None => None,
+    };
+    Some((recv, send))
 }
 
 impl<C: Clock, S: EntropySource> CellSource for Hub<C, S> {
@@ -847,6 +855,7 @@ mod tests {
         );
         let (material_recv, material_send) =
             sc.inviter.queue_material(inv_queue).ok_or("material")?;
+        let material_recv = *material_recv.expose_secret();
         assert_eq!(
             material_recv,
             *sc.inviter
@@ -856,11 +865,11 @@ mod tests {
                 .expose_secret()
         );
         assert_eq!(
-            material_send,
-            *issued.invitation.inv_send_seed.expose_secret(),
+            material_send.map(|s| *s.expose_secret()),
+            Some(*issued.invitation.inv_send_seed.expose_secret()),
             "the stored entry's sender seed (Q199)"
         );
-        assert_eq!(sc.inviter.queue_material(QueueId(999)), None);
+        assert!(sc.inviter.queue_material(QueueId(999)).is_none());
         sc.issued = Some(issued);
         sc.inv_queue = inv_queue;
         sc.n_link = n_link;
@@ -990,8 +999,8 @@ mod tests {
             .inviter
             .queue_material(sc.pooled)
             .ok_or("pooled material")?;
-        assert_ne!(pooled_send, [0; 32]);
-        assert_ne!(pooled_recv, sc.material_recv);
+        assert!(pooled_send.is_some_and(|s| *s.expose_secret() != [0; 32]));
+        assert_ne!(*pooled_recv.expose_secret(), sc.material_recv);
         Ok(())
     }
 
@@ -1143,7 +1152,7 @@ mod tests {
                 .any(|e| QueueId(e.queue) == pooled && e.retire_at_ms.is_some())
         );
         assert!(set.entries.iter().all(|e| QueueId(e.queue) != inv_queue));
-        assert_eq!(host.queue_material(inv_queue), None);
+        assert!(host.queue_material(inv_queue).is_none());
         Ok(())
     }
 
@@ -1211,8 +1220,9 @@ mod tests {
             let mut again = hub_with(&host, "host", 220, Period::S10)?;
             assert_eq!(periods(&again.take_actions()), vec![80_000]);
             let (recv, send) = again.queue_material(queue).ok_or("material")?;
+            let send = *send.ok_or("sender seed")?.expose_secret();
             assert_eq!(send, *issued.invitation.inv_send_seed.expose_secret());
-            assert_ne!(recv, send);
+            assert_ne!(*recv.expose_secret(), send);
             Ok(())
         })
     }
@@ -1231,12 +1241,12 @@ mod tests {
                 .invitation_queue(&issued.invitation.ld_id)
                 .ok_or("queue")?;
             hub.take_actions();
-            let material = hub.queue_material(queue).ok_or("open material")?;
+            let material = exposed(hub.queue_material(queue)).ok_or("open material")?;
             host.at_day(6);
             let retired = hub.invitations.maintain(&host.clock)?;
             assert_eq!(retired.ops.len(), 1);
             assert_eq!(
-                hub.queue_material(queue),
+                exposed(hub.queue_material(queue)),
                 Some(material),
                 "the stub's keys are the invitation's"
             );
@@ -1258,16 +1268,24 @@ mod tests {
                 })
                 .collect();
             assert_eq!(rearmed.len(), 1, "{} actions", actions.len());
-            assert_eq!(again.queue_material(queue), Some(material));
+            assert_eq!(exposed(again.queue_material(queue)), Some(material));
             again.queue_deleted(queue)?;
             assert!(matches!(
                 again.take_actions().as_slice(),
                 [Action::Remove { queue: q }] if *q == queue
             ));
             assert!(again.invitations.retiring()?.is_empty());
-            assert_eq!(again.queue_material(queue), None);
+            assert!(again.queue_material(queue).is_none());
             Ok(())
         })
+    }
+
+    /// The bytes of a queue's typed material (Q211), for comparing.
+    #[cfg(feature = "kat")]
+    fn exposed(
+        m: Option<(SecretBytes<32>, Option<SecretBytes<32>>)>,
+    ) -> Option<([u8; 32], Option<[u8; 32]>)> {
+        m.map(|(r, s)| (*r.expose_secret(), s.map(|s| *s.expose_secret())))
     }
 
     /// The `QUEUE_DEL` ops of `queue` among `actions`.

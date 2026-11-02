@@ -16,11 +16,15 @@ use secmp_client_core::invitations::{
 };
 use secmp_client_core::profile::Profile;
 use secmp_client_core::scheduler::types::RelayId;
-use secmp_proto::Encode as _;
+use secmp_client_core::sessions::rotation::QueueSet;
+use secmp_crypto::{Ed25519SigningKey, SecretBytes};
+use secmp_proto::keys::Ed25519Pk;
 use secmp_proto::tr::FixedEntropy;
 use secmp_proto::wire::Period;
 use secmp_proto::wire::cell::Cell;
+use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor};
 use secmp_proto::wire::inv::{Onion, Profile as WireProfile, RelayRef};
+use secmp_proto::{Decode as _, Encode as _};
 use secmp_store::kat::{CrashAt, FailAt, TempDir};
 use secmp_store::profile::{INVITATION_CONSUMED, INVITATION_OPEN, KIND_OPK};
 use secmp_store::wrap::{Argon2Params, create_kat, unlock_kat};
@@ -248,6 +252,54 @@ fn accept_statements() -> usize {
     log.len()
 }
 
+/// The route in the host's contact row is the guest's reply queue, byte for byte (Q203, EXTB1-5): relay, sid, sender
+/// capability, period.
+fn assert_route_is_the_guests(routes: &[u8], guest: &Party) {
+    let guest_store = guest.profile.store();
+    let queues = guest_store
+        .lock()
+        .unwrap()
+        .contact_queues(1)
+        .unwrap()
+        .unwrap();
+    let set = QueueSet::decode(&queues).unwrap();
+    let reply = set.entries.first().unwrap();
+    let recv_pk = Ed25519Pk::from_bytes(
+        Ed25519SigningKey::from_seed(reply.seed.expose_secret())
+            .unwrap()
+            .verifying_key()
+            .as_bytes(),
+    )
+    .unwrap();
+    let derive = || {
+        RelayQueue::derived(
+            relay_ref(),
+            &recv_pk,
+            SecretBytes::from_slice(reply.send_seed.as_ref().unwrap().expose_secret()).unwrap(),
+            Period::S10,
+        )
+        .unwrap()
+    };
+    let want = derive();
+    let mut want_bytes = vec![1_u8];
+    want_bytes.extend_from_slice(&RouteDescriptor::RelayQueue(derive()).encode().unwrap());
+    assert_eq!(
+        routes,
+        want_bytes.as_slice(),
+        "the stored route is the guest's, byte for byte"
+    );
+    let decoded = RouteDescriptor::decode(routes.get(1..).unwrap()).unwrap();
+    let RouteDescriptor::RelayQueue(stored) = &decoded else {
+        unreachable!("the guest's route is a relay queue route");
+    };
+    assert_eq!(stored.sid, want.sid);
+    assert_eq!(stored.period_s, Period::S10);
+    assert_eq!(
+        stored.send_seed.expose_secret(),
+        want.send_seed.expose_secret()
+    );
+}
+
 /// IN-05 (F-M7, C-12; `docs/07:149`; `prekeys.rs:382-390`): the host fetches the three cells from a recording relay.
 /// The accept is one store transaction — the OPK row delete, the record's consumption, the contact (peer, routes,
 /// profile) and the session (`Accepted.state` in its parts) — and the relay is told to acknowledge a cell only after that
@@ -293,6 +345,7 @@ fn commit_with_accepted_before_any_ack() {
         assert_eq!(c.display_name.as_deref(), Some("invitee"));
         let routes = s.contact_routes(1).unwrap().unwrap();
         assert_eq!(routes.first(), Some(&1), "one reply route");
+        assert_route_is_the_guests(&routes, &guest);
         assert!(s.session_rows(1).unwrap().is_some());
     }
     // the order at the relay: fetch, the commit, the acknowledgement

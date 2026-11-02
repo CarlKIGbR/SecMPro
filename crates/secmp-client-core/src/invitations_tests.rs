@@ -1097,6 +1097,36 @@ fn killers_pool_and_counters() -> R {
     Ok(())
 }
 
+/// The route stored in `contacts.routes` is `route`, byte for byte, and decodes to its relay queue (Q203, EXTB1-5).
+#[cfg(feature = "kat")]
+fn assert_stored_route(routes: &[u8], route: &RelayQueue) -> R {
+    let want = encode_routes(&[RouteDescriptor::RelayQueue(RelayQueue {
+        relay: route.relay.clone(),
+        sid: route.sid,
+        send_seed: SecretBytes::from_slice(route.send_seed.expose_secret())?,
+        period_s: route.period_s,
+    })])?;
+    assert_eq!(
+        routes,
+        want.as_slice(),
+        "the stored route is the peer's, byte for byte"
+    );
+    assert_eq!(routes.first(), Some(&1));
+    let decoded = RouteDescriptor::decode(routes.get(1..).ok_or("route")?)?;
+    let RouteDescriptor::RelayQueue(stored) = &decoded else {
+        return Err("a relay queue route".into());
+    };
+    assert_eq!(
+        (
+            stored.sid,
+            stored.period_s,
+            stored.send_seed.expose_secret()
+        ),
+        (route.sid, route.period_s, route.send_seed.expose_secret())
+    );
+    Ok(())
+}
+
 /// Killers (rounds, the cap of a round, retained cells, routes and queues of the contact): the retained cells are the
 /// cells that were fetched, byte for byte; more than 152 distinct cells in a round are refused; the contact's routes
 /// and queues hold what the accept wrote; the owner status of a consumed invitation changes nothing.
@@ -1157,7 +1187,22 @@ fn killers_rounds_and_contact() -> R {
         "24 retained and 129 fetched"
     );
 
-    // the accept: the routes and the queues the contact row holds
+    // the accept: the routes and the queues the contact row holds. The route the peer puts into its handshake is its reply
+    // queue, derived from the pool queue it takes (Q203)
+    let (reply_pk, reply_send) = {
+        let pool = pool_of(&peer)?;
+        let q = pool.queues.first().ok_or("pool")?;
+        (
+            ed25519_pk_of(&q.recv_seed)?,
+            SecretBytes::<32>::from_slice(q.send_seed.expose_secret())?,
+        )
+    };
+    let peer_relay = {
+        let store = peer.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        RelayRef::decode(&s.relay_ref(1)?.ok_or("relay")?)?
+    };
+    let reply_route = RelayQueue::derived(peer_relay, &reply_pk, reply_send, Period::S10)?;
     let cells = handshake(&peer, &mut pe, &issued)?;
     let record = record_of(&fx, &ld_id)?;
     let fetched: Vec<(u64, Cell)> = (1000..).zip(cells).collect();
@@ -1178,8 +1223,7 @@ fn killers_rounds_and_contact() -> R {
         );
         assert_eq!(first.retire_at_ms, None);
         let routes = s.contact_routes(1)?.ok_or("routes")?;
-        assert_eq!(routes.first(), Some(&1));
-        assert!(routes.len() > 100, "a route descriptor follows the count");
+        assert_stored_route(&routes, &reply_route)?;
     }
     // the owner status of a consumed invitation changes nothing
     assert!(

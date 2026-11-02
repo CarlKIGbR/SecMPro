@@ -610,6 +610,32 @@ mod tests {
     }
 
     /// SC-09 (unit): the `FETCH` is built at once when nothing waits, else at its lead; a `SEND` notes its tick.
+    /// Q212 (5) (VERIFY-B4 P2 m-1, hand mutant 1): `fetch_gate(tear, send_missing, fetch_missing)` over all eight inputs —
+    /// open only without a teardown, with the `SEND` part built and the `FETCH` part missing.
+    #[test]
+    fn fetch_gate_truth_table() {
+        for (tear, send_missing, fetch_missing, open) in [
+            (false, false, false, false),
+            (false, false, true, true),
+            (false, true, false, false),
+            (false, true, true, false),
+            (true, false, false, false),
+            (true, false, true, false),
+            (true, true, false, false),
+            (true, true, true, false),
+        ] {
+            assert_eq!(
+                fetch_gate(tear, send_missing, fetch_missing),
+                open,
+                "tear {tear}, send missing {send_missing}, fetch missing {fetch_missing}"
+            );
+        }
+        assert!(send_missing(true, false));
+        assert!(
+            !send_missing(true, true) && !send_missing(false, false) && !send_missing(false, true)
+        );
+    }
+
     #[test]
     fn fetch_due_and_note_sent() {
         assert!(fetch_due(false, false, 0, 10_000, 1_000));

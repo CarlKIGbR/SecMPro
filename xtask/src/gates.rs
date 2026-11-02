@@ -11129,8 +11129,8 @@ mod tests {
     /// re-measured after its B-SC2 re-dictation reads its `kani-m7-bsc2-sc-<harness>.txt` instead.
     fn push_b_sc_runs(root: &Path, log: &mut String) -> Result<()> {
         for h in B_SC_RUNS {
-            let tag = if B4_RUNS.contains(h) {
-                "b4"
+            let tag = if B4C_RUNS.contains(h) {
+                "b4c"
             } else if B3B_RUNS.contains(h) {
                 "b3b"
             } else if B_SC2_RUNS.contains(h) {
@@ -11147,8 +11147,9 @@ mod tests {
     /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
     const B_SC2_RUNS: &[&str] = &["kani_paired_executions", "kani_persist_contract_abstract"];
 
-    /// The harness of WEISUNG M7-B-4 (OPEN-M7-B-2): the cover pin reads its `kani-m7-b4-sc-<harness>.txt`.
-    const B4_RUNS: &[&str] = &["kani_prepare_link_send_before_fetch"];
+    /// The harness of WEISUNG M7-B-4 (OPEN-M7-B-2), changed by WEISUNG M7-B-4c (Q212 (5): the liveness check on the
+    /// pre-update state): the cover pin reads its `kani-m7-b4c-sc-<harness>.txt` (the B-4 file stays as it was).
+    const B4C_RUNS: &[&str] = &["kani_prepare_link_send_before_fetch"];
 
     /// The harness of WEISUNG M7-B3b (K7-01, Q191): the cover pin reads its `kani-m7-b3b-sc-<harness>.txt`.
     const B3B_RUNS: &[&str] = &["kani_retention_bound_24"];

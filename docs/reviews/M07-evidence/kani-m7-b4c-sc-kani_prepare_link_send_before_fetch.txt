@@ -1,0 +1,21 @@
+tree = 2cdfafb + Q212 (5) of this commit (kani_proofs::kani_prepare_link_send_before_fetch: the liveness implication on the pre-update `fetch_part`; pure::tests::fetch_gate_truth_table)
+# cargo kani --package secmp-client-core --harness kani_proofs::kani_prepare_link_send_before_fetch --exact, alone (2026-11-02, nproc 32), via
+# docs/reviews/M07-evidence/kani-one-bsc.py.txt (copied to target/fable/kani-one.py); peak =
+# getrusage(RUSAGE_CHILDREN).ru_maxrss of the wrapper process, limit KANI_CBMC_RSS_LIMIT_KIB 14160156, 90 % = 12744140. modell=claude-opus-5-5
+  Checking harness kani_proofs::kani_prepare_link_send_before_fetch...
+  Check 11: kani_proofs::kani_prepare_link_send_before_fetch.cover.1
+  - Status: SATISFIED
+  Check 12: kani_proofs::kani_prepare_link_send_before_fetch.cover.2
+  - Status: SATISFIED
+  Check 13: kani_proofs::kani_prepare_link_send_before_fetch.cover.3
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 34 failed (1 unreachable)
+  ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.117467344s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 1 s; peak 227668 KiB = 1.6 % of 14160156 KiB
+# the one UNREACHABLE check of the full output (cargo kani ... | grep -B3 -A3 UNREACHABLE) is the standard library's
+# `std::fmt::Arguments::<'_>::from_str.assertion.1` ("attempt to shift left with overflow", core/src/fmt/mod.rs:820:38);
+# none of the harness's assertions is unreachable (B-4: 2 unreachable, one of them the liveness assertion)

@@ -880,7 +880,19 @@ fn kani_prepare_link_send_before_fetch() {
             send_part = true;
         }
         let missing = send_missing(needs_send, send_part);
-        if fetch_gate(tear, missing, needs_fetch && !fetch_part) {
+        // the state this pass's gate decides on, before it builds the FETCH (VERIFY-B4 P2 m-1, Q212 (5)): the liveness
+        // implication below is evaluated on it, so it is reachable
+        let fetch_missing = needs_fetch && !fetch_part;
+        let open = fetch_gate(tear, missing, fetch_missing);
+        // the gate is closed while the SEND part is missing, on a teardown, for a link that does not fetch
+        if missing || tear || !needs_fetch {
+            assert!(!open);
+        }
+        // liveness: nothing prevents the FETCH, so the gate is open
+        if !missing && !tear && fetch_missing {
+            assert!(open);
+        }
+        if open {
             // `fetch_due` said yes at this pass
             fetch_part = true;
             fetch_built += 1;
@@ -888,14 +900,6 @@ fn kani_prepare_link_send_before_fetch() {
         }
         // the SEND-first order: a FETCH part exists only if the link does not send or its SEND part does
         assert!(!fetch_part || !needs_send || send_part);
-        // the gate is closed while the SEND part is missing, on a teardown, for a link that does not fetch
-        if missing || tear || !needs_fetch {
-            assert!(!fetch_gate(tear, missing, needs_fetch && !fetch_part));
-        }
-        // liveness: nothing prevents the FETCH, so the gate is open
-        if !missing && !tear && needs_fetch && !fetch_part {
-            assert!(fetch_gate(tear, missing, needs_fetch && !fetch_part));
-        }
     }
     assert!(fetch_built <= 1);
     kani::cover!(

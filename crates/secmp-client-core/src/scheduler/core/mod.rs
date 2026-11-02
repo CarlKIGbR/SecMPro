@@ -948,8 +948,9 @@ impl World {
         Ok(())
     }
 
-    /// The cells of a response for `queue`, asked in `generation`: every present cell goes to the cell source in one pass
-    /// and the acknowledgement moves to the highest committed prefix (OQ-20, `pure::RecvLedger::take`).
+    /// The cells of a `FETCH` response for `queue`, asked in `generation`: every present cell goes to the cell source in one
+    /// pass and the acknowledgement moves to the highest committed prefix (OQ-20, `pure::RecvLedger::take`). A response
+    /// with no present cell is an empty `FETCH`: a `QUEUE_DEL` that waited for it starts its delay (Q163, Q194).
     fn fetched<S: CellSource>(
         &mut self,
         queue: QueueId,
@@ -959,11 +960,27 @@ impl World {
         now: u64,
     ) {
         let empty = cells.is_empty();
+        self.take_cells(queue, generation, cells, source);
+        self.note_empty(queue, generation, empty, now);
+    }
+
+    /// The present cells of a response for `queue`, asked in `generation`, to the cell source (see [`World::fetched`]).
+    fn take_cells<S: CellSource>(
+        &mut self,
+        queue: QueueId,
+        generation: u64,
+        cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
+        source: &mut S,
+    ) {
         let queues = self.recvs.iter_mut().map(|r| (r.id, &mut r.ledger));
         take_response(queues, &queue, generation, cells, |id, cell| {
             source.deliver(queue, generation, id, &cell)
         });
-        // a FETCH with no present cell: a `QUEUE_DEL` that waited for it starts its delay (Q163, Q194)
+    }
+
+    /// A response of the current generation of `queue` held no present cell of it (`empty`): the `QUEUE_DEL` that waited
+    /// for it starts its delay (Q163, Q194).
+    fn note_empty(&mut self, queue: QueueId, generation: u64, empty: bool, now: u64) {
         if empty && self.current(queue, generation) {
             self.control
                 .note_empty_fetch(&self.params, &mut self.ctl, queue, now);
@@ -997,6 +1014,67 @@ impl World {
                 .out
                 .push(Output::Event(LinkEvent::Alert(queue, Alert::QueueRate))),
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// The response of a `FETCH_MULTI` of `queues` (each with the generation it was asked in): `cells` and `errors` as the
+    /// transport decoded the `F_M` frames. Every queue's present cells go to the cell source and its error is handled; a
+    /// queue counts as "a `FETCH` returned no present cell" only if, after the error loop, it is not in error, no present
+    /// frame is for it (decodable or not) and the response held at least one dummy frame — present and error frames fewer
+    /// than `F_M` (docs/03 `FETCH_MULTI`: "… then dummies"; Q209). A queue starved by a full batch of other queues' cells
+    /// may still hold cells.
+    fn fetched_multi<S: CellSource>(
+        &mut self,
+        queues: &[(QueueId, u64)],
+        cells: &[(QueueRef, u64, secmp_proto::wire::cell::Cell)],
+        errors: &[(QueueRef, TransportError)],
+        source: &mut S,
+        now: u64,
+    ) -> Result<(), SchedError> {
+        let frames = u64::try_from(cells.len().saturating_add(errors.len())).unwrap_or(u64::MAX);
+        let had_dummy = frames < self.params.f_m;
+        let mut quiet = Vec::new();
+        for (q, generation) in queues {
+            let Some(rid) = self
+                .recvs
+                .iter()
+                .find(|r| r.id == *q)
+                .map(|r| r.cap.queue())
+            else {
+                continue;
+            };
+            // a present frame counts, decodable or not
+            let present = cells.iter().any(|(r, _, _)| *r == rid);
+            let mine: Vec<_> = cells
+                .iter()
+                .filter(|(r, _, _)| *r == rid)
+                .map(|(_, id, cell)| {
+                    (
+                        *id,
+                        secmp_proto::wire::cell::Cell::from_bytes(cell.as_bytes()),
+                    )
+                })
+                .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
+                .collect();
+            self.take_cells(*q, *generation, mine, source);
+            if !self.current(*q, *generation) {
+                continue;
+            }
+            let mut errored = false;
+            for (r, e) in errors {
+                if *r == rid {
+                    errored = true;
+                    self.queue_error(*q, *e, now)?;
+                }
+            }
+            if !present && !errored && had_dummy {
+                quiet.push((*q, *generation));
+            }
+        }
+        // after the error loop: a queue re-created by its error is in another generation and arms nothing
+        for (q, generation) in quiet {
+            self.note_empty(q, generation, true, now);
         }
         Ok(())
     }
@@ -1046,39 +1124,7 @@ impl World {
                 Err(_) => {}
             },
             (ReqKind::FetchMulti(queues), Outcome::FetchMulti(result)) => match result {
-                Ok(done) => {
-                    for (q, generation) in &queues {
-                        let Some(rid) = self
-                            .recvs
-                            .iter()
-                            .find(|r| r.id == *q)
-                            .map(|r| r.cap.queue())
-                        else {
-                            continue;
-                        };
-                        let cells: Vec<_> = done
-                            .cells
-                            .iter()
-                            .filter(|(r, _, _)| *r == rid)
-                            .map(|(_, id, cell)| {
-                                (
-                                    *id,
-                                    secmp_proto::wire::cell::Cell::from_bytes(cell.as_bytes()),
-                                )
-                            })
-                            .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
-                            .collect();
-                        self.fetched(*q, *generation, cells, source, now);
-                        if !self.current(*q, *generation) {
-                            continue;
-                        }
-                        for (r, e) in &done.errors {
-                            if *r == rid {
-                                self.queue_error(*q, *e, now)?;
-                            }
-                        }
-                    }
-                }
+                Ok(done) => self.fetched_multi(&queues, &done.cells, &done.errors, source, now)?,
                 Err(e) => {
                     if let Some((first, generation)) = queues.first()
                         && self.current(*first, *generation)
@@ -2560,6 +2606,71 @@ mod tests {
             sched.add_send_queue_route(0, QueueId(8), RelayId(0), ([9; 16], &seed(0x26)?), 15_000),
             Err(SchedError::BadPeriod)
         );
+        Ok(())
+    }
+
+    /// Q209 (VERIFY-B4 P2 M-2; §10.6 (4) `docs/03:696`, the `FETCH_MULTI` row `docs/03:606`): in a `FETCH_MULTI` response a
+    /// waiting `QUEUE_DEL` of a queue is armed only if the queue returned no present cell — not when it is in error, not when
+    /// the `F_M` frames are all other queues' cells (it may still hold cells), not when a present frame is for it (the
+    /// transport's frames are 4096-byte cells: a present frame is present, decodable or not); with only dummies left for
+    /// it, it is.
+    #[test]
+    fn empty_fetch_not_armed_on_error_or_starved_queue() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        use crate::scheduler::types::ControlKind;
+        let cell = || Cell::from_bytes(&[7_u8; 4096]).map_err(|_| "cell");
+        let seed = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]).map_err(|_| "seed");
+        let cap =
+            |b: u8| -> Result<RecvCap, Fail> { RecvCap::from_seed(&seed(b)?).map_err(|_| "cap") };
+        // (cells for the queue, cells for the other queue, the queue in error) -> armed
+        for (mine, others, error, armed) in [
+            (0_u64, 0_u64, true, false),
+            (0, 8, false, false),
+            (1, 0, false, false),
+            (0, 2, false, true),
+            (0, 0, false, true),
+        ] {
+            let mut sched =
+                Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(21));
+            let q = sched
+                .add_recv_queue(0, RelayId(0), cap(0x41)?, 10_000)
+                .map_err(|_| "queue")?;
+            let o = sched
+                .add_recv_queue(0, RelayId(0), cap(0x42)?, 10_000)
+                .map_err(|_| "queue")?;
+            let (rq, ro) = (cap(0x41)?.queue(), cap(0x42)?.queue());
+            let op = sched
+                .schedule_control(
+                    0,
+                    ControlKind::QueueDel(q),
+                    RelayId(0),
+                    1,
+                    When::AfterEmptyFetch(q),
+                )
+                .map_err(|_| "op")?;
+            let mut cells = Vec::new();
+            for id in 1..=mine {
+                cells.push((rq, id, cell()?));
+            }
+            for id in 1..=others {
+                cells.push((ro, id, cell()?));
+            }
+            let errors = if error {
+                vec![(rq, TransportError::Auth)]
+            } else {
+                Vec::new()
+            };
+            let mut src = Dummies(0);
+            sched
+                .world
+                .fetched_multi(&[(q, 0), (o, 0)], &cells, &errors, &mut src, 1_000)
+                .map_err(|_| "fetched")?;
+            assert_eq!(
+                !sched.world.control.awaits_empty_fetch(op),
+                armed,
+                "mine {mine}, others {others}, error {error}"
+            );
+        }
         Ok(())
     }
 

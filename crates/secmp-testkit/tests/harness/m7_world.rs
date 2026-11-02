@@ -300,10 +300,21 @@ pub fn start_seeded(
     pool: usize,
     seeds: Option<(u64, u64)>,
 ) -> Started {
+    start_seeded_mode(d, label, pool, seeds, Mode::Strict)
+}
+
+/// [`start_seeded`] with both parties in scheduler mode `mode`.
+pub fn start_seeded_mode(
+    d: &mut VirtualDriver,
+    label: &str,
+    pool: usize,
+    seeds: Option<(u64, u64)>,
+    mode: Mode,
+) -> Started {
     use secmp_testkit::harness::Inspect;
 
-    let host = add_party(d, &format!("{label}-host"), pool, 11);
-    let guest = add_party(d, &format!("{label}-guest"), pool, 12);
+    let host = add_party_mode(d, &format!("{label}-host"), pool, (mode, 11));
+    let guest = add_party_mode(d, &format!("{label}-guest"), pool, (mode, 12));
     for p in [&host, &guest] {
         d.client(p.idx).opts.inspect = Inspect::Requests;
     }
@@ -336,6 +347,21 @@ pub fn establish_seeded(
     seeds: Option<(u64, u64)>,
 ) -> Started {
     let s = start_seeded(d, label, pool, seeds);
+    d.run_until(600_000);
+    assert_eq!(d.client_ref(s.guest.idx).hub_errors, Vec::<String>::new());
+    assert_eq!(d.client_ref(s.host.idx).hub_errors, Vec::<String>::new());
+    s
+}
+
+/// [`establish_seeded`] with both parties in scheduler mode `mode`.
+pub fn establish_seeded_mode(
+    d: &mut VirtualDriver,
+    label: &str,
+    pool: usize,
+    seeds: Option<(u64, u64)>,
+    mode: Mode,
+) -> Started {
+    let s = start_seeded_mode(d, label, pool, seeds, mode);
     d.run_until(600_000);
     assert_eq!(d.client_ref(s.guest.idx).hub_errors, Vec::<String>::new());
     assert_eq!(d.client_ref(s.host.idx).hub_errors, Vec::<String>::new());

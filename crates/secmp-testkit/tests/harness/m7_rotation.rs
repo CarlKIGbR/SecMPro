@@ -17,7 +17,8 @@ use secmp_testkit::ks::two_sample;
 
 use super::m6_common::evidence;
 use super::m7_world::{
-    cells_on, driver, establish, establish_seeded, hub, restart_party, send_sid,
+    cells_on, driver, establish, establish_seeded, establish_seeded_mode, hub, restart_party,
+    send_sid,
 };
 
 /// Queue a text for contact 1 of client `i`.
@@ -250,6 +251,12 @@ fn check_deleted(
             RequestCmd::Fetch { rid, .. } if *rid == old.rid && *slot < CONTROL_SLOT_BASE => {
                 Some(*t)
             }
+            // Balanced and Low-bandwidth: an entry of a `FETCH_MULTI` (Q209)
+            RequestCmd::FetchMulti { entries }
+                if entries.iter().any(|e| e.rid == old.rid) && *slot < CONTROL_SLOT_BASE =>
+            {
+                Some(*t)
+            }
             _ => None,
         })
         .collect();
@@ -257,9 +264,27 @@ fn check_deleted(
         fetches.iter().any(|t| *t >= old.deadline_ms),
         "fetched through the overlap"
     );
+    // Balanced: the combined link's next `FETCH_MULTI` may have been sealed before the deletion (frames are prepared
+    // before their tick, spec §10.1; the LINK counter of a sealed frame is spent) — that one may still list the queue, no
+    // later one (D-B34)
+    let first_multi_after = d
+        .client_ref(host)
+        .requests
+        .iter()
+        .filter(|(t, slot, r)| {
+            *t > t_del
+                && *slot < CONTROL_SLOT_BASE
+                && matches!(r.cmd, RequestCmd::FetchMulti { .. })
+        })
+        .map(|(t, _, _)| *t)
+        .min();
+    let late: Vec<&u64> = fetches
+        .iter()
+        .filter(|t| **t > t_del && Some(**t) != first_multi_after)
+        .collect();
     assert!(
-        fetches.iter().all(|t| *t <= t_del),
-        "not fetched after the deletion"
+        late.is_empty(),
+        "not fetched after the deletion at {t_del} ms: {late:?}"
     );
     assert!(
         queue_set_of(d, host)
@@ -294,6 +319,20 @@ fn recipient_retires_old_queue() {
             (t_del - quiet) / 1000
         ),
     );
+}
+
+/// SE-03 in Balanced mode (Q209, VERIFY-B4 P2 M-2): the old queue is fetched in `FETCH_MULTI`s; its `QUEUE_DEL` comes after
+/// a `FETCH_MULTI` that returned no present cell of it — the assertions of [`recipient_retires_old_queue`] (the KS of the
+/// draws is not repeated).
+#[test]
+fn recipient_retires_old_queue_balanced() {
+    use secmp_client_core::scheduler::params::Mode;
+
+    let mut d = driver();
+    let s = establish_seeded_mode(&mut d, "se03b", 3, SHORT_DRAWS, Mode::Balanced);
+    let old = rotate(&mut d, s.host.idx, s.guest.idx);
+    d.run_until(old.t0 + 4 * 3_600_000);
+    check_deleted(&mut d, (s.host.idx, s.guest.idx), &old);
 }
 
 /// SE-03 and Q194 (the retirement deadline is stored with the queue and re-armed after a restart): the recipient's process

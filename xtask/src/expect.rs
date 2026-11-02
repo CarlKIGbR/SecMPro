@@ -801,6 +801,11 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "retirement_survives_restart",
         "SE-03 and Q194, as the above with a restart in the overlap: 96 s",
     ),
+    // M7 B-4c (WEISUNG M7-B-4c Q209; Q121)
+    (
+        "recipient_retires_old_queue_balanced",
+        "SE-03 in Balanced mode (FETCH_MULTI), 2.1 h virtual over two profiles: 90 s",
+    ),
     (
         "relay_restart_with_store",
         "SE-14, the relay and both clients restart: 14 s",

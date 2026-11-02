@@ -1572,6 +1572,25 @@ fn assert_stub_is_only_the_entry(fx: &Fixture, ld_id: &Id, before: &Stored) -> R
     Ok(())
 }
 
+/// Q202 killer (`duplicates_of_spent`): the ids whose bytes equal those of any spent cell and are not spent themselves —
+/// also when two spent cells carry the same bytes (the match is an "any", not a parity).
+#[cfg(feature = "kat")]
+#[test]
+fn byte_identical_cells_of_spent_ones_are_spent() -> R {
+    let cell = |b: u8| Cell::from_bytes(&[b; 4096]);
+    let ids = [10_u64, 11, 12, 13, 14];
+    let cells = [cell(1)?, cell(1)?, cell(1)?, cell(2)?, cell(3)?];
+    // two spent cells with the same bytes as the third
+    assert_eq!(duplicates_of_spent(&ids, &cells, &[10, 11]), [12]);
+    // one spent cell: its twins, not the others
+    assert_eq!(duplicates_of_spent(&ids, &cells, &[13]), Vec::<u64>::new());
+    assert_eq!(duplicates_of_spent(&ids, &cells, &[12]), [10, 11]);
+    // nothing spent: nothing follows; everything spent: nothing is left to follow
+    assert!(duplicates_of_spent(&ids, &cells, &[]).is_empty());
+    assert!(duplicates_of_spent(&ids, &cells, &ids).is_empty());
+    Ok(())
+}
+
 /// Q201 (EXTB1-3): an invitation that expired unused keeps a row — status RETIRING, the queue's entry and nothing else — across
 /// a restart until the `QUEUE_DEL` is acknowledged; cells fetched on it are acknowledged and dropped; the deletion removes
 /// the row.

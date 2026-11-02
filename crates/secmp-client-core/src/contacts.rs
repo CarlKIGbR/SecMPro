@@ -259,10 +259,19 @@ impl Contacts {
     /// # Errors
     /// [`Error::Unavailable`] if the contact is unknown or the store cannot be written.
     pub fn confirm_digits(&self, id: ContactId, typed: &str) -> Result<bool, Error> {
+        let ok = self.digits_match(id, typed)?;
+        self.verified_if(id, ok)
+    }
+
+    /// Whether the digits the user typed (spaces and line breaks ignored) equal the safety number of contact `id`, compared
+    /// in constant time; nothing is written (the caller verifies the contact with its session, Q205).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the contact is unknown.
+    pub fn digits_match(&self, id: ContactId, typed: &str) -> Result<bool, Error> {
         let want = self.safety_number(id)?;
         let typed: Vec<u8> = typed.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-        let ok = bool::from(typed.as_slice().ct_eq(want.as_str().as_bytes()));
-        self.verified_if(id, ok)
+        Ok(bool::from(typed.as_slice().ct_eq(want.as_str().as_bytes())))
     }
 
     /// Verify contact `id` by the QR it showed: `"SecMP-SAS/1" ‖ fp_peer ‖ fp_own`, the displayer's own-first form read by

@@ -128,12 +128,103 @@ pub fn delete_handshake(tx: &mut Tx<'_>, session: i64) -> Result<()> {
     Ok(())
 }
 
-/// Write the trust.
+/// The trust codes of the TRUST part's first byte (`secmp-client-core`'s `trust_code` maps its trusts onto them; a test
+/// there pins the equality). The store compares only [`TRUST_FROZEN`].
+pub const TRUST_UNVERIFIED: u8 = 0;
+/// See [`TRUST_UNVERIFIED`].
+pub const TRUST_VERIFIED: u8 = 1;
+/// See [`TRUST_UNVERIFIED`].
+pub const TRUST_KEY_CHANGED: u8 = 2;
+/// See [`TRUST_UNVERIFIED`]: a stored `Frozen` is left only by a new session (a fresh invitation, spec §7.8; Q205).
+pub const TRUST_FROZEN: u8 = 3;
+/// The block byte of the TRUST part: none.
+pub const BLOCK_NONE: u8 = 0;
+/// The block byte: the contact was removed (`Control{1}`, either side).
+pub const BLOCK_REMOVED: u8 = 1;
+/// The block byte: a session reset was asked for (`Control{2}`, either side).
+pub const BLOCK_RESET: u8 = 2;
+
+/// The TRUST part of a session, strictly decoded: `trust code u8 ‖ block u8` (Q210 b), nothing else.
 ///
 /// # Errors
-/// [`Error::Unavailable`] if the statement fails.
-pub fn put_trust(tx: &mut Tx<'_>, session: i64, trust: &[u8]) -> Result<()> {
+/// [`Error::Unavailable`] for any other length or an unknown code.
+pub fn trust_row(row: &[u8]) -> Result<(u8, u8)> {
+    match *row {
+        [
+            code @ TRUST_UNVERIFIED..=TRUST_FROZEN,
+            block @ BLOCK_NONE..=BLOCK_RESET,
+        ] => Ok((code, block)),
+        _ => Err(Error::Unavailable),
+    }
+}
+
+/// The raw TRUST row writer: only through [`update_trust`] and [`init_trust`], which check the stored row.
+pub(crate) fn put_trust(tx: &mut Tx<'_>, session: i64, trust: &[u8]) -> Result<()> {
     put(tx, session, part::TRUST, 0, trust)
+}
+
+/// The stored TRUST part of `session`, read inside the transaction (`None` without one).
+fn stored_trust(tx: &mut Tx<'_>, session: i64) -> Result<Option<(u8, u8)>> {
+    let sealed = tx.query_row(
+        "SELECT data FROM sessions WHERE session_id = ?1 AND part = ?2 AND ord = 0",
+        params![session, part::TRUST],
+        |r| r.get::<_, Vec<u8>>(0),
+    )?;
+    let Some(sealed) = sealed else {
+        return Ok(None);
+    };
+    // spec §3.4; ADR-053 item 5
+    let row = tx.open(
+        Table::Sessions,
+        "data",
+        &session_row(session, part::TRUST, 0)?,
+        &sealed,
+    )?;
+    trust_row(&row).map(Some)
+}
+
+/// Write the trust `code` and/or set the block of `session` (Q205, Q210 b) — the one guarded trust writer: the stored row
+/// is read in the same transaction; a trust other than [`TRUST_FROZEN`] over a stored `Frozen` is refused and nothing is
+/// written (only a new session leaves `Frozen`); a trust write keeps the stored block and is never refused because of it;
+/// a block is set, never cleared ([`BLOCK_NONE`] is refused).
+///
+/// # Errors
+/// [`Error::Unavailable`] for a refused write, an unknown code, a stored row that does not decode or a failed statement.
+pub fn update_trust(
+    tx: &mut Tx<'_>,
+    session: i64,
+    code: Option<u8>,
+    block: Option<u8>,
+) -> Result<()> {
+    if code.is_some_and(|c| c > TRUST_FROZEN)
+        || block.is_some_and(|b| b == BLOCK_NONE || b > BLOCK_RESET)
+    {
+        return Err(Error::Unavailable);
+    }
+    let (stored_code, stored_block) =
+        stored_trust(tx, session)?.unwrap_or((TRUST_UNVERIFIED, BLOCK_NONE));
+    let present = trust_after(stored_code, code)?;
+    put_trust(tx, session, &[present, block.unwrap_or(stored_block)])
+}
+
+/// The trust to write: `code` unless it would leave a stored `Frozen`.
+fn trust_after(stored: u8, code: Option<u8>) -> Result<u8> {
+    match code {
+        Some(c) if stored == TRUST_FROZEN && c != TRUST_FROZEN => Err(Error::Unavailable),
+        Some(c) => Ok(c),
+        None => Ok(stored),
+    }
+}
+
+/// The trust of a new session (the accept of an invitation): `code` and no block, on a session without a TRUST row.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the session has a TRUST row already, for an unknown code or a failed statement.
+pub fn init_trust(tx: &mut Tx<'_>, session: i64, code: u8) -> Result<()> {
+    if code > TRUST_FROZEN || stored_trust(tx, session)?.is_some() {
+        return Err(Error::Unavailable);
+    }
+    put_trust(tx, session, &[code, BLOCK_NONE])
 }
 
 /// Record a delivered message in the history (`INSERT OR IGNORE`: a message delivered again is kept once), received at
@@ -309,6 +400,73 @@ mod tests {
         store.txn(|tx| insert_skipped(tx, 9, 0, &[b'e'; 36]))?;
         let rows = store.session_rows(9)?.ok_or("rows")?;
         assert_eq!(rows.skipped.len(), 1);
+        Ok(())
+    }
+
+    /// Q205, Q210 b: the one guarded trust writer. A new session's trust goes onto a session without a row (a second
+    /// `init_trust` is refused); a trust write keeps the block; a block is set, never cleared, and never refuses a trust;
+    /// nothing but `Frozen` is written over a stored `Frozen` (nothing written); the row is `code ‖ block`, decoded
+    /// strictly.
+    #[test]
+    fn trust_writer_keeps_frozen_and_block() -> R {
+        let dir = TempDir::new("trust-guard")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let row = |store: &Store| -> core::result::Result<Vec<u8>, Error> {
+            Ok(store
+                .inbox_trust(5)?
+                .1
+                .map(|t| t.to_vec())
+                .unwrap_or_default())
+        };
+        store.txn(|tx| init_trust(tx, 5, TRUST_UNVERIFIED))?;
+        assert_eq!(row(&store)?, [TRUST_UNVERIFIED, BLOCK_NONE]);
+        assert_eq!(
+            store.txn(|tx| init_trust(tx, 5, TRUST_UNVERIFIED)),
+            Err(Error::Unavailable),
+            "a session with a trust row is not new"
+        );
+        store.txn(|tx| update_trust(tx, 5, None, Some(BLOCK_RESET)))?;
+        store.txn(|tx| update_trust(tx, 5, Some(TRUST_VERIFIED), None))?;
+        assert_eq!(
+            row(&store)?,
+            [TRUST_VERIFIED, BLOCK_RESET],
+            "the block stays"
+        );
+        assert_eq!(
+            store.txn(|tx| update_trust(tx, 5, None, Some(BLOCK_NONE))),
+            Err(Error::Unavailable),
+            "a block is never cleared"
+        );
+        store.txn(|tx| update_trust(tx, 5, Some(TRUST_FROZEN), Some(BLOCK_REMOVED)))?;
+        for code in [TRUST_UNVERIFIED, TRUST_VERIFIED, TRUST_KEY_CHANGED] {
+            assert_eq!(
+                store.txn(|tx| update_trust(tx, 5, Some(code), None)),
+                Err(Error::Unavailable),
+                "{code} over Frozen"
+            );
+        }
+        store.txn(|tx| update_trust(tx, 5, Some(TRUST_FROZEN), None))?;
+        store.txn(|tx| update_trust(tx, 5, None, Some(BLOCK_RESET)))?;
+        assert_eq!(row(&store)?, [TRUST_FROZEN, BLOCK_RESET], "still frozen");
+        for bad in [
+            &[][..],
+            &[TRUST_FROZEN],
+            &[4, 0],
+            &[0, 3],
+            &[TRUST_FROZEN, BLOCK_NONE, 0],
+        ] {
+            assert_eq!(trust_row(bad), Err(Error::Unavailable), "{bad:?}");
+        }
+        assert_eq!(
+            store.txn(|tx| update_trust(tx, 5, Some(4), None)),
+            Err(Error::Unavailable)
+        );
+        // a raw row that does not decode is refused by the guard, nothing is written over it
+        store.txn(|tx| put_trust(tx, 6, &[TRUST_VERIFIED]))?;
+        assert_eq!(
+            store.txn(|tx| update_trust(tx, 6, Some(TRUST_VERIFIED), None)),
+            Err(Error::Unavailable)
+        );
         Ok(())
     }
 

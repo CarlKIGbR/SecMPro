@@ -313,6 +313,8 @@ pub struct CommitParts<'a> {
     pub inbox: Option<&'a [u8]>,
     /// The trust, when it changed.
     pub trust: Option<u8>,
+    /// The block a `Control{1|2}` in the received cell sets (the sessions' `block_code`: 1 removed, 2 reset; Q210 b).
+    pub block: Option<u8>,
     /// The messages delivered by the received cell.
     pub delivered: &'a [DeliveredMessage<'a>],
     /// The messages that a `Receipt{delivered}` in the received cell confirms: `Delivered` in the same commit (SE-21).

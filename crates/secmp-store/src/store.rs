@@ -457,6 +457,21 @@ impl Tx<'_> {
         crate::seal::seal(keys.get(table), table, column, row_key, record)
     }
 
+    /// Open a record of (`table`, `column`, `row_key`) read inside this transaction (ADR-053 item 5).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without table keys or if the record does not open there (uniform).
+    pub(crate) fn open(
+        &self,
+        table: crate::keys::Table,
+        column: &str,
+        row_key: &[u8],
+        rec: &[u8],
+    ) -> Result<secmp_crypto::Zeroizing<Vec<u8>>> {
+        let keys = self.keys.ok_or(Error::Unavailable)?;
+        crate::seal::open(keys.get(table), table, column, row_key, rec)
+    }
+
     /// Count the next statement; `true` if the failure injection makes it fail (`kat`; never otherwise).
     fn next_statement_fails(&mut self) -> bool {
         self.statements = self.statements.saturating_add(1);

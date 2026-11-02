@@ -161,6 +161,7 @@ impl Persist for StorePersist {
                 ratchet: &ratchet,
                 inbox: None,
                 trust: None,
+                block: None,
                 delivered: &[],
                 receipted: &[],
                 routes: None,
@@ -219,8 +220,9 @@ impl Persist for StorePersist {
                 if let Some(inbox) = parts.inbox {
                     secmp_store::sessions::put_inbox(tx, session, inbox)?;
                 }
-                if let Some(trust) = parts.trust {
-                    secmp_store::sessions::put_trust(tx, session, &[trust])?;
+                // the guarded writer: a stored `Frozen` stays, the block is kept or set (Q205, Q210 b)
+                if parts.trust.is_some() || parts.block.is_some() {
+                    secmp_store::sessions::update_trust(tx, session, parts.trust, parts.block)?;
                 }
                 // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
                 for id in parts.receipted {
@@ -908,15 +910,15 @@ mod tests {
     #[cfg(feature = "kat")]
     const NEW_STATE: &str = "new.state";
 
-    /// The child of PC-09: the receive commit of the new (ratchet, inbox, trust), with the crash `k` armed (`k` ≤ 5:
-    /// after statement `k`, before the commit point; 6: after the commit, before the acknowledgement).
+    /// The child of PC-09: the receive commit of the new (ratchet, inbox, trust), with the crash `k` armed (`k` ≤ 6:
+    /// after statement `k`, before the commit point; 7: after the commit, before the acknowledgement).
     #[cfg(feature = "kat")]
     fn atomic_child(dir: &std::path::Path, k: u32) -> R {
         let store = shared(dir)?;
         let mut pb = f(StorePersist::open(Arc::clone(&store), 2), "persist")?;
         let new = f(std::fs::read(dir.join(NEW_STATE)), "new state")?;
         let ratchet = f(RatchetParts::split(&new), "split")?;
-        let point = if k <= 5 {
+        let point = if k <= 6 {
             secmp_store::kat::CrashAt::MidTxn(k)
         } else {
             secmp_store::kat::CrashAt::AfterCommitBeforeAck
@@ -929,6 +931,7 @@ mod tests {
                     ratchet: &ratchet,
                     inbox: Some(b"inbox-new"),
                     trust: Some(trust_code(secmp_proto::tr::content::Trust::Frozen)),
+                    block: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,
@@ -941,9 +944,9 @@ mod tests {
     }
 
     /// PC-09 (M03 review F29, R-36): the receive commit that freezes the session — the new ratchet state with two new
-    /// skipped entries, the reassembly state and the trust `Frozen`, five statements of one transaction — crashed after
-    /// statement k (k = 1…5, before the commit point) leaves all three old after reopen; crashed after the commit, all
-    /// three new; never a mix.
+    /// skipped entries, the reassembly state and the trust `Frozen`, six statements of one transaction (the guarded trust
+    /// writer reads the stored row first, Q205) — crashed after statement k (k = 1…6, before the commit point) leaves all
+    /// three old after reopen; crashed after the commit, all three new; never a mix. The trust row is `code ‖ block`.
     #[test]
     #[cfg(feature = "kat")]
     fn ratchet_inbox_trust_one_commit() -> R {
@@ -962,9 +965,9 @@ mod tests {
         let (_a, c3) = seal(a, &text(3), &mut ea, &mut sink)?;
         let old_state = f(b.to_bytes(), "old")?.to_vec();
         let new_state = f(open(b, &c3, &mut eb, &mut sink)?.to_bytes(), "new")?.to_vec();
-        let frozen = vec![trust_code(secmp_proto::tr::content::Trust::Frozen)];
-        let verified = vec![trust_code(secmp_proto::tr::content::Trust::Verified)];
-        for k in 1..=6_u32 {
+        let frozen = vec![trust_code(secmp_proto::tr::content::Trust::Frozen), 0];
+        let verified = vec![trust_code(secmp_proto::tr::content::Trust::Verified), 0];
+        for k in 1..=7_u32 {
             let root = f(secmp_store::kat::TempDir::new("pc09"), "dir")?;
             {
                 let store = shared(root.path())?;
@@ -977,6 +980,7 @@ mod tests {
                             ratchet: &ratchet,
                             inbox: Some(b"inbox-old"),
                             trust: Some(trust_code(secmp_proto::tr::content::Trust::Verified)),
+                            block: None,
                             delivered: &[],
                             receipted: &[],
                             routes: None,
@@ -1013,7 +1017,7 @@ mod tests {
             let all_old = state == old_state
                 && inbox.as_deref().map(Vec::as_slice) == Some(b"inbox-old".as_slice())
                 && trust.as_deref().map(Vec::as_slice) == Some(verified.as_slice());
-            if k <= 5 {
+            if k <= 6 {
                 assert!(all_old, "k = {k}: all three old");
             } else {
                 assert!(all_new, "after the commit: all three new");
@@ -1076,6 +1080,7 @@ mod tests {
                     ratchet: &ratchet,
                     inbox: None,
                     trust: None,
+                    block: None,
                     delivered: &delivered,
                     receipted: &[],
                     routes: None,
@@ -1140,6 +1145,7 @@ mod tests {
                     ratchet: &ratchet,
                     inbox: None,
                     trust: None,
+                    block: None,
                     delivered: &delivered,
                     receipted: &[],
                     routes: None,
@@ -1198,7 +1204,9 @@ mod tests {
     /// V2-1 (killer, `scheduler/outbox.rs:301`): the trust codes of the `sessions` trust row.
     #[test]
     fn trust_codes_are_fixed() {
+        use crate::sessions::actor::{Refusal, block_code, block_of};
         use secmp_proto::tr::content::Trust;
+        use secmp_store::sessions as s;
         assert_eq!(
             [
                 Trust::Unverified,
@@ -1209,6 +1217,35 @@ mod tests {
             .map(super::trust_code),
             [0, 1, 2, 3]
         );
+        // the store pins the codes it compares (Q205) and the block byte (Q210 b): the same values
+        assert_eq!(
+            [
+                s::TRUST_UNVERIFIED,
+                s::TRUST_VERIFIED,
+                s::TRUST_KEY_CHANGED,
+                s::TRUST_FROZEN
+            ],
+            [0, 1, 2, 3]
+        );
+        assert_eq!(
+            [
+                block_code(Refusal::Removed),
+                block_code(Refusal::Reset),
+                block_code(Refusal::Trust),
+                block_code(Refusal::AwaitingReply)
+            ],
+            [Some(s::BLOCK_REMOVED), Some(s::BLOCK_RESET), None, None]
+        );
+        assert_eq!(
+            [0, 1, 2, 3].map(block_of),
+            [
+                Some(None),
+                Some(Some(Refusal::Removed)),
+                Some(Some(Refusal::Reset)),
+                None
+            ]
+        );
+        assert_eq!(s::BLOCK_NONE, 0);
     }
 
     /// V2-1 (killer, `scheduler/outbox.rs:328`): the default `Persist::commit_parts` commits the joined state through
@@ -1235,6 +1272,7 @@ mod tests {
                     ratchet: &ratchet,
                     inbox: None,
                     trust: None,
+                    block: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,

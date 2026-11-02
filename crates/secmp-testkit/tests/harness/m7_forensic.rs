@@ -18,7 +18,7 @@ use secmp_store::kat::{TempDir, TestKey, scan_dir};
 use secmp_store::messages::{Direction, NewMessage};
 use secmp_store::outbox::{OutboxRow, state};
 use secmp_store::profile::{insert_invitation, insert_prekey, put_identity, put_relay};
-use secmp_store::sessions::{insert_skipped, put_fixed, put_inbox, put_trust};
+use secmp_store::sessions::{TRUST_VERIFIED, insert_skipped, put_fixed, put_inbox, update_trust};
 use secmp_store::wrap::Argon2Params;
 
 type R = core::result::Result<(), Box<dyn std::error::Error>>;
@@ -90,7 +90,7 @@ fn populate(store: &mut Store) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error
         put_fixed(tx, 1, &[0xa1; 600])?;
         insert_skipped(tx, 1, 0, &[0xa2; 68])?;
         put_inbox(tx, 1, &[0xa3; 120])?;
-        put_trust(tx, 1, &[1])?;
+        update_trust(tx, 1, Some(TRUST_VERIFIED), None)?;
         insert_prekey(tx, 1, 1, &[0xb1; 96], Some(9))?;
         insert_prekey(tx, 2, 7, &[0xb2; 64], None)?;
         put_relay(tx, 1, b"relay ref", Some(&[0xd1; 32]))?;

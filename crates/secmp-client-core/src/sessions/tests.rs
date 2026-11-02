@@ -597,13 +597,120 @@ fn invalid_key_change_freezes() -> R {
             [SessionEvent::KeyChangeInvalid]
         ));
         assert_eq!(w.g.may_send_real(), Err(Refusal::Trust));
-        set_verified(&w.guest.profile.store(), &mut w.g, ContactId(1))?;
+        assert_eq!(
+            set_verified(&w.guest.profile.store(), &mut w.g, ContactId(1)).err(),
+            Some(Error::Frozen)
+        );
         w.g.set_trust(secmp_proto::tr::content::Trust::Verified);
         assert_eq!(w.g.may_send_real(), Err(Refusal::Trust), "still frozen");
         // nothing more is delivered
         w.h.outbox_mut().enqueue(text(3, 5), 0);
         flush(&mut w.h, &mut w.g, 2)?;
         assert!(w.g.received().is_empty());
+        // Q205: from the rows, too — the session reopens frozen
+        let World { guest, g, .. } = w;
+        drop(g);
+        let g = open_conversation(&guest.profile.store(), ContactId(1), Fixed(entropy(44)), T0)?;
+        assert_eq!(g.trust(), secmp_proto::tr::content::Trust::Frozen);
+        assert_eq!(g.may_send_real(), Err(Refusal::Trust));
+        Ok(())
+    })
+}
+
+/// The entropy of the conversations a test core opens.
+#[cfg(feature = "kat")]
+fn core_sources(seed: u64) -> impl FnMut() -> Fixed {
+    let mut n = 0_u64;
+    move || {
+        n = n.saturating_add(1);
+        Fixed(entropy(seed.saturating_add(n)))
+    }
+}
+
+/// Q205 (VERIFY-B4 P1 B-1, probe P1; SE-08, spec §7.7): `Frozen` is durable — `set_verified` on a frozen session leaves
+/// the stored trust `Frozen` (the session reopens frozen) and is `Err(Frozen)`; `Api` `Verify` with the right digits is
+/// `Err(Frozen)` and the contact stays unverified, also after a restart.
+#[cfg(feature = "kat")]
+#[test]
+fn frozen_survives_verify_and_reopen() -> R {
+    use crate::api::{Core, Request, Response};
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let mut w = established("q205", 45)?;
+        key_change(&mut w, true)?;
+        flush(&mut w.h, &mut w.g, 4)?;
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::KeyChangeInvalid]
+        ));
+        let World { guest, mut g, .. } = w;
+        let store = guest.profile.store();
+        let refused = set_verified(&store, &mut g, ContactId(1));
+        drop(g);
+        let g = open_conversation(&store, ContactId(1), Fixed(entropy(46)), T0)?;
+        assert_eq!(g.trust(), Trust::Frozen);
+        assert_eq!(refused.err(), Some(Error::Frozen));
+        drop(g);
+        let contacts = Contacts::new(store.clone(), guest.profile.fingerprint()?);
+        assert!(!contacts.get(ContactId(1))?.verified);
+        // through the `Api`
+        let mut core =
+            Core::with_profile(guest.profile.clone(), guest.clock.clone(), core_sources(47))?;
+        let Response::SafetyNumber(digits) = core.handle(Request::SafetyNumber {
+            contact: ContactId(1),
+        })?
+        else {
+            return Err("safety number".into());
+        };
+        let verify = core.handle(Request::Verify {
+            contact: ContactId(1),
+            digits,
+        });
+        assert_eq!(verify.err(), Some(Error::Frozen));
+        drop((core, contacts, store));
+        let guest = guest.reopen()?;
+        let store = guest.profile.store();
+        let contacts = Contacts::new(store.clone(), guest.profile.fingerprint()?);
+        assert!(
+            !contacts.get(ContactId(1))?.verified,
+            "unverified after the restart"
+        );
+        let g = open_conversation(&store, ContactId(1), Fixed(entropy(48)), T0)?;
+        assert_eq!(g.trust(), Trust::Frozen, "frozen after the restart");
+        Ok(())
+    })
+}
+
+/// Q210 b (VERIFY-B4 P1 M-3, probe P2; SE-15): the block is durable — a received `Control{SessionResetRequest}` is
+/// committed with its cell and the session reopens refusing real sends (`Reset`); a `Request::Remove` through the core
+/// leaves the host's session `Removed` after a restart.
+#[cfg(feature = "kat")]
+#[test]
+fn reset_request_survives_reopen() -> R {
+    use crate::api::{Core, Request};
+
+    big(|| {
+        let mut w = established("q210b", 49)?;
+        w.h.queue_control(secmp_proto::wire::cell::ControlCode::SessionResetRequest);
+        let cell = next(&mut w.h, 5_000)?;
+        deliver(&mut w.g, &cell)?;
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::ResetRequested]
+        ));
+        let World { host, guest, h, g } = w;
+        drop((h, g));
+        let conv = open_conversation(&guest.profile.store(), ContactId(1), Fixed(entropy(50)), T0)?;
+        assert_eq!(conv.may_send_real(), Err(Refusal::Reset));
+        let mut core =
+            Core::with_profile(host.profile.clone(), host.clock.clone(), core_sources(51))?;
+        core.handle(Request::Remove {
+            contact: ContactId(1),
+        })?;
+        drop(core);
+        let conv = open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(52)), T0)?;
+        assert_eq!(conv.may_send_real(), Err(Refusal::Removed));
         Ok(())
     })
 }
@@ -1075,11 +1182,15 @@ fn first_reply_carries_route_update() -> R {
     })
 }
 
-/// B-4 killers (`trust_of`): the stored trust codes 0…3 are the four trusts, anything else is none.
+/// B-4 killers (`trust_of`): the stored trust codes 0…3 are the four trusts, anything else is none; the row is `code ‖
+/// block` (Q210 b), two bytes, decoded strictly by the store.
 #[cfg(feature = "kat")]
 #[test]
 fn trust_codes_map_to_trusts() {
     use secmp_proto::tr::content::Trust;
+    use secmp_store::sessions::trust_row;
+    assert_eq!(trust_row(&[3, 2]), Ok((3, 2)));
+    assert!(trust_row(&[3]).is_err() && trust_row(&[3, 2, 0]).is_err());
     assert_eq!(trust_of(0), Some(Trust::Unverified));
     assert_eq!(trust_of(1), Some(Trust::Verified));
     assert_eq!(trust_of(2), Some(Trust::KeyChanged));

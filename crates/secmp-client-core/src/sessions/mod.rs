@@ -14,14 +14,14 @@ use secmp_proto::tr::content::{Trust, ik_sig};
 use secmp_proto::wire::cell::AppKind;
 use secmp_proto::wire::inv::IksPublic;
 use secmp_store::Tx;
-use secmp_store::sessions::{insert_skipped, put_fixed, put_trust};
+use secmp_store::sessions::{init_trust, insert_skipped, put_fixed, trust_row, update_trust};
 
 use crate::api::{ContactId, Error};
 use crate::contacts::Contacts;
 use crate::outbox::StoreOutbox;
 use crate::persist::{SharedStore, StorePersist};
 use crate::scheduler::outbox::{MsgId, OutMessage, Outbox as _, trust_code};
-use actor::{Conversation, EntropySource, Received, Refusal, initial_parts};
+use actor::{Conversation, EntropySource, Received, Refusal, block_code, block_of, initial_parts};
 
 /// A conversation over the profile store: the session's rows, the contact's outbox.
 pub type StoreConversation<S> = Conversation<StoreOutbox, StorePersist, S>;
@@ -77,20 +77,56 @@ pub fn accept_key_change<S: EntropySource>(
 }
 
 /// The user verified the safety number of `contact` (spec §6.7): the contact and the session are verified, in one store
-/// transaction; a held message goes out with the next slots. A frozen session stays frozen.
+/// transaction; a held message goes out with the next slots. A frozen session stays frozen (Q205): the store's guarded
+/// trust writer refuses, and nothing is written — the contact stays unverified.
 ///
 /// # Errors
-/// [`Error::Unavailable`] if the store cannot be written.
+/// [`Error::Frozen`] if the session is frozen (in memory or in the store); [`Error::Unavailable`] if the store cannot be
+/// written.
 pub fn set_verified<S: EntropySource>(
     store: &SharedStore,
     conversation: &mut StoreConversation<S>,
     contact: ContactId,
 ) -> Result<(), Error> {
-    store.lock().map_err(|_| Error::Unavailable)?.txn(|tx| {
-        secmp_store::contacts::set_contact_verified(tx, contact.0, true)?;
-        put_trust(tx, contact.0, &[trust_code(Trust::Verified)])
-    })?;
+    if matches!(conversation.trust(), Trust::Frozen) {
+        return Err(Error::Frozen);
+    }
+    let mut s = store.lock().map_err(|_| Error::Unavailable)?;
+    let written = s.txn(|tx| {
+        update_trust(tx, contact.0, Some(trust_code(Trust::Verified)), None)?;
+        secmp_store::contacts::set_contact_verified(tx, contact.0, true)
+    });
+    if written.is_err() {
+        // the refusal of the guard: the stored trust is `Frozen`
+        let (_, row) = s.inbox_trust(contact.0)?;
+        let stored = row.as_deref().map(|r| trust_row(r)).transpose()?;
+        return Err(match stored {
+            Some((code, _)) if trust_of(code) == Some(Trust::Frozen) => Error::Frozen,
+            _ => Error::Unavailable,
+        });
+    }
+    drop(s);
     conversation.set_trust(Trust::Verified);
+    Ok(())
+}
+
+/// Block real sends on the session of `contact` (`Removed`, `Reset`; Q210 b): durable in the store first — the block byte
+/// of the trust row, set and never cleared — then in memory.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the store cannot be written or `block` is not a block (nothing changes).
+pub fn block_session<S: EntropySource>(
+    store: &SharedStore,
+    conversation: &mut StoreConversation<S>,
+    contact: ContactId,
+    block: Refusal,
+) -> Result<(), Error> {
+    let code = block_code(block).ok_or(Error::Unavailable)?;
+    store
+        .lock()
+        .map_err(|_| Error::Unavailable)?
+        .txn(|tx| update_trust(tx, contact.0, None, Some(code)))?;
+    conversation.restore_block(Some(block));
     Ok(())
 }
 
@@ -287,10 +323,14 @@ pub fn open_conversation<S: EntropySource>(
         .load()
         .map_err(|_| Error::Unavailable)?
         .ok_or(Error::Unavailable)?;
-    let (inbox, trust) = persist.load_inbox_trust().map_err(|_| Error::Unavailable)?;
-    let trust = match trust.as_ref().map(|t| t.first()) {
-        Some(Some(code)) => trust_of(*code).ok_or(Error::Unavailable)?,
-        _ => Trust::Unverified,
+    let (inbox, row) = persist.load_inbox_trust().map_err(|_| Error::Unavailable)?;
+    // `trust code ‖ block`, strictly (Q210 b); no row: a session before its first trust write
+    let (trust, block) = match row.as_deref().map(|r| trust_row(r)).transpose()? {
+        Some((code, block)) => (
+            trust_of(code).ok_or(Error::Unavailable)?,
+            block_of(block).ok_or(Error::Unavailable)?,
+        ),
+        None => (Trust::Unverified, None),
     };
     let outbox = StoreOutbox::open(std::sync::Arc::clone(store), contact.0)
         .map_err(|_| Error::Unavailable)?;
@@ -306,6 +346,7 @@ pub fn open_conversation<S: EntropySource>(
     )
     .map_err(|_| Error::Unavailable)?;
     conversation.seed_seen(history);
+    conversation.restore_block(block);
     let cells = store
         .lock()
         .map_err(|_| Error::Unavailable)?
@@ -319,10 +360,12 @@ pub fn open_conversation<S: EntropySource>(
 
 /// Write the session of the accepted handshake `state` as `session` (the contact's id) into the caller's transaction: the
 /// fixed part, one row per skipped entry (a responder's first state has none) and the trust, which is `Unverified` — the
-/// contact of a handshake is stored unverified (§6.6). The reassembly state is empty and has no row.
+/// contact of a handshake is stored unverified (§6.6) — through the guarded writer onto a session without a trust row
+/// (Q205). The reassembly state is empty and has no row.
 ///
 /// # Errors
-/// [`secmp_store::Error::Unavailable`] if the state does not serialise, an entry is malformed (Q175) or a statement fails.
+/// [`secmp_store::Error::Unavailable`] if the state does not serialise, an entry is malformed (Q175), the session has a
+/// trust row already or a statement fails.
 pub(crate) fn write_initial(
     tx: &mut Tx<'_>,
     session: i64,
@@ -345,7 +388,7 @@ pub(crate) fn write_initial_parts(
     for (ord, entry) in (0_i64..).zip(&parts.skipped) {
         insert_skipped(tx, session, ord, entry)?;
     }
-    put_trust(tx, session, &[trust_code(Trust::Unverified)])
+    init_trust(tx, session, trust_code(Trust::Unverified))
 }
 
 #[cfg(test)]

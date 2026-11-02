@@ -20,7 +20,7 @@ use crate::profile::Profile;
 use crate::relay_view;
 use crate::scheduler::params::{Mode, Params};
 use crate::scheduler::types::{QueueId, RelayId};
-use crate::sessions::actor::{Conversations, EntropySource, SessionEvent};
+use crate::sessions::actor::{Conversations, EntropySource, Refusal, SessionEvent};
 use crate::sessions::{self, StoreConversation};
 use crate::settings::{DeliveredReceipts, Settings};
 use crate::timing::TimingRng;
@@ -684,15 +684,18 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             Request::Rotate { contact, relay } => self.rotate(contact, RelayId(relay))?,
             Request::RotateIdentity => self.rotate_identity()?,
             Request::ResetSession { contact } => {
+                let store = Arc::clone(&self.store);
                 let conversation = self.session(contact)?;
+                // the block is durable before the request is planned (Q210 b)
+                sessions::block_session(&store, conversation, contact, Refusal::Reset)?;
                 conversation.queue_control(ControlCode::SessionResetRequest);
-                conversation.mark_reset();
                 Response::Done
             }
             Request::Remove { contact } => {
+                let store = Arc::clone(&self.store);
                 let conversation = self.session(contact)?;
+                sessions::block_session(&store, conversation, contact, Refusal::Removed)?;
                 conversation.queue_control(ControlCode::ContactRemoved);
-                conversation.mark_removed();
                 self.contacts()?.on_control(
                     contact,
                     &secmp_proto::wire::cell::ControlBody {
@@ -731,8 +734,15 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         Ok(answer)
     }
 
+    /// `Request::Verify`: with a session the contact flag and the trust are written in one transaction
+    /// (`sessions::set_verified`), so a frozen session refuses both — [`Error::Frozen`], the contact stays unverified (Q205).
     fn verify(&mut self, contact: ContactId, digits: &str) -> Result<Response, Error> {
-        let ok = self.contacts()?.confirm_digits(contact, digits)?;
+        if !self.index.contains_key(&contact.0) {
+            return Ok(Response::Verified(
+                self.contacts()?.confirm_digits(contact, digits)?,
+            ));
+        }
+        let ok = self.contacts()?.digits_match(contact, digits)?;
         if ok {
             let store = Arc::clone(&self.store);
             let receipts = self.settings.delivered_receipts;

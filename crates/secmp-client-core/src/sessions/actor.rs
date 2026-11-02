@@ -208,6 +208,28 @@ pub enum Refusal {
     AwaitingReply,
 }
 
+/// The block byte of the session's trust row for `block` (0 none, 1 `Removed`, 2 `Reset`; Q210 b): `None` for a refusal
+/// that is not a block.
+#[must_use]
+pub const fn block_code(block: Refusal) -> Option<u8> {
+    match block {
+        Refusal::Removed => Some(1),
+        Refusal::Reset => Some(2),
+        Refusal::Trust | Refusal::AwaitingReply => None,
+    }
+}
+
+/// The block of a stored block byte (`Some(None)`: none); `None` for an unknown byte.
+#[must_use]
+pub const fn block_of(code: u8) -> Option<Option<Refusal>> {
+    match code {
+        0 => Some(None),
+        1 => Some(Some(Refusal::Removed)),
+        2 => Some(Some(Refusal::Reset)),
+        _ => None,
+    }
+}
+
 /// One conversation (see the module documentation).
 pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     state: Option<RatchetState>,
@@ -436,6 +458,19 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// A session reset was asked for.
     pub const fn mark_reset(&mut self) {
         self.block = Some(Refusal::Reset);
+    }
+
+    /// The block of this session (`Removed`, `Reset`), restored from its trust row or set by a request.
+    pub const fn restore_block(&mut self, block: Option<Refusal>) {
+        if block.is_some() {
+            self.block = block;
+        }
+    }
+
+    /// The block of this session, if any.
+    #[must_use]
+    pub const fn block(&self) -> Option<Refusal> {
+        self.block
     }
 
     /// The one entry through which real content (a message, a fragment, a receipt) reaches a cell: `Ok` if it may be
@@ -782,6 +817,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     ratchet: &ratchet,
                     inbox: None,
                     trust: None,
+                    block: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,
@@ -1006,6 +1042,15 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
         let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
         let trust_changed = (trust != self.trust).then_some(trust_code(trust));
+        // a `Control{1}` (no argument) or `Control{2}` blocks real sends durably, in the same commit (Q210 b)
+        let block = match &delivery {
+            Delivery::Control(body) => match body.code {
+                ControlCode::ContactRemoved if body.arg.is_empty() => block_code(Refusal::Removed),
+                ControlCode::SessionResetRequest => block_code(Refusal::Reset),
+                ControlCode::ContactRemoved => None,
+            },
+            _ => None,
+        };
         // the receipts this cell carries make their messages `Delivered` in the same commit (SE-21, F9b)
         let receipted: Vec<MsgId> = match &delivery {
             Delivery::Receipt(body) => body.msg_ids.clone(),
@@ -1035,6 +1080,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     ratchet: &ratchet,
                     inbox: inbox_bytes.as_ref().map(|b| b.as_slice()),
                     trust: trust_changed,
+                    block,
                     delivered: &fresh,
                     receipted: &receipted,
                     routes: routes.as_ref().map(|r| r.as_slice()),

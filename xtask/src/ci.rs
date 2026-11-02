@@ -103,6 +103,13 @@ const FAST: &[Step] = &[
         id: "harness",
         run: gates::harness,
     },
+    // ADR-045 Amendment 14 (WEISUNG M7-B-4c Q204, D-B26): `fuzz/` is outside the workspace; a signature change the
+    // fuzz targets do not follow is found here, not only by ci-full's smoke
+    Step {
+        num: "6",
+        id: "fuzz-check",
+        run: gates::fuzz_check,
+    },
 ];
 
 const FULL_EXTRA: &[Step] = &[
@@ -384,6 +391,24 @@ pub(crate) fn step(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q204 (ADR-045 Amendment 14): the last ci-fast step checks the fuzz package — `fuzz/Cargo.toml`, `--locked`,
+    /// every target.
+    #[test]
+    fn fast_checks_fuzz_targets() {
+        let ids: Vec<&str> = FAST.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&"fuzz-check"), "ci-fast steps {ids:?}");
+        assert_eq!(ids.last(), Some(&"fuzz-check"));
+        let args = gates::fuzz_check_args();
+        assert_eq!(args.first().map(String::as_str), Some("check"));
+        assert!(args.iter().any(|a| a == "--locked"), "{args:?}");
+        assert!(args.iter().any(|a| a == "--all-targets"), "{args:?}");
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--manifest-path", "fuzz/Cargo.toml"]),
+            "{args:?}"
+        );
+    }
 
     #[test]
     fn step_ids_are_unique() {

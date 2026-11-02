@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # cargo-fuzz package (docs/06 §4–5 step 6). Outside the main workspace (its own `[workspace]` and Cargo.lock):
-# built only with the pinned nightly by `cargo xtask step fuzz`; `libfuzzer-sys` is a fuzzing-only dependency
-# (ADR-037) and never part of a shipped build.
+# fuzzed with the pinned nightly by `cargo xtask step fuzz`, checked (`cargo check --locked --all-targets`, no run)
+# with the pinned stable by the ci-fast step `fuzz-check` (ADR-045 Amendment 14); `libfuzzer-sys` is a fuzzing-only
+# dependency (ADR-037) and never part of a shipped build.
 [package]
 name = "secmp-fuzz"
 version = "0.0.0"

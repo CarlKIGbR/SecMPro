@@ -1084,6 +1084,31 @@ pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
     Ok(args)
 }
 
+/// ci-fast's build check of the fuzz package (ADR-045 Amendment 14, WEISUNG M7-B-4c Q204, D-B26): `fuzz/` is outside
+/// the workspace, so neither clippy nor nextest compiles it. `cargo check` of every target with the pinned stable of
+/// `rust-toolchain.toml`, `--locked` as [`fuzz_lock_check_args`] (EXTB-6); no run, no corpus, no nightly, no
+/// `-D warnings` (`fuzz/common/` has dead-code warnings).
+pub(crate) fn fuzz_check_args() -> Vec<String> {
+    [
+        "check",
+        "--locked",
+        "--manifest-path",
+        "fuzz/Cargo.toml",
+        "--all-targets",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
+}
+
+/// The ci-fast step `fuzz-check` (see [`fuzz_check_args`]); the fuzz smoke stays the `fuzz` step of ci-full.
+pub(crate) fn fuzz_check(ctx: &Ctx) -> Result<Outcome> {
+    Cmd::cargo().args(fuzz_check_args()).dir(&ctx.root).run()?;
+    Ok(Outcome::Pass(
+        "cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets (pinned stable)".into(),
+    ))
+}
+
 /// The command that checks, before the fuzz build, that `fuzz/Cargo.lock` needs no change (EXTB-6).
 pub(crate) fn fuzz_lock_check_args() -> Vec<String> {
     [

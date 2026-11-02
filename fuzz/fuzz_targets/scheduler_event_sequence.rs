@@ -62,6 +62,8 @@ struct Src {
     handed: BTreeMap<QueueId, BTreeSet<u64>>,
     committed: BTreeMap<QueueId, BTreeSet<u64>>,
     pending: BTreeSet<(QueueId, u64)>,
+    /// The generation each delivery carried, for the later `delivery_committed`.
+    generation: BTreeMap<(QueueId, u64), u64>,
 }
 
 impl CellSource for Src {

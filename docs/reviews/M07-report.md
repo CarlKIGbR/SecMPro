@@ -1223,7 +1223,7 @@ Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-s
 
 ## §B-4b — Nachtrag to B-4 from the external review EXTB1 (WEISUNG M7-B-4b; rulings Q199–Q203; `modell=claude-sonnet-5-5`)
 
-`<B4-END>` = `d77fb3c` ("Phase B closed @ 1318baa"); the guard held at the start (`git status --short` empty, branch `m07-client-core`). Anchors below are as found at `d77fb3c` / the final code head with `grep -n`; Astra's anchors are @9b511a2 and have all moved.
+`<B4-END>` = `d77fb3c` ("Phase B closed @ 1318baa"; superseded by "Phase B closed @ 75d7bb6", the B-4b code head); the guard held at the start (`git status --short` empty, branch `m07-client-core`). Anchors below are as found at `d77fb3c` / the final code head with `grep -n`; Astra's anchors are @9b511a2 and have all moved.
 
 ### §B-4b.1 Findings
 
@@ -1260,7 +1260,7 @@ Sanctioned test edits (old → new): `has_recipient` decodes `contacts.queues` t
 | mutants | core: 116 tested = 84 caught / 2 missed / 30 unviable / 0 timeout; store: no mutant in the diff; both survivors dispositioned (killer `f4a4cb5`; re-pinned accepted row) | `mutants-b4b-f4a4cb5.txt` |
 | coverage | PASS: secmp-client-core 10560/11033 lines = 95.7 % (min 90 %); secmp-store 5256/5470 = 96.1 % (min 90 %) | `coverage-b4b-75d7bb6.txt` |
 | Kani | not touched (no `#[cfg(kani)]` file changed) | — |
-| `ci-full` | @@CIFULL@@ | `ci-full-b4b-<sha7>.txt` |
+| `ci-full` | PASS at `ab24ba1` (clean tree; Kani step 4786 s, 57/57 harnesses; 36 fuzz targets; delegated: windows-native, windows-cross, mutants, ct, proverif-link) | `ci-full-b4b-ab24ba1.txt` |
 
 ### §B-4b.4 Deviations (new: D-B27…)
 

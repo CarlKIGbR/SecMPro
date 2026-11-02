@@ -1781,31 +1781,6 @@ impl Scheduler {
         Ok(op)
     }
 
-    /// Queue the `QUEUE_DEL` of `queue` behind an empty `FETCH` of it (Q163, Q194; D-B11): see
-    /// [`ControlOps::schedule_after_empty_fetch`]. No slot, frame or link of the schedule changes.
-    ///
-    /// # Errors
-    /// [`SchedError::Unavailable`].
-    pub fn schedule_queue_del_after_empty_fetch(
-        &mut self,
-        relay: RelayId,
-        related: u64,
-        queue: QueueId,
-    ) -> Result<OpId, SchedError> {
-        let op = self.world.new_op_id();
-        self.world.control.schedule_after_empty_fetch(
-            op,
-            OpSpec {
-                kind: ControlKind::QueueDel(queue),
-                relay,
-                related,
-                when: When::Delayed,
-            },
-            queue,
-        )?;
-        Ok(op)
-    }
-
     /// When `op` starts, while it waits.
     #[must_use]
     pub fn control_due(&self, op: OpId) -> Option<u64> {
@@ -2428,7 +2403,8 @@ mod tests {
     /// (`LinkEvent::QueueGone`); on any other recv-queue it does (SE-14). Removing the queue drops its `QUEUE_DEL`.
     #[test]
     fn no_queue_on_a_retiring_queue_completes_the_retirement() -> Result<(), Fail> {
-        use crate::scheduler::types::LinkEvent;
+        use crate::scheduler::control::When;
+        use crate::scheduler::types::{ControlKind, LinkEvent};
         let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
         let mk = |b: u8| -> Result<RecvCap, &'static str> {
             let seed = SecretBytes::from_slice(&[b; 32]).map_err(|_| "seed")?;
@@ -2441,7 +2417,13 @@ mod tests {
             .add_recv_queue(0, RelayId(0), mk(0x32)?, 10_000)
             .map_err(|_| "queue")?;
         sched
-            .schedule_queue_del_after_empty_fetch(RelayId(0), 1, gone)
+            .schedule_control(
+                0,
+                ControlKind::QueueDel(gone),
+                RelayId(0),
+                1,
+                When::AfterEmptyFetch(gone),
+            )
             .map_err(|_| "del")?;
         assert_eq!(sched.world.control.len(), 1);
 
@@ -2585,13 +2567,21 @@ mod tests {
     /// when it was asked in the queue's current generation.
     #[test]
     fn empty_response_of_an_old_generation_arms_nothing() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        use crate::scheduler::types::ControlKind;
         let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(11));
         let seed = SecretBytes::<32>::from_slice(&[0x31; 32]).map_err(|_| "seed")?;
         sched
             .add_recv_queue_seed(0, QueueId(4), RelayId(0), &seed, 10_000)
             .map_err(|_| "queue")?;
         let op = sched
-            .schedule_queue_del_after_empty_fetch(RelayId(0), 4, QueueId(4))
+            .schedule_control(
+                0,
+                ControlKind::QueueDel(QueueId(4)),
+                RelayId(0),
+                4,
+                When::AfterEmptyFetch(QueueId(4)),
+            )
             .map_err(|_| "op")?;
         sched
             .world

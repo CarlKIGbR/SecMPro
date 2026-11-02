@@ -769,6 +769,21 @@ impl Invitations {
         Ok(retirement(&self.profile.retire(clock)?, None))
     }
 
+    /// The earliest `expires` (Unix seconds) of an open invitation (`None` without one): when the host runs
+    /// [`Invitations::maintain`] next (IN-11, Q208).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn next_expiry(&self) -> Result<Option<u64>, Error> {
+        Ok(self
+            .lock()?
+            .invitations()?
+            .iter()
+            .filter(|r| r.status == INVITATION_OPEN)
+            .map(|r| r.expires_ms.div_ceil(1000))
+            .min())
+    }
+
     /// The queues of the invitations that were retired unconsumed and whose `QUEUE_DEL` is not yet acknowledged (Q201): each
     /// with its invitation and the entry that signs its `FETCH` and `QUEUE_DEL` (the deadline is set). After a restart the
     /// host fetches them again until the empty `FETCH` and re-arms the deletion.

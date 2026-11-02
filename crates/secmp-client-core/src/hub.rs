@@ -110,6 +110,9 @@ pub struct Hub<C: Clock, S: EntropySource> {
     recv_periods: BTreeMap<QueueId, u64>,
     actions: Vec<Action>,
     rng: crate::timing::TimingRng,
+    /// The earliest `expires` (Unix seconds) of an open invitation: [`Hub::tick`] runs `Invitations::maintain` from then on
+    /// (IN-11, Q208); refreshed after every `maintain`, issue and [`Hub::new`].
+    next_expiry: Option<u64>,
 }
 
 impl<C: Clock, S: EntropySource> Hub<C, S> {
@@ -134,7 +137,11 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             recv_periods: BTreeMap::new(),
             actions: Vec::new(),
             rng: crate::timing::TimingRng::os(),
+            next_expiry: None,
         };
+        // once after a restart (IN-11, Q208): the invitations that expired while the client was down are retired now; their
+        // `QUEUE_DEL` waits for an empty `FETCH` (Q194) and is not re-armed from the stub below a second time
+        let fresh = hub.maintain()?;
         for open in hub.invitations.open_queues()? {
             let period = u64::from(open.period_s).saturating_mul(1_000);
             hub.register_recv(open.relay, open.queue, &open.recv_seed, period);
@@ -148,6 +155,9 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             let period = u64::from(entry.period_s).saturating_mul(1_000);
             hub.register_recv(RelayId(entry.relay), queue, &entry.seed, period);
             hub.inv_queues.insert(queue, ld_id);
+            if fresh.contains(&queue) {
+                continue;
+            }
             let from = entry.retire_at_ms.unwrap_or(0).saturating_sub(base);
             hub.actions.push(Action::Control(OpSpec {
                 kind: ControlKind::QueueDel(queue),
@@ -358,6 +368,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         for op in &issued.ops {
             self.actions.push(Action::Control(*op));
         }
+        self.next_expiry = self.invitations.next_expiry()?;
         Ok(issued)
     }
 
@@ -487,7 +498,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     }
 
     /// Take what the sessions delivered, and act on it: the application's messages and events (`Core::pump`), a route that
-    /// moved the send queue.
+    /// moved the send queue, and the control operations the core left — the `QUEUE_DEL`s of the invitations an identity
+    /// rotation retired (Q164, Q208).
     ///
     /// # Errors
     /// [`Error::Unavailable`] if the store cannot be read or written.
@@ -499,6 +511,9 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             if let Some(op) = done.retire_op {
                 self.actions.push(Action::Control(op));
             }
+        }
+        for op in self.core.take_ops() {
+            self.actions.push(Action::Control(op));
         }
         let changed = core::mem::take(&mut self.core.routes_changed);
         for contact in changed {
@@ -516,8 +531,34 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         Ok(())
     }
 
-    /// Time passes: the queues that carried dummies in overlap long enough are dropped.
+    /// Retire the invitations that expired unused (`Invitations::maintain`, IN-11): their `QUEUE_DEL`s go to the scheduler,
+    /// their events to the core; [`Hub::tick`]'s next check is the earliest `expires` left. Returns the retired queues.
+    fn maintain(&mut self) -> Result<BTreeSet<QueueId>, Error> {
+        let maintained = self.invitations.maintain(&self.core.clock)?;
+        let mut queues = BTreeSet::new();
+        for event in maintained.events {
+            self.core.raise(event);
+        }
+        for op in maintained.ops {
+            if let ControlKind::QueueDel(queue) = op.kind {
+                queues.insert(queue);
+            }
+            self.actions.push(Action::Control(op));
+        }
+        self.next_expiry = self.invitations.next_expiry()?;
+        Ok(queues)
+    }
+
+    /// Time passes (`now_ms` monotonic, it only triggers the checks): the queues that carried dummies in overlap long
+    /// enough are dropped, and once the core clock's Unix time reaches the earliest `expires` of an open invitation the
+    /// expired ones are retired (Q208). A store that cannot be read leaves the retirement to the next tick.
     pub fn tick(&mut self, now_ms: u64) {
+        if self
+            .next_expiry
+            .is_some_and(|at| self.core.clock.unix_secs() >= at)
+        {
+            let _ = self.maintain();
+        }
         let (due, keep): (Vec<_>, Vec<_>) = core::mem::take(&mut self.retiring_sends)
             .into_iter()
             .partition(|(until, _)| *until <= now_ms);
@@ -1221,6 +1262,96 @@ mod tests {
             ));
             assert!(again.invitations.retiring()?.is_empty());
             assert_eq!(again.queue_material(queue), None);
+            Ok(())
+        })
+    }
+
+    /// The `QUEUE_DEL` ops of `queue` among `actions`.
+    #[cfg(feature = "kat")]
+    fn queue_dels(actions: &[Action], queue: QueueId) -> Vec<OpSpec> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Control(op) if op.kind == ControlKind::QueueDel(queue) => Some(*op),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Q208 (VERIFY-B4 P1 M-1 = P2 M-1; Q164): an identity rotation retires the open invitation, and its `QUEUE_DEL` — left
+    /// in the core's ops — reaches the scheduler as an `Action::Control` after `pump`, behind an empty `FETCH` (Q194).
+    #[cfg(feature = "kat")]
+    #[test]
+    fn identity_rotation_queue_del_reaches_scheduler() -> R {
+        big(|| {
+            let host = party("q208-h", 81)?;
+            let mut hub = hub_over(&host, "host", 82)?;
+            let issued = hub.invite(T0 + 5 * DAY)?;
+            let inv_queue = hub.invitations.queue_of(&issued.invitation.ld_id)?.queue;
+            hub.take_actions();
+            let rotated = hub.core_mut().handle(Request::RotateIdentity)?;
+            assert!(matches!(rotated, Response::IdentityRotated(_)));
+            hub.pump()?;
+            let dels = queue_dels(&hub.take_actions(), inv_queue);
+            assert_eq!(dels.len(), 1, "one QUEUE_DEL of the invitation queue");
+            assert_eq!(
+                dels.first().map(|op| op.when),
+                Some(When::AfterEmptyFetch(inv_queue))
+            );
+            hub.pump()?;
+            assert!(
+                queue_dels(&hub.take_actions(), inv_queue).is_empty(),
+                "once"
+            );
+            Ok(())
+        })
+    }
+
+    /// Q208 (VERIFY-B4 P2 M-1; IN-11, Q194): an invitation queue that never receives a cell is retired on schedule — no
+    /// `QUEUE_DEL` before `expires`; once the core clock is past it, `tick` retires it, and its `QUEUE_DEL` waits for an
+    /// empty `FETCH` (none is due before it) and then `U[1 min, 60 min]`; a later tick does not retire it twice.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn expired_invitation_queue_del_without_traffic() -> R {
+        use crate::scheduler::control::ControlOps;
+        use crate::scheduler::params::Params;
+        use crate::scheduler::types::OpId;
+
+        big(|| {
+            let host = party("q208e-h", 83)?;
+            let mut hub = hub_over(&host, "host", 84)?;
+            let issued = hub.invite(T0 + DAY)?;
+            let inv_queue = hub.invitations.queue_of(&issued.invitation.ld_id)?.queue;
+            hub.take_actions();
+            hub.tick(ms(10));
+            assert!(
+                queue_dels(&hub.take_actions(), inv_queue).is_empty(),
+                "not expired"
+            );
+            host.at_day(2);
+            let now = host.clock.mono_ms();
+            hub.tick(now);
+            let dels = queue_dels(&hub.take_actions(), inv_queue);
+            assert_eq!(dels.len(), 1, "the expired invitation's QUEUE_DEL");
+            let op = dels.first().ok_or("QUEUE_DEL")?;
+            assert_eq!(op.when, When::AfterEmptyFetch(inv_queue));
+            // the scheduler's control queue: nothing due before the empty FETCH, then U[1 min, 60 min]
+            let (params, mut rng) = (Params::default(), TimingRng::seeded(17));
+            let mut queue = ControlOps::new();
+            queue.schedule(&params, &mut rng, OpId(1), now, *op)?;
+            assert!(queue.take_due(u64::MAX).is_empty());
+            let fetched = now.saturating_add(10_000);
+            queue.note_empty_fetch(&params, &mut rng, inv_queue, fetched);
+            let due = queue.due_of(OpId(1)).ok_or("due")?;
+            assert!(
+                (fetched + 60_000..=fetched + 3_600_000).contains(&due),
+                "{due}"
+            );
+            hub.tick(now.saturating_add(1_000));
+            assert!(
+                queue_dels(&hub.take_actions(), inv_queue).is_empty(),
+                "once"
+            );
             Ok(())
         })
     }

@@ -325,6 +325,10 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.registered.insert(queue);
         let previous = self.send_ids.insert(contact.0, queue);
         if let Some(conversation) = self.core.convs.get_mut(at) {
+            // `T_RS` follows the queue it is sent to (SE-13b, Q210 d)
+            conversation.set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(
+                u64::from(route.period_s.seconds()).saturating_mul(1_000),
+            ));
             match previous {
                 Some(_) => {
                     conversation.switch_send_queue(queue);

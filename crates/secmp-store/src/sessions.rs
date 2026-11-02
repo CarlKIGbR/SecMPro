@@ -128,6 +128,39 @@ pub fn delete_handshake(tx: &mut Tx<'_>, session: i64) -> Result<()> {
     Ok(())
 }
 
+/// Write a pending control content of `session` (Q210 c): sealed, at the next `ord` of the CONTROL part; returns that
+/// `ord`. The client's encoding is opaque here.
+///
+/// # Errors
+/// [`Error::Unavailable`] if a statement fails.
+pub fn insert_pending_control(tx: &mut Tx<'_>, session: i64, content: &[u8]) -> Result<i64> {
+    let ord = tx
+        .query_row(
+            "SELECT COALESCE(MAX(ord) + 1, 0) FROM sessions WHERE session_id = ?1 AND part = ?2",
+            params![session, part::CONTROL],
+            |r| r.get::<_, i64>(0),
+        )?
+        .ok_or(Error::Unavailable)?;
+    put(tx, session, part::CONTROL, ord, content)?;
+    Ok(ord)
+}
+
+/// Delete the pending control content at `ord` of `session` (its last cell was sealed and persisted).
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails or there is no such row.
+pub fn delete_pending_control(tx: &mut Tx<'_>, session: i64, ord: i64) -> Result<()> {
+    let n = tx.exec(
+        "DELETE FROM sessions WHERE session_id = ?1 AND part = ?2 AND ord = ?3",
+        params![session, part::CONTROL, ord],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
 /// The trust codes of the TRUST part's first byte (`secmp-client-core`'s `trust_code` maps its trusts onto them; a test
 /// there pins the equality). The store compares only [`TRUST_FROZEN`].
 pub const TRUST_UNVERIFIED: u8 = 0;
@@ -344,6 +377,14 @@ impl Store {
             .map(|(_, d)| d))
     }
 
+    /// The pending control contents of `session` with their `ord`, in order (Q210 c).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a read or an open fails.
+    pub fn pending_controls(&self, session: i64) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
+        self.read_part(session, part::CONTROL)
+    }
+
     /// The reassembly state and the trust of `session` (the INBOX and TRUST parts only).
     ///
     /// # Errors
@@ -400,6 +441,40 @@ mod tests {
         store.txn(|tx| insert_skipped(tx, 9, 0, &[b'e'; 36]))?;
         let rows = store.session_rows(9)?.ok_or("rows")?;
         assert_eq!(rows.skipped.len(), 1);
+        Ok(())
+    }
+
+    /// Q210 c: the pending control contents of a session — sealed rows of the CONTROL part at increasing `ord`s, read in
+    /// order, each deleted once (a missing one is `Unavailable`); another session's are apart.
+    #[test]
+    fn pending_controls_round_trip() -> R {
+        let dir = TempDir::new("pending-controls")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let (a, b) = store.txn(|tx| {
+            let a = insert_pending_control(tx, 4, b"route update")?;
+            let b = insert_pending_control(tx, 4, b"control")?;
+            insert_pending_control(tx, 5, b"other")?;
+            Ok((a, b))
+        })?;
+        assert_eq!((a, b), (0, 1));
+        let rows: Vec<(i64, Vec<u8>)> = store
+            .pending_controls(4)?
+            .into_iter()
+            .map(|(o, d)| (o, d.to_vec()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(0, b"route update".to_vec()), (1, b"control".to_vec())]
+        );
+        store.txn(|tx| delete_pending_control(tx, 4, 0))?;
+        assert_eq!(
+            store.txn(|tx| delete_pending_control(tx, 4, 0)),
+            Err(Error::Unavailable),
+            "once"
+        );
+        assert_eq!(store.txn(|tx| insert_pending_control(tx, 4, b"next"))?, 2);
+        assert_eq!(store.pending_controls(5)?.len(), 1);
+        assert_eq!(store.pending_controls(6)?.len(), 0);
         Ok(())
     }
 

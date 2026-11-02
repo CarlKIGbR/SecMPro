@@ -12,16 +12,22 @@ use secmp_proto::tr::Entropy as _;
 use secmp_proto::tr::RatchetState;
 use secmp_proto::tr::content::{Trust, ik_sig};
 use secmp_proto::wire::cell::AppKind;
+use secmp_proto::wire::cell::ControlCode;
 use secmp_proto::wire::inv::IksPublic;
 use secmp_store::Tx;
-use secmp_store::sessions::{init_trust, insert_skipped, put_fixed, trust_row, update_trust};
+use secmp_store::sessions::{
+    init_trust, insert_pending_control, insert_skipped, put_fixed, trust_row, update_trust,
+};
 
 use crate::api::{ContactId, Error};
 use crate::contacts::Contacts;
 use crate::outbox::StoreOutbox;
 use crate::persist::{SharedStore, StorePersist};
 use crate::scheduler::outbox::{MsgId, OutMessage, Outbox as _, trust_code};
-use actor::{Conversation, EntropySource, Received, Refusal, block_code, block_of, initial_parts};
+use actor::{
+    Conversation, EntropySource, PendingControl, Received, Refusal, block_code, block_of,
+    initial_parts,
+};
 
 /// A conversation over the profile store: the session's rows, the contact's outbox.
 pub type StoreConversation<S> = Conversation<StoreOutbox, StorePersist, S>;
@@ -110,8 +116,9 @@ pub fn set_verified<S: EntropySource>(
     Ok(())
 }
 
-/// Block real sends on the session of `contact` (`Removed`, `Reset`; Q210 b): durable in the store first — the block byte
-/// of the trust row, set and never cleared — then in memory.
+/// Block real sends on the session of `contact` and tell the peer (`Removed`: `Control{1}`, `Reset`: `Control{2}`;
+/// Q210 b, c): in one store transaction the block byte of the trust row — set and never cleared — and the `Control` as a
+/// pending control content; then both in memory (the `Control` goes out on a coming slot, its row with its send commit).
 ///
 /// # Errors
 /// [`Error::Unavailable`] if the store cannot be written or `block` is not a block (nothing changes).
@@ -121,13 +128,48 @@ pub fn block_session<S: EntropySource>(
     contact: ContactId,
     block: Refusal,
 ) -> Result<(), Error> {
-    let code = block_code(block).ok_or(Error::Unavailable)?;
-    store
+    let byte = block_code(block).ok_or(Error::Unavailable)?;
+    let code = match block {
+        Refusal::Removed => ControlCode::ContactRemoved,
+        _ => ControlCode::SessionResetRequest,
+    };
+    let control = PendingControl::Control(code)
+        .encode()
+        .map_err(|_| Error::Unavailable)?;
+    let ord = store.lock().map_err(|_| Error::Unavailable)?.txn(|tx| {
+        update_trust(tx, contact.0, None, Some(byte))?;
+        insert_pending_control(tx, contact.0, &control)
+    })?;
+    conversation.restore_block(Some(block));
+    conversation
+        .queue_pending(ord, PendingControl::Control(code))
+        .map_err(|_| Error::Unavailable)
+}
+
+/// The period in ms of the queue `contact` sends to (its first route of a known kind), if it has one: `T_RS` is a function
+/// of it (spec §10.4, Q210 d).
+///
+/// # Errors
+/// [`Error::Unavailable`] if the store cannot be read or the routes do not decode.
+pub fn send_period_ms(store: &SharedStore, contact: ContactId) -> Result<Option<u64>, Error> {
+    use secmp_proto::wire::cell::{RouteDescriptor, RouteUpdateBody};
+
+    let routes = store
         .lock()
         .map_err(|_| Error::Unavailable)?
-        .txn(|tx| update_trust(tx, contact.0, None, Some(code)))?;
-    conversation.restore_block(Some(block));
-    Ok(())
+        .contact_routes(contact.0)?;
+    let Some(bytes) = routes else {
+        return Ok(None);
+    };
+    Ok(RouteUpdateBody::decode(&bytes)?
+        .routes
+        .iter()
+        .find_map(|r| match r {
+            RouteDescriptor::RelayQueue(q) => {
+                Some(u64::from(q.period_s.seconds()).saturating_mul(1_000))
+            }
+            RouteDescriptor::Unknown { .. } => None,
+        }))
 }
 
 /// The largest text the `Api` takes: 16 KiB (ADR-054 item 3; inline attachments are kind 1 of at most 64 fragments).
@@ -347,6 +389,17 @@ pub fn open_conversation<S: EntropySource>(
     .map_err(|_| Error::Unavailable)?;
     conversation.seed_seen(history);
     conversation.restore_block(block);
+    // the control contents whose effect is durable and that were not sealed yet (Q210 c)
+    let pending = store
+        .lock()
+        .map_err(|_| Error::Unavailable)?
+        .pending_controls(contact.0)?;
+    for (ord, row) in pending {
+        let content = PendingControl::decode(&row).map_err(|_| Error::Unavailable)?;
+        conversation
+            .queue_pending(ord, content)
+            .map_err(|_| Error::Unavailable)?;
+    }
     let cells = store
         .lock()
         .map_err(|_| Error::Unavailable)?

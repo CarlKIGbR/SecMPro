@@ -26,6 +26,7 @@ use secmp_store::profile::{
     insert_prekey, max_prekey_id, meta_u32, put_identity, put_invitation_record,
     put_invitation_retained, put_meta_u32, set_invitation_status,
 };
+use secmp_store::sessions::insert_pending_control;
 use secmp_store::wrap::{self, Unlocked};
 
 use crate::api::Error;
@@ -431,26 +432,38 @@ impl Profile {
     /// [`Error::Unavailable`] without randomness or if the store cannot be written (nothing changes then).
     pub fn rotate_identity(
         &self,
-        contacts: usize,
+        sessions: &[i64],
         clock: &impl Clock,
         entropy: &mut impl Entropy,
     ) -> Result<Rotation, Error> {
+        use crate::sessions::actor::PendingControl;
+
         let old = self.signing_key()?;
         let (keys, section) = IdentityKeys::generate_with_section(entropy)?;
-        let mut key_changes = Vec::with_capacity(contacts);
-        for _ in 0..contacts {
-            key_changes.push(secmp_proto::tr::content::key_change_body(
-                &old,
-                keys.public(),
-            )?);
+        let mut key_changes = Vec::with_capacity(sessions.len());
+        let mut rows = Vec::with_capacity(sessions.len());
+        for _ in sessions {
+            let body = secmp_proto::tr::content::key_change_body(&old, keys.public())?;
+            let pending = PendingControl::KeyChange(body);
+            rows.push(pending.encode().map_err(|_| Error::Unavailable)?);
+            if let PendingControl::KeyChange(body) = pending {
+                key_changes.push(body);
+            }
         }
         let fp = keys.fingerprint()?;
         let now_ms = ms(clock.unix_secs())?;
+        let mut pending = Vec::with_capacity(sessions.len());
+        // the new identity and every contact's `KeyChange` in one transaction (Q210 c): a restart before a slot loses none
         let retired = self.retire_with(clock, true, |tx| {
-            put_identity(tx, IDENTITY_ROW, &section, &fp, now_ms)
+            put_identity(tx, IDENTITY_ROW, &section, &fp, now_ms)?;
+            for (session, row) in sessions.iter().zip(&rows) {
+                pending.push(insert_pending_control(tx, *session, row)?);
+            }
+            Ok(())
         })?;
         Ok(Rotation {
             key_changes,
+            pending,
             retired,
             fingerprint: fp,
         })
@@ -461,6 +474,8 @@ impl Profile {
 pub struct Rotation {
     /// One `KeyChange` body per contact, signed by the old `IK_sig`.
     pub key_changes: Vec<secmp_proto::wire::cell::KeyChangeBody>,
+    /// The `ord` of each one's pending control content (in the order of the sessions, Q210 c).
+    pub pending: Vec<i64>,
     /// The invitations that were retired.
     pub retired: Vec<Retired>,
     /// The new fingerprint.
@@ -677,7 +692,7 @@ mod tests {
 
             let rotation = host
                 .profile
-                .rotate_identity(2, &host.clock, &mut entropy(304))?;
+                .rotate_identity(&[1, 2], &host.clock, &mut entropy(304))?;
             assert_ne!(rotation.fingerprint, old_fp);
             assert_eq!(host.profile.fingerprint()?, rotation.fingerprint);
             assert_eq!(rotation.key_changes.len(), 2);

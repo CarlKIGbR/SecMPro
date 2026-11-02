@@ -162,6 +162,8 @@ impl Persist for StorePersist {
                 inbox: None,
                 trust: None,
                 block: None,
+                identity: None,
+                control_done: None,
                 delivered: &[],
                 receipted: &[],
                 routes: None,
@@ -217,40 +219,7 @@ impl Persist for StorePersist {
                         .ok_or(secmp_store::Error::Unavailable)?;
                     secmp_store::sessions::insert_skipped(tx, session, *o, entry)?;
                 }
-                if let Some(inbox) = parts.inbox {
-                    secmp_store::sessions::put_inbox(tx, session, inbox)?;
-                }
-                // the guarded writer: a stored `Frozen` stays, the block is kept or set (Q205, Q210 b)
-                if parts.trust.is_some() || parts.block.is_some() {
-                    secmp_store::sessions::update_trust(tx, session, parts.trust, parts.block)?;
-                }
-                // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
-                for id in parts.receipted {
-                    secmp_store::outbox::set_delivered(tx, id)?;
-                }
-                // the routes of a `RouteUpdate` (SE-01); the session's id is its contact's
-                if let Some(routes) = parts.routes {
-                    secmp_store::contacts::put_contact_routes(tx, session, routes)?;
-                }
-                if parts.clear_handshake {
-                    secmp_store::sessions::delete_handshake(tx, session)?;
-                }
-                for m in parts.delivered {
-                    match secmp_store::sessions::insert_delivered(
-                        tx,
-                        session,
-                        &m.msg_id,
-                        m.kind,
-                        m.payload,
-                        m.received_ms,
-                        m.expire_after,
-                    ) {
-                        // a view-once is held in memory by the application, never written (CS-3.4)
-                        Ok(()) | Err(secmp_store::Error::Unsupported) => {}
-                        Err(e) => return Err(e),
-                    }
-                }
-                Ok(())
+                write_parts(tx, session, parts)
             })
             .map_err(|_| PersistError)?;
         }
@@ -281,6 +250,59 @@ impl Persist for StorePersist {
         let _ = kind;
         Ok(())
     }
+}
+
+/// The parts of a commit besides the ratchet state (one transaction with it, persist-before-ack): the reassembly state,
+/// the trust and the block through the guarded writer, the new identity of a key change, the receipts, the routes, the
+/// handshake cells and the delivered messages.
+fn write_parts(
+    tx: &mut secmp_store::Tx<'_>,
+    session: i64,
+    parts: &CommitParts<'_>,
+) -> secmp_store::Result<()> {
+    if let Some(inbox) = parts.inbox {
+        secmp_store::sessions::put_inbox(tx, session, inbox)?;
+    }
+    // the guarded writer: a stored `Frozen` stays, the block is kept or set (Q205, Q210 b)
+    if parts.trust.is_some() || parts.block.is_some() {
+        secmp_store::sessions::update_trust(tx, session, parts.trust, parts.block)?;
+    }
+    // a verified key change: the contact's new identity, unverified, with the state that consumed the cell
+    // (Q210 a)
+    if let Some((iks, fingerprint)) = parts.identity {
+        secmp_store::contacts::put_contact_identity(tx, session, iks, fingerprint)?;
+    }
+    // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
+    for id in parts.receipted {
+        secmp_store::outbox::set_delivered(tx, id)?;
+    }
+    // the routes of a `RouteUpdate` (SE-01); the session's id is its contact's
+    if let Some(routes) = parts.routes {
+        secmp_store::contacts::put_contact_routes(tx, session, routes)?;
+    }
+    if parts.clear_handshake {
+        secmp_store::sessions::delete_handshake(tx, session)?;
+    }
+    // the last cell of a pending control content is sealed: its row goes with the state that sealed it (Q210 c)
+    if let Some(ord) = parts.control_done {
+        secmp_store::sessions::delete_pending_control(tx, session, ord)?;
+    }
+    for m in parts.delivered {
+        match secmp_store::sessions::insert_delivered(
+            tx,
+            session,
+            &m.msg_id,
+            m.kind,
+            m.payload,
+            m.received_ms,
+            m.expire_after,
+        ) {
+            // a view-once is held in memory by the application, never written (CS-3.4)
+            Ok(()) | Err(secmp_store::Error::Unsupported) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 // the seed helper of the property tests (`xtask` seed rules; `prop_parts_reassemble_to_state`)
@@ -932,6 +954,8 @@ mod tests {
                     inbox: Some(b"inbox-new"),
                     trust: Some(trust_code(secmp_proto::tr::content::Trust::Frozen)),
                     block: None,
+                    identity: None,
+                    control_done: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,
@@ -981,6 +1005,8 @@ mod tests {
                             inbox: Some(b"inbox-old"),
                             trust: Some(trust_code(secmp_proto::tr::content::Trust::Verified)),
                             block: None,
+                            identity: None,
+                            control_done: None,
                             delivered: &[],
                             receipted: &[],
                             routes: None,
@@ -1081,6 +1107,8 @@ mod tests {
                     inbox: None,
                     trust: None,
                     block: None,
+                    identity: None,
+                    control_done: None,
                     delivered: &delivered,
                     receipted: &[],
                     routes: None,
@@ -1146,6 +1174,8 @@ mod tests {
                     inbox: None,
                     trust: None,
                     block: None,
+                    identity: None,
+                    control_done: None,
                     delivered: &delivered,
                     receipted: &[],
                     routes: None,
@@ -1273,6 +1303,8 @@ mod tests {
                     inbox: None,
                     trust: None,
                     block: None,
+                    identity: None,
+                    control_done: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,

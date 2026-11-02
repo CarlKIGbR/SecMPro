@@ -470,6 +470,8 @@ fn unconfirmed_after_receipt_timeout() -> R {
         let mut w = established("se13b", 31)?;
         let t_rs = T_RS_MIN_MS;
         w.g.set_receipt_timeout_ms(t_rs);
+        // Q210 d: a confirmation is awaited from a verified contact only
+        w.g.set_trust(secmp_proto::tr::content::Trust::Verified);
         w.g.outbox_mut().enqueue(text(6, 8), 0);
         let prepared = w.g.prepare_direct(10_000).map_err(|_| "prepare")?;
         w.g.relayed_direct(prepared.token, 5);
@@ -552,6 +554,32 @@ fn flush(from: &mut StoreConversation<Fixed>, to: &mut StoreConversation<Fixed>,
     Ok(())
 }
 
+/// SE-06/SE-08 through the `Api` (VERIFY-B4 P1 M-6; Q210 f): a core over `fx`'s profile answers a `Send` to contact 1
+/// with `want`, and no outbox row is written.
+#[cfg(feature = "kat")]
+fn api_send_refused(fx: &Fixture, seed: u64, want: Error) -> R {
+    use crate::api::{Core, Request};
+
+    let store = fx.profile.store();
+    let outbox = |store: &SharedStore| -> Result<i64, E> {
+        let s = store.lock().map_err(|_| "lock")?;
+        Ok(s.connection_kat()
+            .query_row("SELECT count(*) FROM outbox", [], |r| r.get(0))?)
+    };
+    let before = outbox(&store)?;
+    let mut core = Core::with_profile(fx.profile.clone(), fx.clock.clone(), core_sources(seed))?;
+    let sent = core.handle(Request::Send {
+        contact: ContactId(1),
+        kind: 1,
+        payload: Zeroizing::new(b"held".to_vec()),
+        expire_after: 0,
+    });
+    assert_eq!(sent.err(), Some(want));
+    drop(core);
+    assert_eq!(outbox(&store)?, before, "nothing queued");
+    Ok(())
+}
+
 /// SE-06 [O-28] (§7.7): a valid `KeyChange`, fragmented and signed by the old `IK_sig`, makes the contact `KeyChanged`:
 /// the event carries the new identity, real sends are held — a queued message waits, the slots carry dummies.
 /// SE-07: after the new safety number is verified, the held message goes out.
@@ -566,6 +594,8 @@ fn key_change_blocks_sending() -> R {
         let events = w.g.take_events();
         assert!(matches!(events.as_slice(), [SessionEvent::KeyChanged(iks)] if **iks == new));
         assert_eq!(w.g.may_send_real(), Err(Refusal::Trust));
+        // `Api.send` is `Err(Blocked)`, nothing queued (Q210 f)
+        api_send_refused(&w.guest, 42, Error::Blocked)?;
         // the held message is not sealed: dummies only
         flush(&mut w.g, &mut w.h, 3)?;
         assert!(w.h.received().is_empty());
@@ -602,6 +632,8 @@ fn invalid_key_change_freezes() -> R {
             [SessionEvent::KeyChangeInvalid]
         ));
         assert_eq!(w.g.may_send_real(), Err(Refusal::Trust));
+        // `Api.send` is `Err(Frozen)`, nothing queued (Q210 f)
+        api_send_refused(&w.guest, 44, Error::Frozen)?;
         assert_eq!(
             set_verified(&w.guest.profile.store(), &mut w.g, ContactId(1)).err(),
             Some(Error::Frozen)
@@ -718,6 +750,243 @@ fn reset_request_survives_reopen() -> R {
         assert_eq!(conv.may_send_real(), Err(Refusal::Removed));
         Ok(())
     })
+}
+
+/// Q210 a (VERIFY-B4 P1 M-2; SE-21's crash-fixture form, spec §7.7, CLAUDE.md §1.7): the new identity of a verified
+/// `KeyChange` is written in the receive commit of the cell that completes it. With a fault on the identity write (an SQL
+/// trigger) nothing of the receive is durable — the session's fixed part, the trust and the contact are as before and the
+/// cell is not decided; without it the same cell commits, and after a reopen the contact has the new fingerprint,
+/// unverified, and the session the trust `KeyChanged`.
+#[cfg(feature = "kat")]
+#[test]
+fn key_change_identity_commits_with_receive() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let mut w = established("q210a", 53)?;
+        let new = key_change(&mut w, false)?;
+        let store = w.guest.profile.store();
+        let fingerprint = |store: &SharedStore| -> Result<[u8; 32], E> {
+            let contacts = Contacts::new(store.clone(), w.guest.profile.fingerprint()?);
+            Ok(contacts.get(ContactId(1))?.fingerprint)
+        };
+        let old_fp = fingerprint(&store)?;
+        let trust_before = w.g.trust();
+        let trigger = "CREATE TRIGGER refuse_identity BEFORE UPDATE OF iks ON contacts \
+                       BEGIN SELECT RAISE(ABORT, 'refused'); END";
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .connection_kat()
+            .execute_batch(trigger)?;
+        let durable = |store: &SharedStore| -> Result<(Vec<u8>, Option<Vec<u8>>), E> {
+            let s = store.lock().map_err(|_| "lock")?;
+            let fixed = s.session_rows(1)?.ok_or("rows")?.fixed.to_vec();
+            Ok((fixed, s.inbox_trust(1)?.1.map(|t| t.to_vec())))
+        };
+        let mut refused = None;
+        for i in 0..8 {
+            let cell = next(&mut w.h, ms(20).saturating_add(ms(i)))?;
+            let before = durable(&store)?;
+            if w.g.deliver_direct(&cell).is_err() {
+                // the cell that completes the key change: nothing of its receive is durable
+                assert_eq!(durable(&store)?, before, "the receive is not durable");
+                assert_eq!(fingerprint(&store)?, old_fp);
+                refused = Some(cell);
+                break;
+            }
+        }
+        assert!(
+            refused.is_some(),
+            "the receive commit of the completing cell writes the identity: the fault refuses it"
+        );
+        let cell = refused.ok_or("no cell completed the key change")?;
+        assert_eq!(w.g.trust(), trust_before, "in memory: as before");
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .connection_kat()
+            .execute_batch("DROP TRIGGER refuse_identity")?;
+        // the same cell again: decided now
+        deliver(&mut w.g, &cell)?;
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::KeyChanged(iks)] if **iks == new
+        ));
+        let World { guest, g, .. } = w;
+        drop(g);
+        let g = open_conversation(&store, ContactId(1), Fixed(entropy(54)), T0)?;
+        assert_eq!(g.trust(), Trust::KeyChanged);
+        let contacts = Contacts::new(store.clone(), guest.profile.fingerprint()?);
+        let contact = contacts.get(ContactId(1))?;
+        assert_eq!(
+            contact.fingerprint,
+            secmp_proto::prekeys::fingerprint_of(&new)?
+        );
+        assert!(!contact.verified);
+        Ok(())
+    })
+}
+
+/// Q210 c (VERIFY-B4 P1 M-3; R-ROT-1): pending control content is durable with the commit that makes its effect durable —
+/// a rotation's `RouteUpdate`, a removal's `Control{1}` and an identity rotation's `KeyChange` — and re-planned when the
+/// session opens again: after a restart before any slot each reaches the peer, and the send commit of its last cell takes
+/// its row.
+#[cfg(feature = "kat")]
+#[test]
+fn pending_control_content_survives_restart() -> R {
+    use crate::api::{Core, Request};
+
+    big(|| {
+        let World { host, h, mut g, .. } = world("q210c", 55)?;
+        drop(h);
+        let store = host.profile.store();
+        let pending = |store: &SharedStore| -> Result<usize, E> {
+            Ok(store.lock().map_err(|_| "lock")?.pending_controls(1)?.len())
+        };
+        // one request through the core, then the process ends before any slot; the session opens from its rows and sends
+        let mut run = |request: Request, seed: u64| -> Result<Vec<SessionEvent>, E> {
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), core_sources(seed))?;
+            core.handle(request)?;
+            drop(core);
+            assert_eq!(pending(&store)?, 1, "durable with its effect");
+            let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(seed)), T0)?;
+            for i in 0..6 {
+                let cell = next(&mut h, ms(seed.saturating_mul(10).saturating_add(i)))?;
+                deliver(&mut g, &cell)?;
+            }
+            assert_eq!(
+                pending(&store)?,
+                0,
+                "the last cell's send commit took the row"
+            );
+            Ok(g.take_events())
+        };
+        let rotated = run(
+            Request::Rotate {
+                contact: ContactId(1),
+                relay: 1,
+            },
+            60,
+        )?;
+        assert!(matches!(rotated.as_slice(), [SessionEvent::Routes(_)]));
+        let identity = run(Request::RotateIdentity, 61)?;
+        assert!(
+            matches!(identity.as_slice(), [SessionEvent::KeyChanged(_)]),
+            "the KeyChange of the identity rotation"
+        );
+        let removed = run(
+            Request::Remove {
+                contact: ContactId(1),
+            },
+            62,
+        )?;
+        assert!(matches!(removed.as_slice(), [SessionEvent::ContactRemoved]));
+        Ok(())
+    })
+}
+
+/// Q210 e (VERIFY-B4 P1 M-8; SE-17, §7.7): the single entry is asked per cell — a message whose fragments were planned
+/// before the trust became `KeyChanged` is not sealed any further: its fragments leave the plan, the message waits in the
+/// outbox, the slots carry dummies, and the peer receives nothing of it.
+#[cfg(feature = "kat")]
+#[test]
+fn planned_fragments_held_after_freeze() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let mut w = established("q210e", 57)?;
+        w.h.outbox_mut().enqueue(text(4, 16_000), 0);
+        // the first fragment goes out: the others are planned
+        let cell = next(&mut w.h, ms(5))?;
+        deliver(&mut w.g, &cell)?;
+        assert!(w.h.has_pending_real());
+        w.h.set_trust(Trust::KeyChanged);
+        for i in 0..70_u64 {
+            let cell = next(&mut w.h, ms(6).saturating_add(ms(i)))?;
+            deliver(&mut w.g, &cell)?;
+        }
+        assert!(
+            w.g.received().is_empty(),
+            "nothing of the message after the change"
+        );
+        assert_eq!(w.h.outbox().waiting(), 1, "the message is held");
+        Ok(())
+    })
+}
+
+/// Q210 e (VERIFY-B4 P1 M-8; IN-15): control content obeys `awaiting_first_reply` — an initiator's control content waits
+/// behind the handshake cells until the responder's first reply is decrypted (only dummies before it), then goes out.
+#[cfg(feature = "kat")]
+#[test]
+fn control_content_waits_for_first_reply() -> R {
+    big(|| {
+        let mut w = world("q210w", 59)?;
+        assert!(w.g.awaiting_first_reply());
+        w.g.queue_control(secmp_proto::wire::cell::ControlCode::SessionResetRequest);
+        for i in 0..3 {
+            next(&mut w.g, ms(i))?;
+        }
+        for i in 3..8 {
+            let cell = next(&mut w.g, ms(i))?;
+            deliver(&mut w.h, &cell)?;
+        }
+        assert!(
+            w.h.take_events().is_empty(),
+            "only dummies before the first reply"
+        );
+        w.h.queue_route_update(vec![route(1)?]);
+        let reply = next(&mut w.h, ms(9))?;
+        deliver(&mut w.g, &reply)?;
+        assert!(!w.g.awaiting_first_reply());
+        let cell = next(&mut w.g, ms(10))?;
+        deliver(&mut w.h, &cell)?;
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::ResetRequested]
+        ));
+        Ok(())
+    })
+}
+
+/// Q210 c: the row of a pending control content is `tag u8 ‖ body` in the wire encodings and decodes strictly — each kind
+/// round-trips; an empty row, an unknown tag, a `Control` with an argument and a body with a trailing byte are refused.
+#[cfg(feature = "kat")]
+#[test]
+fn pending_control_codec_is_strict() -> R {
+    use crate::sessions::actor::PendingControl;
+    use secmp_proto::wire::cell::{ControlBody, ControlCode, RouteUpdateBody};
+
+    let routes = PendingControl::Routes(RouteUpdateBody {
+        routes: vec![route(3)?],
+    })
+    .encode()
+    .map_err(|_| "routes")?;
+    assert_eq!(routes.first(), Some(&1));
+    assert!(
+        matches!(PendingControl::decode(&routes), Ok(PendingControl::Routes(b)) if b.routes.len() == 1)
+    );
+    let control = PendingControl::Control(ControlCode::SessionResetRequest)
+        .encode()
+        .map_err(|_| "control")?;
+    assert_eq!(control.as_slice(), [2, 2, 0, 0]);
+    assert!(matches!(
+        PendingControl::decode(&control),
+        Ok(PendingControl::Control(ControlCode::SessionResetRequest))
+    ));
+    let with_arg = ControlBody {
+        code: ControlCode::ContactRemoved,
+        arg: Zeroizing::new(vec![7]),
+    };
+    let mut bad = vec![2];
+    bad.extend_from_slice(&secmp_proto::Encode::encode(&with_arg)?);
+    let mut trailing = routes.to_vec();
+    trailing.push(0);
+    for row in [&[][..], &[9, 0], &bad, &trailing] {
+        assert!(PendingControl::decode(row).is_err(), "{row:?}");
+    }
+    Ok(())
 }
 
 /// The `rotate` request of the host's contact 1 on relay 1.

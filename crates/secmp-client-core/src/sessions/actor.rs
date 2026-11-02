@@ -145,6 +145,74 @@ struct Planned {
     owner: Owner,
     /// How many cells the owner's message takes in all.
     total: u16,
+    /// The last cell of a pending control content: the `ord` of its row, deleted in this cell's send commit (Q210 c).
+    pending: Option<i64>,
+}
+
+/// A control content that is durable from the commit that makes its effect durable until the send commit of its last
+/// cell (Q210 c): the rotation's `RouteUpdate`, the `KeyChange` of an identity rotation, the `Control{1|2}` of a removal or
+/// a reset. Its row (the store's CONTROL part, sealed) is `tag u8 ‖ body`: 1 `RouteUpdateBody`, 2 `ControlBody` (no
+/// argument), 3 `KeyChangeBody` — the bodies in their wire encodings; the decoding is strict.
+pub enum PendingControl {
+    /// A `RouteUpdate`.
+    Routes(RouteUpdateBody),
+    /// A `Control` without an argument.
+    Control(ControlCode),
+    /// A `KeyChange`, signed by the old `IK_sig`.
+    KeyChange(KeyChangeBody),
+}
+
+impl PendingControl {
+    /// The row of this content.
+    ///
+    /// # Errors
+    /// [`SourceError`] if the body does not encode.
+    pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, SourceError> {
+        let (tag, body) = match self {
+            Self::Routes(b) => (1, b.encode()),
+            Self::Control(code) => (
+                2,
+                secmp_proto::wire::cell::ControlBody {
+                    code: *code,
+                    arg: Zeroizing::new(Vec::new()),
+                }
+                .encode(),
+            ),
+            Self::KeyChange(b) => (3, b.encode()),
+        };
+        let body = body.map_err(|_| SourceError)?;
+        let mut out = Zeroizing::new(Vec::with_capacity(body.len().saturating_add(1)));
+        out.push(tag);
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+
+    /// The content of a row.
+    ///
+    /// # Errors
+    /// [`SourceError`] for an unknown tag, a body that does not decode, or a `Control` with an argument.
+    pub fn decode(row: &[u8]) -> Result<Self, SourceError> {
+        use secmp_proto::Decode as _;
+        let (tag, body) = row.split_first().ok_or(SourceError)?;
+        match tag {
+            1 => Ok(Self::Routes(
+                RouteUpdateBody::decode(body).map_err(|_| SourceError)?,
+            )),
+            2 => {
+                let control =
+                    secmp_proto::wire::cell::ControlBody::decode(body).map_err(|_| SourceError)?;
+                if control.arg.is_empty() {
+                    Ok(Self::Control(control.code))
+                } else {
+                    Err(SourceError)
+                }
+            }
+            3 => Ok(Self::KeyChange(
+                KeyChangeBody::decode(body).map_err(|_| SourceError)?,
+            )),
+            _ => Err(SourceError),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -356,35 +424,77 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// Plan a control content of the session (not a user message): it is sealed on a coming slot like every cell, through
-    /// the same path; it is not held by the trust or by a reset (a reset request is sent from `Frozen`, SE-15).
-    fn plan_control(&mut self, body: ContentBody) {
+    /// the same path; it is not held by the trust or by a reset (a reset request is sent from `Frozen`, SE-15), but it
+    /// waits for the first reply of an initiator (IN-15, Q210 e). `pending` is the `ord` of its durable row (Q210 c).
+    fn plan_control(&mut self, body: ContentBody, pending: Option<i64>) {
         let seq = self.take_seq();
         let ts = self.ts(self.last_now_ms);
         self.plan.push_back(Planned {
             content: Content { seq, ts, body },
             owner: Owner::Dummy,
             total: 1,
+            pending,
         });
     }
 
-    /// Announce `routes` to the peer (`RouteUpdate`, spec §9.8, §10.6 (5): the first reply of a responder, a rotation).
+    /// Announce `routes` to the peer (`RouteUpdate`, spec §9.8, §10.6 (5)), in memory only (the product's announcements
+    /// are durable: [`Conversation::queue_pending`]).
     pub fn queue_route_update(&mut self, routes: Vec<RouteDescriptor>) {
-        self.plan_control(ContentBody::RouteUpdate(RouteUpdateBody { routes }));
+        self.plan_control(ContentBody::RouteUpdate(RouteUpdateBody { routes }), None);
     }
 
-    /// Send `Control{code}` without an argument (spec §7.6 codes 1 and 2; ADR-054 item 4).
+    /// Send `Control{code}` without an argument (spec §7.6 codes 1 and 2; ADR-054 item 4), in memory only (see
+    /// [`Conversation::queue_pending`]).
     pub fn queue_control(&mut self, code: ControlCode) {
-        self.plan_control(ContentBody::Control(secmp_proto::wire::cell::ControlBody {
-            code,
-            arg: Zeroizing::new(Vec::new()),
-        }));
+        self.plan_control(
+            ContentBody::Control(secmp_proto::wire::cell::ControlBody {
+                code,
+                arg: Zeroizing::new(Vec::new()),
+            }),
+            None,
+        );
     }
 
-    /// Announce a new identity (`KeyChange`, spec §7.7): 5390 bytes, always fragmented, signed by the old `IK_sig`.
+    /// Announce a new identity (`KeyChange`, spec §7.7): 5390 bytes, always fragmented, signed by the old `IK_sig`; in
+    /// memory only (see [`Conversation::queue_pending`]).
     ///
     /// # Errors
     /// [`SourceError`] without randomness for the message id or if the body does not encode.
     pub fn queue_key_change(&mut self, body: KeyChangeBody) -> Result<(), SourceError> {
+        self.plan_key_change(body, None)
+    }
+
+    /// Plan the pending control content stored at `ord` (Q210 c): planned as [`Conversation::queue_route_update`],
+    /// [`Conversation::queue_control`] or [`Conversation::queue_key_change`] plan it, and the send commit of its last cell
+    /// deletes the row. The host calls this after the commit that wrote the row, and on open for every row.
+    ///
+    /// # Errors
+    /// [`SourceError`] as [`Conversation::queue_key_change`].
+    pub fn queue_pending(&mut self, ord: i64, content: PendingControl) -> Result<(), SourceError> {
+        match content {
+            PendingControl::Routes(body) => {
+                self.plan_control(ContentBody::RouteUpdate(body), Some(ord));
+                Ok(())
+            }
+            PendingControl::Control(code) => {
+                self.plan_control(
+                    ContentBody::Control(secmp_proto::wire::cell::ControlBody {
+                        code,
+                        arg: Zeroizing::new(Vec::new()),
+                    }),
+                    Some(ord),
+                );
+                Ok(())
+            }
+            PendingControl::KeyChange(body) => self.plan_key_change(body, Some(ord)),
+        }
+    }
+
+    fn plan_key_change(
+        &mut self,
+        body: KeyChangeBody,
+        pending: Option<i64>,
+    ) -> Result<(), SourceError> {
         let id: MsgId = *self
             .source
             .entropy()
@@ -396,6 +506,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             .map_err(|_| SourceError)?;
         let chunks = split_chunks(&bytes);
         let total = u16::try_from(chunks.len()).map_err(|_| SourceError)?;
+        let last = chunks.len().saturating_sub(1);
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let seq = self.take_seq();
             let ts = self.ts(self.last_now_ms);
@@ -412,6 +523,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 },
                 owner: Owner::Dummy,
                 total,
+                pending: pending.filter(|_| idx == last),
             });
         }
         Ok(())
@@ -743,6 +855,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 },
                 owner: Owner::Message(id),
                 total: 1,
+                pending: None,
             });
             return;
         }
@@ -767,6 +880,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 },
                 owner: Owner::Message(id),
                 total,
+                pending: None,
             });
         }
     }
@@ -787,11 +901,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             },
             owner: Owner::Receipt(ids),
             total: 1,
+            pending: None,
         });
     }
 
     /// The one place a cell is sealed: `encrypt`, then persist-before-send. `Err` leaves the durable state as it was.
-    fn seal(&mut self, content: &Content) -> Result<Cell, SourceError> {
+    fn seal(&mut self, content: &Content, pending: Option<i64>) -> Result<Cell, SourceError> {
         let state = match self.state.take() {
             Some(s) => s,
             None => RatchetState::from_bytes(&self.durable).map_err(|_| SourceError)?,
@@ -818,6 +933,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     inbox: None,
                     trust: None,
                     block: None,
+                    identity: None,
+                    control_done: pending,
                     delivered: &[],
                     receipted: &[],
                     routes: None,
@@ -890,7 +1007,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// cell (spec §10.6 (4): "only dummies on the old queue").
     fn prepare_overlap(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
         self.last_now_ms = self.last_now_ms.max(now_ms);
-        let cell = self.seal(&dummy())?;
+        let cell = self.seal(&dummy(), None)?;
         let token = self.next_token;
         self.next_token = self.next_token.saturating_add(1);
         self.inflight.insert(
@@ -921,6 +1038,14 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             );
             return Ok(PreparedCell::committed(cell, CellToken(token)));
         }
+        // SE-17 per cell (Q210 e): planned real content — a message's fragments, a receipt — is sealed only while real
+        // sends are allowed; a trust or a block that changed since it was planned holds it again
+        if matches!(
+            self.may_send_real(),
+            Err(Refusal::Trust | Refusal::Removed | Refusal::Reset)
+        ) {
+            self.hold_planned_real();
+        }
         if self.plan.is_empty() && self.may_send_real().is_ok() {
             if self.send_receipts && !self.receipts_due.is_empty() {
                 self.plan_receipt(now_ms);
@@ -928,12 +1053,20 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 self.plan_message(&message, now_ms);
             }
         }
-        let planned = self.plan.pop_front().unwrap_or(Planned {
+        // until the first reply of the responder only dummies: control content waits too (IN-15)
+        let next = if self.awaiting_first_reply {
+            None
+        } else {
+            self.plan.pop_front()
+        };
+        let from_plan = next.is_some();
+        let planned = next.unwrap_or(Planned {
             content: dummy(),
             owner: Owner::Dummy,
             total: 1,
+            pending: None,
         });
-        match self.seal(&planned.content) {
+        match self.seal(&planned.content, planned.pending) {
             Ok(cell) => {
                 let token = self.next_token;
                 self.next_token = self.next_token.saturating_add(1);
@@ -947,9 +1080,37 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 Ok(PreparedCell::committed(cell, CellToken(token)))
             }
             Err(e) => {
-                self.restore(&planned.owner);
+                // control content goes back to the front; a message or a receipt to where it came from
+                if from_plan && matches!(planned.owner, Owner::Dummy) {
+                    self.plan.push_front(planned);
+                } else {
+                    self.restore(&planned.owner);
+                }
                 Err(e)
             }
+        }
+    }
+
+    /// The planned messages and receipts go back to the outbox and the due receipts (held while real sends are refused,
+    /// Q210 e); control content stays planned.
+    fn hold_planned_real(&mut self) {
+        let mut held: Vec<Owner> = Vec::new();
+        for p in &self.plan {
+            let seen = match &p.owner {
+                Owner::Message(id) => held
+                    .iter()
+                    .any(|o| matches!(o, Owner::Message(m) if m == id)),
+                Owner::Receipt(_) => false,
+                Owner::Dummy | Owner::Handshake(_) => true,
+            };
+            if !seen {
+                held.push(p.owner.clone());
+            }
+        }
+        self.plan
+            .retain(|p| matches!(p.owner, Owner::Dummy | Owner::Handshake(_)));
+        for owner in held.iter().rev() {
+            self.restore(owner);
         }
     }
 }
@@ -1042,25 +1203,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
         let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
         let trust_changed = (trust != self.trust).then_some(trust_code(trust));
-        // a `Control{1}` (no argument) or `Control{2}` blocks real sends durably, in the same commit (Q210 b)
-        let block = match &delivery {
-            Delivery::Control(body) => match body.code {
-                ControlCode::ContactRemoved if body.arg.is_empty() => block_code(Refusal::Removed),
-                ControlCode::SessionResetRequest => block_code(Refusal::Reset),
-                ControlCode::ContactRemoved => None,
-            },
-            _ => None,
-        };
-        // the receipts this cell carries make their messages `Delivered` in the same commit (SE-21, F9b)
-        let receipted: Vec<MsgId> = match &delivery {
-            Delivery::Receipt(body) => body.msg_ids.clone(),
-            _ => Vec::new(),
-        };
-        // the routes of a `RouteUpdate`, of the kind this version knows (spec §9.8; an unknown kind is ignored)
-        let routes: Option<Zeroizing<Vec<u8>>> = match &delivery {
-            Delivery::Routes(rs) => routes_bytes(rs),
-            _ => None,
-        };
+        let Effects {
+            block,
+            receipted,
+            routes,
+            identity,
+        } = effects(&delivery);
         // the first decrypted reply of an initiator: its stored handshake cells go with this commit (Q150)
         let clear_handshake = self.awaiting_first_reply;
         let durable = &mut self.durable;
@@ -1081,10 +1229,16 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     inbox: inbox_bytes.as_ref().map(|b| b.as_slice()),
                     trust: trust_changed,
                     block,
+                    identity: identity
+                        .as_ref()
+                        .map_err(|e| *e)?
+                        .as_ref()
+                        .map(|(iks, fp)| (iks.as_slice(), fp.as_slice())),
                     delivered: &fresh,
                     receipted: &receipted,
                     routes: routes.as_ref().map(|r| r.as_slice()),
                     clear_handshake,
+                    control_done: None,
                 },
             )?;
             *durable = Zeroizing::new(bytes.to_vec());
@@ -1138,7 +1292,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     self.events.push(SessionEvent::Routes(known));
                 }
             }
-            Delivery::KeyChange(iks) => self.events.push(SessionEvent::KeyChanged(Box::new(iks))),
+            Delivery::KeyChange(iks) => {
+                // the contact row holds the new identity already (the receive commit); later key changes verify under it
+                if let Ok(peer) = secmp_proto::tr::content::ik_sig(&iks) {
+                    self.peer = peer;
+                }
+                self.events.push(SessionEvent::KeyChanged(Box::new(iks)));
+            }
             Delivery::KeyChangeRefused => self.events.push(SessionEvent::KeyChangeInvalid),
             Delivery::Control(body) => match body.code {
                 ControlCode::ContactRemoved if body.arg.is_empty() => {
@@ -1155,9 +1315,11 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
     }
 
-    /// SE-13b (spec §10.4, OPEN-M7-07 A): a message relayed `T_RS` ago with no receipt is reported once, never re-sent.
+    /// SE-13b (spec §10.4, OPEN-M7-07 A): a message relayed `T_RS` ago with no receipt is reported once, never re-sent —
+    /// for a verified contact only: receipts are sent only to verified contacts (SE-12), and our verification of the
+    /// contact is the proxy for its verification of us (Q159, Q210 d).
     fn note_unconfirmed(&mut self, now_ms: u64) {
-        if self.receipt_timeout_ms == 0 || !self.send_receipts {
+        if self.receipt_timeout_ms == 0 || !matches!(self.trust, Trust::Verified) {
             return;
         }
         let due: Vec<MsgId> = self
@@ -1192,6 +1354,56 @@ fn routes_bytes(routes: &[RouteDescriptor]) -> Option<Zeroizing<Vec<u8>>> {
         out.extend_from_slice(&r.encode().ok()?);
     }
     Some(out)
+}
+
+/// The peer's new identity of a verified `KeyChange`: the encoded `IksPublic` and its fingerprint.
+type NewIdentity = (Zeroizing<Vec<u8>>, [u8; 32]);
+
+/// What a received cell's delivery makes durable besides the ratchet, the reassembly state and the trust (the receive
+/// commit, persist-before-ack).
+struct Effects {
+    /// A `Control{1}` (no argument) or `Control{2}`: real sends are blocked durably (Q210 b).
+    block: Option<u8>,
+    /// The messages a `Receipt{delivered}` confirms: `Delivered` (SE-21, F9b).
+    receipted: Vec<MsgId>,
+    /// The routes of a `RouteUpdate`, of the kind this version knows (spec §9.8; an unknown kind is ignored).
+    routes: Option<Zeroizing<Vec<u8>>>,
+    /// A verified key change's new identity (Q210 a, spec §7.7); one that does not encode fails the commit — nothing is
+    /// decided, the cell comes again.
+    identity: Result<Option<NewIdentity>, PersistError>,
+}
+
+fn effects(delivery: &Delivery) -> Effects {
+    let block = match delivery {
+        Delivery::Control(body) => match body.code {
+            ControlCode::ContactRemoved if body.arg.is_empty() => block_code(Refusal::Removed),
+            ControlCode::SessionResetRequest => block_code(Refusal::Reset),
+            ControlCode::ContactRemoved => None,
+        },
+        _ => None,
+    };
+    let receipted = match delivery {
+        Delivery::Receipt(body) => body.msg_ids.clone(),
+        _ => Vec::new(),
+    };
+    let routes = match delivery {
+        Delivery::Routes(rs) => routes_bytes(rs),
+        _ => None,
+    };
+    let identity = match delivery {
+        Delivery::KeyChange(iks) => match (iks.encode(), secmp_proto::prekeys::fingerprint_of(iks))
+        {
+            (Ok(bytes), Ok(fp)) => Ok(Some((bytes, fp))),
+            _ => Err(PersistError),
+        },
+        _ => Ok(None),
+    };
+    Effects {
+        block,
+        receipted,
+        routes,
+        identity,
+    }
 }
 
 /// The conversations of a client, as the scheduler's cell source: a cell is routed by the queue it is for.
@@ -1843,10 +2055,13 @@ mod tests {
         use secmp_proto::wire::cell::{ContentBody, ControlBody, ControlCode};
         for (arg, removed) in [(vec![1_u8], false), (Vec::new(), true)] {
             let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
-            a.plan_control(ContentBody::Control(ControlBody {
-                code: ControlCode::ContactRemoved,
-                arg: Zeroizing::new(arg),
-            }));
+            a.plan_control(
+                ContentBody::Control(ControlBody {
+                    code: ControlCode::ContactRemoved,
+                    arg: Zeroizing::new(arg),
+                }),
+                None,
+            );
             let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
             convs
                 .deliver(QueueId(1), 0, 1, &cell)

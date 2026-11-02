@@ -616,6 +616,11 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         let mut conversation =
             sessions::open_conversation(&self.store, contact, (self.make_source)(), base)?;
         conversation.set_send_receipts(self.receipts_for(conversation.trust()));
+        // `T_RS` of the queue the contact is sent to (SE-13b, Q210 d)
+        if let Some(period_ms) = sessions::send_period_ms(&self.store, contact)? {
+            conversation
+                .set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(period_ms));
+        }
         let at = self.convs.add(conversation);
         self.index.insert(contact.0, at);
         Ok(())
@@ -677,7 +682,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             let session_events = conversation.take_events();
             let received = conversation.take_received();
             for event in session_events {
-                let event = self.session_event(contact, at, event)?;
+                let event = self.session_event(contact, &event)?;
                 self.raise(event);
             }
             for (msg_id, kind) in sessions::store_received(&self.store, contact, received, now)? {
@@ -691,23 +696,14 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         Ok(())
     }
 
-    fn session_event(
-        &mut self,
-        contact: ContactId,
-        at: usize,
-        event: SessionEvent,
-    ) -> Result<Event, Error> {
+    fn session_event(&mut self, contact: ContactId, event: &SessionEvent) -> Result<Event, Error> {
         Ok(match event {
             SessionEvent::Routes(_) => {
                 self.routes_changed.push(contact);
                 Event::RoutesChanged(contact)
             }
-            SessionEvent::KeyChanged(iks) => {
-                if let Some(conversation) = self.convs.get_mut(at) {
-                    sessions::accept_key_change(&self.store, conversation, contact, &iks)?;
-                }
-                Event::KeyChanged(contact)
-            }
+            // the new identity was committed with the cell (Q210 a)
+            SessionEvent::KeyChanged(_) => Event::KeyChanged(contact),
             SessionEvent::KeyChangeInvalid => Event::KeyChangeInvalid(contact),
             SessionEvent::ContactRemoved => {
                 self.contacts()?.on_control(
@@ -720,7 +716,10 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 Event::ContactRemoved(contact)
             }
             SessionEvent::ResetRequested => Event::ResetRequested(contact),
-            SessionEvent::NotConfirmed(msg_id) => Event::NotConfirmed { contact, msg_id },
+            SessionEvent::NotConfirmed(msg_id) => Event::NotConfirmed {
+                contact,
+                msg_id: *msg_id,
+            },
         })
     }
 
@@ -769,14 +768,12 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 let conversation = self.session(contact)?;
                 // the block is durable before the request is planned (Q210 b)
                 sessions::block_session(&store, conversation, contact, Refusal::Reset)?;
-                conversation.queue_control(ControlCode::SessionResetRequest);
                 Response::Done
             }
             Request::Remove { contact } => {
                 let store = Arc::clone(&self.store);
                 let conversation = self.session(contact)?;
                 sessions::block_session(&store, conversation, contact, Refusal::Removed)?;
-                conversation.queue_control(ControlCode::ContactRemoved);
                 self.contacts()?.on_control(
                     contact,
                     &secmp_proto::wire::cell::ControlBody {
@@ -911,13 +908,19 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     fn rotate_identity(&mut self) -> Result<Response, Error> {
         let mut source = (self.make_source)();
         let ready: Vec<(i64, usize)> = self.index.iter().map(|(c, i)| (*c, *i)).collect();
+        let sessions: Vec<i64> = ready.iter().map(|(c, _)| *c).collect();
         let rotation = self
             .profile
-            .rotate_identity(ready.len(), &self.clock, source.entropy())?;
-        for ((_, at), body) in ready.into_iter().zip(rotation.key_changes) {
+            .rotate_identity(&sessions, &self.clock, source.entropy())?;
+        // the `KeyChange`s are durable with the identity (Q210 c); here they are planned
+        for (((_, at), body), ord) in ready
+            .into_iter()
+            .zip(rotation.key_changes)
+            .zip(rotation.pending)
+        {
             if let Some(conversation) = self.convs.get_mut(at) {
                 conversation
-                    .queue_key_change(body)
+                    .queue_pending(ord, crate::sessions::actor::PendingControl::KeyChange(body))
                     .map_err(|_| Error::Unavailable)?;
             }
         }
@@ -1413,6 +1416,125 @@ mod tests {
                 assert!(!old.contains(&secret), "no secret of the source");
             }
             assert!(!s.prekeys(secmp_store::profile::KIND_SPK)?.is_empty());
+            Ok(())
+        })
+    }
+
+    /// Q210 d (VERIFY-B4 P1 M-4; SE-13b, spec §10.4): through the `Api` — the session opened by the core has `T_RS` of the
+    /// queue it sends to; a message to the verified contact is relayed, no receipt comes, and when the clock passes `T_RS`
+    /// `Event::NotConfirmed` is raised for it once.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn not_confirmed_fires_after_t_rs() -> R {
+        use crate::sessions::actor::T_RS_MIN_MS;
+
+        big(|| {
+            let World {
+                guest, mut h, g, ..
+            } = world("q210d", 93)?;
+            drop(g);
+            let clock = guest.clock.clone();
+            let mut core = Core::with_profile(guest.profile.clone(), clock.clone(), sources(960))?;
+            // the handshake cells, then the host's first reply: real sends may start
+            h.queue_route_update(vec![route(1)?]);
+            let reply = next(&mut h, ms(4))?;
+            {
+                let conv = core.conversations_mut().get_mut(0).ok_or("conversation")?;
+                for i in 0..3 {
+                    conv.prepare_direct(ms(i)).map_err(|_| "handshake")?;
+                }
+                deliver(conv, &reply)?;
+            }
+            let Response::SafetyNumber(digits) = core.handle(Request::SafetyNumber {
+                contact: ContactId(1),
+            })?
+            else {
+                return Err("safety number".into());
+            };
+            let verified = core.handle(Request::Verify {
+                contact: ContactId(1),
+                digits,
+            })?;
+            assert!(matches!(verified, Response::Verified(true)));
+            let Response::Sent(id) = core.handle(send(ContactId(1), 1, b"are you there"))? else {
+                return Err("sent".into());
+            };
+            core.take_events();
+            clock.set_ms(ms(10));
+            let at = clock.mono_ms();
+            let not_confirmed = |core: &mut Core<_, Fixed>, now: u64| -> Result<usize, E> {
+                let conv = core.conversations_mut().get_mut(0).ok_or("conversation")?;
+                conv.prepare_direct(now).map_err(|_| "prepare")?;
+                core.pump()?;
+                Ok(core
+                    .take_events()
+                    .iter()
+                    .filter(|e| {
+                        e.event
+                            == Event::NotConfirmed {
+                                contact: ContactId(1),
+                                msg_id: id,
+                            }
+                    })
+                    .count())
+            };
+            {
+                let conv = core.conversations_mut().get_mut(0).ok_or("conversation")?;
+                let prepared = conv.prepare_direct(at).map_err(|_| "message")?;
+                conv.relayed_direct(prepared.token, 9);
+            }
+            clock.set_ms(ms(10).saturating_add(T_RS_MIN_MS).saturating_sub(1));
+            assert_eq!(not_confirmed(&mut core, clock.mono_ms())?, 0, "before T_RS");
+            clock.set_ms(ms(10).saturating_add(T_RS_MIN_MS));
+            assert_eq!(not_confirmed(&mut core, clock.mono_ms())?, 1, "at T_RS");
+            clock.set_ms(ms(20).saturating_add(T_RS_MIN_MS));
+            assert_eq!(not_confirmed(&mut core, clock.mono_ms())?, 0, "once");
+            Ok(())
+        })
+    }
+
+    /// Q210 f (VERIFY-B4 P1 M-6, hand mutant M2): `Api.send` asks the trust — after a verified key change it is
+    /// `Err(Blocked)`, after a forged one (frozen) `Err(Frozen)`; nothing is queued either time.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn send_refused_after_key_change() -> R {
+        use secmp_proto::prekeys::IdentityKeys;
+        use secmp_proto::tr::Entropy as _;
+
+        big(|| {
+            for (forged, want) in [(false, Error::Blocked), (true, Error::Frozen)] {
+                let w = world("api-kc", 95 + u64::from(forged))?;
+                let (host, guest) = (w.host, w.guest);
+                drop((w.h, w.g));
+                let mut host_core =
+                    Core::with_profile(host.profile.clone(), host.clock.clone(), sources(970))?;
+                let mut guest_core =
+                    Core::with_profile(guest.profile.clone(), guest.clock.clone(), sources(980))?;
+                let new = IdentityKeys::generate(&mut entropy(907))?;
+                let signer = if forged {
+                    entropy(909).hybrid_signing_key()?
+                } else {
+                    host.profile.signing_key()?
+                };
+                let body = secmp_proto::tr::content::key_change_body(&signer, new.public())?;
+                host_core.queue_key_change_kat(ContactId(1), body)?;
+                for at in 0..6 {
+                    let cell = next(
+                        host_core.conversations_mut().get_mut(0).ok_or("host")?,
+                        ms(at),
+                    )?;
+                    deliver(
+                        guest_core.conversations_mut().get_mut(0).ok_or("guest")?,
+                        &cell,
+                    )?;
+                }
+                guest_core.pump()?;
+                let store = guest.profile.store();
+                let before = rows(&store, "outbox")?;
+                let sent = guest_core.handle(send(ContactId(1), 1, b"held"));
+                assert_eq!(sent.err(), Some(want), "forged {forged}");
+                assert_eq!(rows(&store, "outbox")?, before, "nothing queued");
+            }
             Ok(())
         })
     }

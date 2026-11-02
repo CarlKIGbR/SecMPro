@@ -7,13 +7,14 @@
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::Decode as _;
 use secmp_proto::wire::Period;
-use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor};
+use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
 use secmp_proto::wire::inv::RelayRef;
 use secmp_store::contacts::put_contact_queues;
 use secmp_store::profile::put_relay_pool;
+use secmp_store::sessions::insert_pending_control;
 
 use super::StoreConversation;
-use super::actor::EntropySource;
+use super::actor::{EntropySource, PendingControl};
 use crate::api::{ContactId, Error, Event};
 use crate::invitations::{ed25519_pk_of, take_oldest};
 use crate::persist::SharedStore;
@@ -318,10 +319,13 @@ pub fn rotate<S: EntropySource>(
             .map_err(|_| Error::Unavailable)?,
     );
     let recv_seed = SecretBytes::<32>::from_slice(taken.recv_seed.expose_secret())?;
-    let retired = {
+    let (retired, old_relay) = {
         let last = set.entries.last_mut().ok_or(Error::Unavailable)?;
         last.retire_at_ms = Some(retire_at_ms);
-        SecretBytes::<32>::from_slice(last.seed.expose_secret())?
+        (
+            SecretBytes::<32>::from_slice(last.seed.expose_secret())?,
+            RelayId(last.relay),
+        )
     };
     set.entries.push(QueueEntry {
         relay: req.relay.0,
@@ -339,15 +343,28 @@ pub fn rotate<S: EntropySource>(
         req.period,
     )?);
     let encoded = set.encode()?;
-    guard.txn(|tx| {
+    // the `RouteUpdate` is durable with the queue set it announces (Q210 c; R-ROT-1): re-planned after a restart
+    let announcement = PendingControl::Routes(RouteUpdateBody {
+        routes: vec![route],
+    })
+    .encode()
+    .map_err(|_| Error::Unavailable)?;
+    let ord = guard.txn(|tx| {
         put_relay_pool(tx, i64::from(req.relay.0), Some(&rest))?;
-        put_contact_queues(tx, req.contact.0, &encoded)
+        put_contact_queues(tx, req.contact.0, &encoded)?;
+        insert_pending_control(tx, req.contact.0, &announcement)
     })?;
     drop(guard);
-    conversation.queue_route_update(vec![route]);
+    conversation
+        .queue_pending(
+            ord,
+            PendingControl::decode(&announcement).map_err(|_| Error::Unavailable)?,
+        )
+        .map_err(|_| Error::Unavailable)?;
+    // the old queue's `QUEUE_DEL` goes to the relay that holds it (VERIFY-B4 P1 m-1)
     let retire_op = req.old_queue.map(|old| OpSpec {
         kind: ControlKind::QueueDel(old),
-        relay: req.relay,
+        relay: old_relay,
         related: u64::from(old.0),
         when: When::AfterEmptyFetchFrom(old, retire_at_ms.saturating_sub(req.unix_base_ms)),
     });

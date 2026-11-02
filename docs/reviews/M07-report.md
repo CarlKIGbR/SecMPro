@@ -1219,3 +1219,66 @@ Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-s
 ### §8 Open / questions
 
 [REF] ST-10/BK-04, FO-01a/FO-02 (C), C-T3 (C). `OPEN-M7.md` rows B-2, B-3, B-5, B-8, B-9, B-10 are decided/done by this part; B-6 and B-7 by Commit 1 and the Q194 commit. Question for the reviewer: D-B17 (the BK-07 assertion) and D-B16 (the `fetch_gate` signature).
+
+
+## §B-4b — Nachtrag to B-4 from the external review EXTB1 (WEISUNG M7-B-4b; rulings Q199–Q203; `modell=claude-sonnet-5-5`)
+
+`<B4-END>` = `d77fb3c` ("Phase B closed @ 1318baa"); the guard held at the start (`git status --short` empty, branch `m07-client-core`). Anchors below are as found at `d77fb3c` / the final code head with `grep -n`; Astra's anchors are @9b511a2 and have all moved.
+
+### §B-4b.1 Findings
+
+| finding | fix commit | test (red-first line in `b4b-red-first.txt`) |
+|---|---|---|
+| EXTB1-1 (invitee's contact and reply queue lost; major) | already fixed by B-4 `676e9eb` (`accept_invitation` writes the pool take, the contact, its reply-queue entry, the session and the handshake cells in one `store.txn`, `invitations.rs` `accept_invitation`); B-4b adds the success-and-reopen half | `extb1_successful_invitee_keeps_reply_recipient` — **green at `<B4-END>`**, red proved by reverse-applying the hunk that greened it (the `NewContact.queues` of the accept replaced by `None`): red at its message assertion; `accept_failure_keeps_pool_queue` gains the success half (contact row, its entry's recv/send seed = the pool queue's, period, routes present, pool shortened in the same txn) |
+| EXTB1-2 (period and sender seed of the invitation queue lost; major) | `e6ccbb5` | `extb1_issue_preserves_invitation_period`, `extb1_issue_preserves_queue_sender_key` — red at their message, green; IN-03 `record_fields_persisted_sealed` amended; `hub::tests::invitation_queue_period_and_sender_seed_come_from_the_entry` |
+| EXTB1-3 (recipient key lost at retirement; major) | `78611fb` (+ `ab06e73`, SE-14 follows) | `extb1_retirement_keeps_recipient_until_queue_del` — red, green; `invitations::tests::retiring_stub_survives_restart_until_queue_del`; `hub::tests::retiring_invitation_queue_is_rearmed_after_a_restart`; `scheduler::core::tests::no_queue_on_a_retiring_queue_completes_the_retirement` |
+| EXTB1-4 (duplicate chunks of a rejected group re-form it; minor) | `0bd6698` | `extb1_rejected_duplicate_group_not_reprocessed_after_restart`, `extb1_rejected_duplicate_group_spent_next_round` (the extra test, Q202's killer) — red, green; mutant killer `byte_identical_cells_of_spent_ones_are_spent` (`f4a4cb5`) |
+| EXTB1-5 (IN-05 compares count and length; minor) | `51f4b9b` | IN-05 `harness::m7_accept::commit_with_accepted_before_any_ack` and `invitations::tests::killers_rounds_and_contact` compare the route bytes; Astra's mutation turns both red (`b4b-in05-mutation.txt`) |
+| EXTB1-6 (note) | `OPEN-M7.md` | one sentence, no code |
+
+Red-first (`b4b-red-first.txt`, head `d77fb3c` + the module): **5 red + 1 green-at-B4-END** of the 6 tests. The red tests were committed with their fixes, not alone: a commit with red tests cannot pass `ci-fast` (D-B29).
+
+### §B-4b.2 What was built
+
+- **Q199.** `invitations::Stored` gains `inv_send_seed` (32) and `inv_period_s` (u16) after `flags` (in place, V1; `invitations.rs:137-139,153-154,178-180`), `Stored::entry()` (`:203`) builds the `contacts.queues` entry, `encode_queues` (`:1353`) uses it, `issue_in` keeps a copy of the sender seed and writes `req.inv_period` (`:905,925-926`), `OpenQueue` carries both (`:667-668`). The hub registers an invitation queue at its stored period (`hub.rs:139,355`) and answers `queue_material` with its stored sender seed (`:572`). No `secmp-proto` change.
+- **Q200.** Built by B-4 (`676e9eb`): `InviteeStart.contact` and the one transaction exist; the contact's `routes` hold the inviter's invitation-queue route, as B-4 writes it.
+- **Q201.** `secmp_store::profile::INVITATION_RETIRING = 2`; `Profile::retire` rewrites the row of an unconsumed expired invitation (also for an identity rotation, SE-09) into a stub — `QueueEntry::encode_one` (83 bytes: relay, queue, recipient seed, sender seed, period, deadline = now + `U[1 h, 24 h]` drawn once) — and drops link key, owner seed, blob, retained cells and the OPK (`profile.rs:344-410`); the readers skip or understand it (`retire`, `link_put_args`, `offer_state` → `OfferState::Retiring`, `on_owner_status`, `process_round`/`decide`: acknowledge and drop); `Invitations::retiring()` and `Invitations::queue_deleted(relay, queue)` (`invitations.rs:778,797`); the hub registers the stubs after a restart, re-arms `QUEUE_DEL` from the stored deadline and deletes the stub in `Hub::queue_deleted`; `queue_material` falls back to the stub. `ERR_NOQUEUE` on a recv-queue whose `QUEUE_DEL` waits emits `LinkEvent::QueueGone` instead of re-creating the queue (`scheduler/core/mod.rs` `queue_error`), `remove_queue` drops its `QUEUE_DEL` (`ControlOps::drop_queue_del`), the test driver completes the retirement on the event and treats `ERR_NOQUEUE` on `QUEUE_DEL` as success.
+- **Q202.** `duplicates_of_spent` (`invitations.rs:1249`): in `decide` every id of the union whose bytes equal (`ct_eq`) a spent cell is spent too, before `retain`.
+- **Q203.** Both route assertions compare bytes with the route derived from the guest's reply queue, then the decoded fields.
+
+Sites re-pointed to the stored entry (step 2): `Stored::{encode,decode,entry}`, `issue_in`, `encode_queues`/`commit_accept`, `Invitations::queue_of`, `testutil::insert_record`, `Hub::new`, `Hub::invite`, `Hub::queue_material`; already reading the `QueueSet` entry since B-4 and unchanged: the SE-16 scheduler entry, SE-02/SE-03 (`rotation::rotate`), the host's key lookup for `QUEUE_NEW`/`QUEUE_DEL` (`queue_material`), `Hub::register_contact`'s re-arm.
+
+Sanctioned test edits (old → new): `has_recipient` decodes `contacts.queues` through `QueueSet` (B-4's format) and RETIRING rows through `QueueEntry::decode_one`; `extb1_retirement_…`: `When::Delayed` → `When::AfterEmptyFetch(QueueId(1))` (Q194); IN-11 `accept_only_offered_records` (`invitations_tests.rs`, `s.invitations()?.is_empty()`) → exactly one row, status RETIRING, whose record decodes as a `QueueEntry` with a deadline; PR-02 `profile::tests::spk_retained_for_open_invitations` → the same and `Retired.retire_at_ms ∈ [now + 1 h, now + 24 h]`; both EXTB1-4 tests `retained_ids == [2, 4, 6]` → empty; `record_fields_persisted_sealed` and TEST-SPEC IN-03: "…invitation-queue recipient key" → "…invitation-queue recipient key **and sender key**, **`inv_period_s`**, `spk_id`/`opk_id`, …"; `hub::tests::…` `material_send == [0; 32]` → the invitation's sender seed (Q199).
+
+### §B-4b.3 Gates
+
+| gate | result | evidence |
+|---|---|---|
+| `ci-fast` step 2 | PASS at `e6ccbb5` | `ci-fast-b4b2-e6ccbb5.txt` |
+| `ci-fast` step 3 | **FAIL** at `78611fb` (one test: SE-14 `relay_restart_with_store`, see D-B30) | fixed in `ab06e73` |
+| `ci-fast` (final code) | PASS at `bd23c23` | `ci-fast-b4b-bd23c23.txt` |
+| mutants | core: 116 tested = 84 caught / 2 missed / 30 unviable / 0 timeout; store: no mutant in the diff; both survivors dispositioned (killer `f4a4cb5`; re-pinned accepted row) | `mutants-b4b-f4a4cb5.txt` |
+| coverage | PASS: secmp-client-core 10560/11033 lines = 95.7 % (min 90 %); secmp-store 5256/5470 = 96.1 % (min 90 %) | `coverage-b4b-75d7bb6.txt` |
+| Kani | not touched (no `#[cfg(kani)]` file changed) | — |
+| `ci-full` | @@CIFULL@@ | `ci-full-b4b-<sha7>.txt` |
+
+### §B-4b.4 Deviations (new: D-B27…)
+
+- **D-B27 (Q199 type).** B-4 had already built `QueueEntry`/`QueueSet` (`sessions/rotation.rs`: `count ‖ rotated_ms ‖ 83-byte entries`, optional sender seed, deadline in Unix **milliseconds**); the Q199 type (82 bytes, deadline in seconds) is not built a second time — "one definition" is kept. The stub row holds `QueueEntry::encode_one` (the same 83 bytes). The invitation queue's entry in `contacts.queues` now carries the sender seed and the period (it had none/10 s).
+- **D-B28 (Q200).** Built by B-4 (`676e9eb`); B-4b adds only the success-and-reopen test half.
+- **D-B29 (commit order).** Step 1 (red tests) is not a commit of its own; the red tests arrived with their fixes (`e6ccbb5`, `78611fb`, `0bd6698`); `ci-fast` ran after steps 2, 3 and at the final code, not after steps 4 and 5 separately (one run at `bd23c23` covers both).
+- **D-B30 (SE-14, not on the sanctioned list).** `harness::m7_restart::relay_restart_with_store` compared the host's queue set before and after the relay restart for equality; under Q201 the queue in overlap (a deadline, `QUEUE_DEL` waiting) is not re-created but its retirement completes, so the test now asserts the same *current* queue from the store and that no queue with a deadline is re-created. Reviewer to confirm.
+- **D-B31 (Q201 timing).** A freshly retired invitation's `QUEUE_DEL` keeps `When::AfterEmptyFetch(queue)` (empty `FETCH`, then `U[1 min, 60 min]`, Q194's tested form); only the re-arm after a restart uses the stored deadline (`AfterEmptyFetchFrom`). The drawn deadline is therefore the restart bound for an expired-unused invitation.
+- **D-B32 (scope of `ERR_NOQUEUE`).** `LinkEvent::QueueGone` is a scheduler-core change with a unit test; the harness driver's handling of the event and of `ERR_NOQUEUE` on `QUEUE_DEL` is exercised only through SE-14, no test of its own.
+- **D-B33 (relay).** `Hub::queue_deleted` matches a stub by (the hub's configured relay, queue), as B-4's hub is single-relay (R-ID-1).
+- `gates::tests::accepted_rows_with_escaped_pipes_match_the_survivors` follows the renumbered row (806:39 → 816:39), as at B-SC2.
+
+### §B-4b.5 Risks
+
+- **RT-1 (Q202):** a complete group is spent after one `accept`, including byte-identical duplicates of its chunks in the same round's union of fetched and retained cells (EXTB1-4); a byte-identical re-send fetched in a later round, after the spent cells are gone, re-forms the group and is rejected again deterministically (bounded; `docs/03:342`), noted, not closed.
+- A crash between the `QUEUE_DEL` OK and the stub delete re-runs the `QUEUE_DEL` on a queue the relay no longer has: the relay answers `ERR_NOQUEUE`, the test driver treats it as success; the production driver's handling is B-8/C's.
+- Spec errata for the owner: see `OPEN-M7.md` (B-4b notes).
+
+### §B-4b.6 Locks
+
+`git diff --stat d77fb3c..HEAD -- crates/secmp-proto vectors Cargo.lock fuzz/Cargo.lock` is empty.

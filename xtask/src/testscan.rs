@@ -941,6 +941,102 @@ fn api_exposes_no_secrets_or_store() -> Result<()> {
     Ok(())
 }
 
+/// The attribute lines (`#[…]`) right above the declaration of the struct or enum `name` in the product part of `src`,
+/// joined; `None` if `src` declares no such type.
+#[cfg(test)]
+fn attributes_of(src: &str, name: &str) -> Option<String> {
+    let text = product(src);
+    let lines: Vec<&str> = text.lines().collect();
+    let declares = |l: &str| {
+        let t = l.trim_start();
+        let t = t
+            .strip_prefix("pub(crate) ")
+            .or_else(|| t.strip_prefix("pub "))
+            .unwrap_or(t);
+        ["struct ", "enum "].iter().any(|k| {
+            t.strip_prefix(k)
+                .and_then(|rest| rest.strip_prefix(name))
+                .is_some_and(|after| {
+                    !after
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                })
+        })
+    };
+    let at = lines.iter().position(|l| declares(l))?;
+    let mut attrs = Vec::new();
+    for l in lines.get(..at).unwrap_or_default().iter().rev() {
+        let t = l.trim();
+        if t.starts_with("#[") {
+            attrs.push(t);
+        } else if !t.starts_with("///") {
+            break;
+        }
+    }
+    Some(attrs.join(" "))
+}
+
+/// Q206 (VERIFY-B4 P1 B-2; CLAUDE.md §1.6): no type of `secmp-client-core/src` that carries a passphrase, a message
+/// payload, a view-once plaintext, a seed or a key derives `Debug` — `Request`, `Response` and `Event` have a redacting
+/// `Debug` by hand, the others none. The list is pinned here (an addition is a change of this test); every listed type
+/// must be found, and a fixture with a derive is caught.
+#[cfg(test)]
+#[test]
+fn no_derive_debug_on_secret_carriers() -> Result<()> {
+    const CARRIERS: &[(&str, &str)] = &[
+        ("api.rs", "Request"),
+        ("api.rs", "Response"),
+        ("api.rs", "Event"),
+        ("api.rs", "RotationDone"),
+        ("hub.rs", "Action"),
+        ("invitations.rs", "Stored"),
+        ("invitations.rs", "PoolQueue"),
+        ("invitations.rs", "SparePool"),
+        ("invitations.rs", "Issuance"),
+        ("invitations.rs", "OpenQueue"),
+        ("invitations.rs", "LinkPutArgs"),
+        ("persist.rs", "EntryKey"),
+        ("sessions/actor.rs", "Received"),
+        ("sessions/actor.rs", "Conversation"),
+        ("sessions/mod.rs", "Outgoing"),
+        ("sessions/rotation.rs", "QueueEntry"),
+        ("sessions/rotation.rs", "QueueSet"),
+        ("scheduler/outbox.rs", "OutMessage"),
+        ("scheduler/outbox.rs", "DeliveredMessage"),
+        ("scheduler/outbox.rs", "CommitParts"),
+        ("scheduler/outbox.rs", "MemPersist"),
+    ];
+    fn derives_debug(attrs: &str) -> bool {
+        attrs
+            .split("#[")
+            .any(|a| a.trim_start().starts_with("derive(") && has_word(a, "Debug"))
+    }
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-client-core/src");
+    let mut derived = Vec::new();
+    for (file, name) in CARRIERS {
+        let src = std::fs::read_to_string(root.join(file))?;
+        let Some(attrs) = attributes_of(&src, name) else {
+            bail!("{file}: no type {name}");
+        };
+        if derives_debug(&attrs) {
+            derived.push(format!("{file}: {name}: {attrs}"));
+        }
+    }
+    assert!(
+        derived.is_empty(),
+        "secret carriers derive Debug: {derived:?}"
+    );
+    // the fixtures: a listed type with a derive is caught, one with another derive is not
+    let fixture = "/// A request.\n#[derive(Clone, Debug)]\n#[non_exhaustive]\npub enum Request {\n    A,\n}\n";
+    assert!(attributes_of(fixture, "Request").is_some_and(|a| derives_debug(&a)));
+    let other = "#[derive(Clone)]\npub(crate) struct Stored {\n    seed: [u8; 32],\n}\n";
+    assert!(attributes_of(other, "Stored").is_some_and(|a| !derives_debug(&a)));
+    assert!(attributes_of(other, "Store").is_none());
+    Ok(())
+}
+
 /// The names `secmp_transport` items are used under in `src` (CRLF-normalised, tests and comments left out): every
 /// identifier of a `secmp_transport::…` path or `use` list, without the aliases after `as`.
 #[cfg(test)]

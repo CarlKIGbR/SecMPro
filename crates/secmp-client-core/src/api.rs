@@ -129,8 +129,8 @@ impl From<secmp_crypto::Error> for Error {
     }
 }
 
-/// An event for the user interface (no secret in any field).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// An event for the user interface (no secret in any field; `Debug` prints the variant name only, Q206).
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Event {
     /// A handshake presented the identity of an existing contact (ADR-044 (f), O-29): the new contact `new` was created,
@@ -183,6 +183,35 @@ pub enum Event {
     ViewOnceLost([u8; 16]),
 }
 
+impl core::fmt::Debug for Event {
+    /// The variant name only: no id, no message id (CLAUDE.md §4 logging; Q206).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::DuplicateIdentity { .. } => "DuplicateIdentity",
+            Self::InvitationUsedElsewhere => "InvitationUsedElsewhere",
+            Self::InvitationRetired { .. } => "InvitationRetired",
+            Self::RotationDeferred(_) => "RotationDeferred",
+            Self::MessageReceived { .. } => "MessageReceived",
+            Self::RoutesChanged(_) => "RoutesChanged",
+            Self::KeyChanged(_) => "KeyChanged",
+            Self::KeyChangeInvalid(_) => "KeyChangeInvalid",
+            Self::ContactRemoved(_) => "ContactRemoved",
+            Self::ResetRequested(_) => "ResetRequested",
+            Self::NotConfirmed { .. } => "NotConfirmed",
+            Self::ViewOnceLost(_) => "ViewOnceLost",
+        })
+    }
+}
+
+/// The length of a field in a redacting `Debug` (`<7 bytes>`): never its bytes (Q206, CLAUDE.md §1.6).
+struct Len(usize);
+
+impl core::fmt::Debug for Len {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "<{} bytes>", self.0)
+    }
+}
+
 /// Why an invitation was retired.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetireReason {
@@ -209,8 +238,7 @@ pub struct Stamped {
     pub event: Event,
 }
 
-/// What a request asks of the core.
-#[derive(Debug)]
+/// What a request asks of the core (`Debug` prints the variant name and the lengths of its byte fields only, Q206).
 #[non_exhaustive]
 pub enum Request {
     /// The contacts.
@@ -287,8 +315,7 @@ pub enum Request {
     },
 }
 
-/// The answer to a [`Request`].
-#[derive(Debug)]
+/// The answer to a [`Request`] (`Debug` as for [`Request`]).
 #[non_exhaustive]
 pub enum Response {
     /// The contacts.
@@ -311,6 +338,60 @@ pub enum Response {
     RelayView(Vec<&'static str>),
     /// Done.
     Done,
+}
+
+impl core::fmt::Debug for Request {
+    /// The variant name and the byte lengths: no payload, passphrase, digits, path or id (Q206).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Contacts => f.write_str("Contacts"),
+            Self::SafetyNumber { .. } => f.write_str("SafetyNumber"),
+            Self::Verify { digits, .. } => f
+                .debug_struct("Verify")
+                .field("digits", &Len(digits.len()))
+                .finish_non_exhaustive(),
+            Self::Send { payload, .. } => f
+                .debug_struct("Send")
+                .field("payload", &Len(payload.len()))
+                .finish_non_exhaustive(),
+            Self::Reveal { .. } => f.write_str("Reveal"),
+            Self::Rotate { .. } => f.write_str("Rotate"),
+            Self::RotateIdentity => f.write_str("RotateIdentity"),
+            Self::ResetSession { .. } => f.write_str("ResetSession"),
+            Self::Remove { .. } => f.write_str("Remove"),
+            Self::Settings => f.write_str("Settings"),
+            Self::SetSettings(_) => f.write_str("SetSettings"),
+            Self::RelayView { .. } => f.write_str("RelayView"),
+            Self::Export { passphrase, .. } => f
+                .debug_struct("Export")
+                .field("passphrase", &Len(passphrase.len()))
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl core::fmt::Debug for Response {
+    /// The variant name and the byte lengths: no plaintext, safety number, fingerprint or contact (Q206).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Contacts(_) => f.write_str("Contacts"),
+            Self::SafetyNumber(digits) => f
+                .debug_tuple("SafetyNumber")
+                .field(&Len(digits.len()))
+                .finish(),
+            Self::Verified(_) => f.write_str("Verified"),
+            Self::Sent(_) => f.write_str("Sent"),
+            Self::Revealed(payload) => f
+                .debug_tuple("Revealed")
+                .field(&Len(payload.len()))
+                .finish(),
+            Self::Rotated(_) => f.write_str("Rotated"),
+            Self::IdentityRotated(_) => f.write_str("IdentityRotated"),
+            Self::Settings(_) => f.write_str("Settings"),
+            Self::RelayView(_) => f.write_str("RelayView"),
+            Self::Done => f.write_str("Done"),
+        }
+    }
 }
 
 /// What the scheduler tells the core about its recv-queues: the rate bound of a rotation counts every one (spec §10.2).
@@ -1334,6 +1415,50 @@ mod tests {
             assert!(!s.prekeys(secmp_store::profile::KIND_SPK)?.is_empty());
             Ok(())
         })
+    }
+
+    /// Q206 (VERIFY-B4 P1 B-2, probe P3; CLAUDE.md §1.6): the `Debug` of a request or a response that carries a passphrase,
+    /// a message or a view-once prints neither its bytes (as numbers) nor its text — the variant and the length only.
+    #[test]
+    fn debug_redacts_secrets() {
+        let secret = |s: &str| Zeroizing::new(s.as_bytes().to_vec());
+        let shown = [
+            format!(
+                "{:?}",
+                Request::Export {
+                    path: std::path::PathBuf::from("/tmp/x"),
+                    passphrase: secret("hunter2"),
+                    confirm: true,
+                    force: false,
+                }
+            ),
+            format!(
+                "{:?}",
+                Request::Send {
+                    contact: ContactId(1),
+                    kind: 1,
+                    payload: secret("attack at dawn"),
+                    expire_after: 0,
+                }
+            ),
+            format!("{:?}", Response::Revealed(secret("secret view"))),
+        ];
+        for (text, out) in ["hunter2", "attack at dawn", "secret view"]
+            .into_iter()
+            .zip(&shown)
+        {
+            let numbers = text
+                .bytes()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert!(!out.contains(text), "{out}");
+            assert!(!out.contains(&numbers), "{out}");
+            let first_two = numbers.split(", ").take(2).collect::<Vec<_>>().join(", ");
+            assert!(!out.contains(&format!("[{first_two}")), "{out}");
+        }
+        assert_eq!(shown[0], "Export { passphrase: <7 bytes>, .. }");
+        assert_eq!(shown[2], "Revealed(<11 bytes>)");
     }
 
     /// The `Display` texts are fixed and carry no detail; `Mismatch` is the text IN-12 pins.

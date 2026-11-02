@@ -196,6 +196,25 @@ fn record_fields_persisted_sealed() -> R {
         ed25519_pk_of(&r.invq_recv_seed)?.as_bytes()
     );
     assert_eq!(stored.blob.as_ref().map(|b| b.len()), Some(LINK_BLOB_LEN));
+    // the sender key and the period of the invitation queue (Q199): what the invitation advertises
+    assert_eq!(
+        stored.inv_send_seed.expose_secret(),
+        issued.invitation.inv_send_seed.expose_secret()
+    );
+    assert_eq!(
+        stored.inv_period_s,
+        issued.invitation.inv_period_s.seconds()
+    );
+    let entry = stored.entry()?;
+    assert_eq!(
+        (entry.relay, entry.queue, entry.period_s, entry.retire_at_ms),
+        (1, 1, 10, None)
+    );
+    assert_eq!(entry.seed.expose_secret(), r.invq_recv_seed.expose_secret());
+    assert_eq!(
+        entry.send_seed.as_ref().map(|s| *s.expose_secret()),
+        Some(*issued.invitation.inv_send_seed.expose_secret())
+    );
 
     // sealed at rest
     let store = fx.profile.store();
@@ -212,6 +231,10 @@ fn record_fields_persisted_sealed() -> R {
         (
             "invq_recv_seed",
             r.invq_recv_seed.expose_secret().as_slice(),
+        ),
+        (
+            "inv_send_seed",
+            stored.inv_send_seed.expose_secret().as_slice(),
         ),
         (
             "blob",
@@ -589,7 +612,7 @@ fn invitee_reply_queue_from_pool() -> R {
 #[test]
 fn accept_failure_keeps_pool_queue() -> R {
     let (fx, mut e) = inviter("b5", 41, 1)?;
-    let (peer, _) = invitee("b5-peer", 43, 2)?;
+    let (peer, mut pe) = invitee("b5-peer", 43, 2)?;
     let issued = Invitations::new(fx.profile.clone()).issue(&request(1)?, &fx.clock, &mut e)?;
     let before = pool_of(&peer)?;
     assert_eq!(before.queues.len(), 2);
@@ -615,6 +638,48 @@ fn accept_failure_keeps_pool_queue() -> R {
     let contacts =
         crate::contacts::Contacts::new(peer.profile.store(), peer.profile.fingerprint()?);
     assert!(contacts.list()?.is_empty(), "no contact row");
+
+    drop(contacts);
+    // the success half (Q200): the contact, its reply queue's entry and the session are there after a reopen
+    let reply_queue = before.queues.first().ok_or("pool 0")?;
+    let start = Invitations::new(peer.profile.clone()).accept_invitation(
+        &issued.uri,
+        &issued.blob.encode()?,
+        &AcceptRequest {
+            relay: RelayId(1),
+            reply_period: Period::S20,
+            profile: &profile,
+        },
+        &peer.clock,
+        &mut pe,
+    )?;
+    assert_eq!(start.reply_queue, reply_queue.queue);
+    let peer = peer.reopen()?;
+    let store = peer.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    let rows = s.contacts()?;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.first().map(|c| c.id), Some(start.contact.0));
+    let set = QueueSet::decode(&s.contact_queues(start.contact.0)?.ok_or("queues")?)?;
+    let [entry] = set.entries.as_slice() else {
+        return Err("one entry".into());
+    };
+    assert_eq!(entry.queue, reply_queue.queue.0);
+    assert_eq!(
+        entry.seed.expose_secret(),
+        reply_queue.recv_seed.expose_secret()
+    );
+    assert_eq!(
+        entry.send_seed.as_ref().map(|k| *k.expose_secret()),
+        Some(*reply_queue.send_seed.expose_secret())
+    );
+    assert_eq!((entry.period_s, entry.retire_at_ms), (20, None));
+    assert!(s.contact_routes(start.contact.0)?.is_some());
+    assert_eq!(
+        PoolBlob::read(&s, RelayId(1))?.queues.len(),
+        1,
+        "the queue left the pool in the same transaction"
+    );
     Ok(())
 }
 
@@ -1411,4 +1476,121 @@ fn open_queues_and_pool_seeds() -> R {
     assert_eq!(consumed.queue, before.first().ok_or("pool 0")?.0);
     assert!(invitations.queue_of(&[0xee; 16]).is_err());
     Ok(())
+}
+
+// EXTB1 review reproductions; no product changes.
+#[cfg(feature = "kat")]
+mod extb1_review {
+    #![forbid(unsafe_code)]
+    use super::*;
+    use secmp_crypto::ConstantTimeEq as _;
+
+    // Enumerate every persisted recipient-key container written by this module.
+    // Compare public keys only; never print or compare secret seeds.
+    fn has_recipient(fx: &Fixture, want: &Ed25519Pk) -> Result<bool, E> {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        for q in PoolBlob::read(&s, RelayId(1))?.queues {
+            if ed25519_pk_of(&q.recv_seed)?.as_bytes() == want.as_bytes() {
+                return Ok(true);
+            }
+        }
+        for row in s.invitations()? {
+            let record = load(&s, &ld_id_of(&row.ld_id)?)?.ok_or("record")?;
+            if record.stored.record.invq_recv_pk()?.as_bytes() == want.as_bytes() {
+                return Ok(true);
+            }
+        }
+        for contact in s.contacts()? {
+            if let Some(bytes) = s.contact_queues(contact.id)? {
+                for entry in QueueSet::decode(&bytes)?.entries {
+                    if ed25519_pk_of(&entry.seed)?.as_bytes() == want.as_bytes() {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    #[test]
+    fn extb1_successful_invitee_keeps_reply_recipient() -> R {
+        let (host, mut he) = inviter("extb1-host", 201, 2)?;
+        let (peer, mut pe) = invitee("extb1-peer", 203, 2)?;
+        let issued =
+            Invitations::new(host.profile.clone()).issue(&request(1)?, &host.clock, &mut he)?;
+        let (queue_id, recv_pk) = {
+            let pool = pool_of(&peer)?;
+            let q = pool.queues.first().ok_or("queue")?;
+            (q.queue, ed25519_pk_of(&q.recv_seed)?)
+        };
+        assert!(has_recipient(&peer, &recv_pk)?);
+        let profile = wire_profile("peer")?;
+        let start = Invitations::new(peer.profile.clone()).accept_invitation(
+            &issued.uri,
+            &issued.blob.encode()?,
+            &AcceptRequest {
+                relay: RelayId(1),
+                reply_period: Period::S10,
+                profile: &profile,
+            },
+            &peer.clock,
+            &mut pe,
+        )?;
+        assert_eq!(start.reply_queue, queue_id);
+        // InviteeStart has only cells, RatchetState and QueueId; no recv capability.
+        let peer = peer.reopen()?;
+        assert!(
+            has_recipient(&peer, &recv_pk)?,
+            "successful accept lost the recipient key of its advertised reply queue"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extb1_issue_preserves_invitation_period() -> R {
+        let (a, mut ea) = inviter("extb1-period-a", 207, 2)?;
+        let (b, mut eb) = inviter("extb1-period-b", 207, 2)?;
+        let mut slow = request(1)?;
+        slow.inv_period = Period::S80;
+        let ia = Invitations::new(a.profile.clone()).issue(&request(1)?, &a.clock, &mut ea)?;
+        let ib = Invitations::new(b.profile.clone()).issue(&slow, &b.clock, &mut eb)?;
+        assert_ne!(ia.invitation.inv_period_s, ib.invitation.inv_period_s);
+        let ra = record_of(&a, &ia.invitation.ld_id)?.encode();
+        let rb = record_of(&b, &ib.invitation.ld_id)?.encode();
+        // Constant-time comparison avoids comparing the records' secrets with ==.
+        assert!(
+            !bool::from(ra.as_slice().ct_eq(rb.as_slice())),
+            "S10 and S80 invitations have identical persisted records; restart cannot recover their period"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extb1_issue_preserves_queue_sender_key() -> R {
+        let (a, mut ea) = inviter("extb1-sender-a", 209, 2)?;
+        let (b, mut eb) = inviter("extb1-sender-b", 209, 2)?;
+        let mut pool = pool_of(&b)?;
+        pool.queues.first_mut().ok_or("queue")?.send_seed = entropy(211).secret::<32>()?;
+        {
+            let store = b.profile.store();
+            let mut s = store.lock().map_err(|_| "lock")?;
+            let bytes = pool.encode()?;
+            s.txn(|tx| put_relay_pool(tx, 1, Some(&bytes)))?;
+        }
+        drop(pool);
+        let ia = Invitations::new(a.profile.clone()).issue(&request(1)?, &a.clock, &mut ea)?;
+        let ib = Invitations::new(b.profile.clone()).issue(&request(1)?, &b.clock, &mut eb)?;
+        assert_ne!(ia.invitation.inv_sid, ib.invitation.inv_sid);
+        let ra = record_of(&a, &ia.invitation.ld_id)?.encode();
+        let rb = record_of(&b, &ib.invitation.ld_id)?.encode();
+        let pa = pool_of(&a)?.encode()?;
+        let pb = pool_of(&b)?.encode()?;
+        assert!(bool::from(pa.as_slice().ct_eq(pb.as_slice())));
+        assert!(
+            !bool::from(ra.as_slice().ct_eq(rb.as_slice())),
+            "different sender keys/sids have identical remaining pools and invitation records"
+        );
+        Ok(())
+    }
 }

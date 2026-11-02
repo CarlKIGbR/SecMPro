@@ -136,7 +136,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             rng: crate::timing::TimingRng::os(),
         };
         for open in hub.invitations.open_queues()? {
-            let period = u64::from(hub.config.inv_period.seconds()).saturating_mul(1_000);
+            let period = u64::from(open.period_s).saturating_mul(1_000);
             hub.register_recv(open.relay, open.queue, &open.recv_seed, period);
             hub.inv_queues.insert(open.queue, open.ld_id);
         }
@@ -336,7 +336,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             source.entropy(),
         )?;
         let open = self.invitations.queue_of(&issued.invitation.ld_id)?;
-        let period = u64::from(self.config.inv_period.seconds()).saturating_mul(1_000);
+        let period = u64::from(open.period_s).saturating_mul(1_000);
         self.register_recv(open.relay, open.queue, &open.recv_seed, period);
         self.inv_queues.insert(open.queue, open.ld_id);
         for op in &issued.ops {
@@ -548,8 +548,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         Ok(())
     }
 
-    /// The seeds `(recipient, sender)` of the queue `queue`, for a `QUEUE_NEW` or `QUEUE_DEL` the scheduler asks for (the
-    /// sender seed is all zero for an invitation queue, which is not re-created).
+    /// The seeds `(recipient, sender)` of the queue `queue`, for a `QUEUE_NEW` or `QUEUE_DEL` the scheduler asks for: the
+    /// stored entry's (Q199), also for an invitation queue.
     #[must_use]
     pub fn queue_material(&self, queue: QueueId) -> Option<([u8; 32], [u8; 32])> {
         let s = self.core.store.lock().ok()?;
@@ -569,7 +569,10 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         drop(s);
         let ld_id = self.inv_queues.get(&queue)?;
         let open = self.invitations.queue_of(ld_id).ok()?;
-        Some((*open.recv_seed.expose_secret(), [0; 32]))
+        Some((
+            *open.recv_seed.expose_secret(),
+            *open.send_seed.expose_secret(),
+        ))
     }
 }
 
@@ -644,6 +647,17 @@ mod tests {
         name: &str,
         seed: u64,
     ) -> Result<Hub<ManualClock, Fixed>, crate::api::Error> {
+        hub_with(fx, name, seed, Period::S10)
+    }
+
+    /// [`hub_over`] with the period of the invitation queues it issues.
+    #[cfg(feature = "kat")]
+    fn hub_with(
+        fx: &Fixture,
+        name: &str,
+        seed: u64,
+        inv_period: Period,
+    ) -> Result<Hub<ManualClock, Fixed>, crate::api::Error> {
         let mut count = 0_u64;
         let core = Core::with_profile(fx.profile.clone(), fx.clock.clone(), move || {
             count = count.saturating_add(1);
@@ -653,7 +667,7 @@ mod tests {
             core,
             HubConfig {
                 relay: RelayId(1),
-                inv_period: Period::S10,
+                inv_period,
                 reply_period: Period::S10,
                 profile: wire_profile(name).map_err(|_| crate::api::Error::Unavailable)?,
             },
@@ -762,8 +776,9 @@ mod tests {
                 .expose_secret()
         );
         assert_eq!(
-            material_send, [0; 32],
-            "an invitation queue has no sender seed"
+            material_send,
+            *issued.invitation.inv_send_seed.expose_secret(),
+            "the stored entry's sender seed (Q199)"
         );
         assert_eq!(sc.inviter.queue_material(QueueId(999)), None);
         sc.issued = Some(issued);
@@ -1071,6 +1086,42 @@ mod tests {
             step_reply(&mut sc)?;
             step_message(&mut sc)?;
             step_retire(&mut sc)
+        })
+    }
+
+    /// Q199: the invitation queue is fetched at the period its invitation names, after a restart too, and its sender seed is
+    /// the stored entry's — what an identical `QUEUE_NEW` after a relay restart needs.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn invitation_queue_period_and_sender_seed_come_from_the_entry() -> R {
+        big(|| {
+            let host = party("hub-e", 75)?;
+            let mut hub = hub_with(&host, "host", 210, Period::S80)?;
+            let issued = hub.invite(T0 + 5 * DAY)?;
+            let queue = hub
+                .invitation_queue(&issued.invitation.ld_id)
+                .ok_or("queue")?;
+            let periods = |actions: &[Action]| {
+                actions
+                    .iter()
+                    .filter_map(|a| match a {
+                        Action::AddRecv {
+                            queue: q,
+                            period_ms,
+                            ..
+                        } if *q == queue => Some(*period_ms),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(periods(&hub.take_actions()), vec![80_000]);
+            // a restart over the same profile, whose configuration says 10 s: the entry decides
+            let mut again = hub_with(&host, "host", 220, Period::S10)?;
+            assert_eq!(periods(&again.take_actions()), vec![80_000]);
+            let (recv, send) = again.queue_material(queue).ok_or("material")?;
+            assert_eq!(send, *issued.invitation.inv_send_seed.expose_secret());
+            assert_ne!(recv, send);
+            Ok(())
         })
     }
 }

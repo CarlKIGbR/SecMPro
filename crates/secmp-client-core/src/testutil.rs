@@ -228,6 +228,8 @@ pub(crate) fn insert_record(
         relay: RelayId(1),
         queue: QueueId(1),
         flags: 0,
+        inv_send_seed: seed(4)?,
+        inv_period_s: 10,
         blob: None,
     };
     let store = profile.store();

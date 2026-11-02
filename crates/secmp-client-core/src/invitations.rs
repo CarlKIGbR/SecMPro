@@ -132,6 +132,11 @@ pub(crate) struct Stored {
     pub(crate) relay: RelayId,
     pub(crate) queue: QueueId,
     pub(crate) flags: u8,
+    /// The Ed25519 seed of the invitation queue's sender key (`inv_send_seed` of the invitation): with the record's
+    /// recipient seed what a `QUEUE_NEW` after a relay restart needs to be identical (`docs/03:582,589`; Q199).
+    pub(crate) inv_send_seed: SecretBytes<32>,
+    /// The invitation queue's period in seconds (`inv_period_s`), a [`Period`] (Q199).
+    pub(crate) inv_period_s: u16,
     /// The sealed link data `LINK_PUT` sent, kept byte for byte (§9.7 (1)).
     pub(crate) blob: Option<Zeroizing<Vec<u8>>>,
 }
@@ -145,6 +150,8 @@ impl Stored {
         v.extend_from_slice(&self.relay.0.to_be_bytes());
         v.extend_from_slice(&self.queue.0.to_be_bytes());
         v.push(self.flags);
+        v.extend_from_slice(self.inv_send_seed.expose_secret());
+        v.extend_from_slice(&self.inv_period_s.to_be_bytes());
         match &self.blob {
             Some(b) => {
                 v.push(1);
@@ -168,6 +175,9 @@ impl Stored {
         let relay = RelayId(c.u32()?);
         let queue = QueueId(c.u32()?);
         let flags = c.u8()?;
+        let inv_send_seed = SecretBytes::from_slice(c.take(32)?)?;
+        let inv_period_s = u16::from_be_bytes(c.array()?);
+        Period::from_seconds(inv_period_s).map_err(|_| Error::Unavailable)?;
         let blob = match c.u8()? {
             0 => None,
             1 => Some(Zeroizing::new(c.take(LINK_BLOB_LEN)?.to_vec())),
@@ -179,7 +189,25 @@ impl Stored {
             relay,
             queue,
             flags,
+            inv_send_seed,
+            inv_period_s,
             blob,
+        })
+    }
+
+    /// The invitation queue as an owned-queue entry (Q199): the record's recipient seed, the sender seed and the period of
+    /// the trailer; no deadline.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a seed does not copy.
+    pub(crate) fn entry(&self) -> Result<QueueEntry, Error> {
+        Ok(QueueEntry {
+            relay: self.relay.0,
+            queue: self.queue.0,
+            seed: SecretBytes::from_slice(self.record.invq_recv_seed.expose_secret())?,
+            send_seed: Some(SecretBytes::from_slice(self.inv_send_seed.expose_secret())?),
+            period_s: self.inv_period_s,
+            retire_at_ms: None,
         })
     }
 }
@@ -502,6 +530,10 @@ pub struct OpenQueue {
     pub queue: QueueId,
     /// The Ed25519 seed of the recipient key.
     pub recv_seed: SecretBytes<32>,
+    /// The Ed25519 seed of the sender key (for an identical `QUEUE_NEW` after a relay restart, Q199).
+    pub send_seed: SecretBytes<32>,
+    /// The queue's period in seconds, as the invitation names it (Q199).
+    pub period_s: u16,
 }
 
 /// The link-data id and number of an invitation URI (the invitee's `LINK_GET` names them before anything else is known).
@@ -632,6 +664,8 @@ impl Invitations {
             recv_seed: SecretBytes::from_slice(
                 loaded.stored.record.invq_recv_seed.expose_secret(),
             )?,
+            send_seed: SecretBytes::from_slice(loaded.stored.inv_send_seed.expose_secret())?,
+            period_s: loaded.stored.inv_period_s,
         })
     }
 
@@ -813,6 +847,7 @@ fn issue_in(
         expires: req.expires,
         spk_expiry: req.expires,
     };
+    let inv_send_seed = SecretBytes::from_slice(send_seed.expose_secret())?;
     let seeds = PoolQueueSeeds {
         invq_recv_seed: recv_seed,
         inv_send_seed: send_seed,
@@ -832,6 +867,8 @@ fn issue_in(
         relay: req.relay,
         queue,
         flags: 0,
+        inv_send_seed,
+        inv_period_s: req.inv_period.seconds(),
         blob: Some(blob.encode()?),
     };
     let plain = stored.encode();
@@ -1224,21 +1261,10 @@ fn encode_routes(routes: &[RouteDescriptor]) -> Result<Zeroizing<Vec<u8>>, Error
 }
 
 /// `contacts.queues` ([`QueueSet`]): the recv-queues of the session so far: the invitation queue, until the first reply
-/// moves the session to a queue of its own (§6.6 step 4).
+/// moves the session to a queue of its own (§6.6 step 4). Its entry is the record's ([`Stored::entry`], Q199): recipient seed,
+/// sender seed and the invitation's period.
 fn encode_queues(stored: &Stored, now_ms: u64) -> Result<Zeroizing<Vec<u8>>, Error> {
-    QueueSet::first(
-        QueueEntry {
-            relay: stored.relay.0,
-            queue: stored.queue.0,
-            seed: SecretBytes::from_slice(stored.record.invq_recv_seed.expose_secret())?,
-            // the invitation queue is replaced by the first reply and is not re-created after a relay restart
-            send_seed: None,
-            period_s: Period::S10.seconds(),
-            retire_at_ms: None,
-        },
-        now_ms,
-    )
-    .encode()
+    QueueSet::first(stored.entry()?, now_ms).encode()
 }
 
 /// §5.5 as the invitee runs it on the invitation it was given and the link data `LINK_GET` returned, in this order

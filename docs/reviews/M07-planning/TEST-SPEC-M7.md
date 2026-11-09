@@ -303,7 +303,7 @@ All CL rows live in the integration test binary `crates/secmp-cli/tests/cli_it.r
 | G7-15a | `xtask::expect::tests::fuzz_targets_store` [O-01] | `FUZZ_TARGETS` += FZ-01, FZ-02 with `FUZZ_MAX_LEN` and committed corpora, **in the commit that adds each target** (`gates.rs:938-940` `same_set` + corpus) | gate | A |
 | G7-15b | `xtask::expect::tests::fuzz_and_kani_lists_core` | `FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the commit of its target | gate | B |
 | G7-15c | `xtask::expect::tests::fuzz_targets_cli` | `FUZZ_TARGETS` += FZ-03 with corpus, in the commit of the target | gate | C |
-| G7-16 | `xtask::expect::tests::audit_ignores_unchanged` | `AUDIT_IGNORES` keeps RUSTSEC-2026-0387 (ADR-051 Am. 6) until `arti-client` moves; no new ignore | gate | A |
+| G7-16 | `xtask::expect::tests::audit_ignores_unchanged` | `AUDIT_IGNORES` keeps RUSTSEC-2026-0387 (ADR-051 Am. 6) until `arti-client` moves; no new ignore until Am. 7 (Q217): RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0) is the sixth entry | gate | A |
 | G7-17 | ⚙ `xtask::wintest::tests::win_test_runs_store_suites` | `windows-native` runs ST-*, PC-*, BK-*; the owner's VM run (`win-ondemand.yml`) logged | gate | C |
 | G7-18 | `secmp-proto::tr::state::tests::ratchet_state_v1_layout_unchanged` [O-14] | the frozen TR vectors' serialised states decode and re-encode byte-exact through `to_parts`/`from_parts`; `VECTOR_SUITES` and the vector SHA pins unchanged (decision 14) | gate | A |
 | G7-19 | `xtask::docs::tests::adr_018_status` (cond: the owner accepts ADR-018) | the pin `docs.rs:287-290` ("Proposed (owner decides after M6)", no "Accepted") re-dictated to the accepted status text in the same commit as the `docs/08` ADR-018 update | gate | C |

@@ -170,6 +170,10 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
          secmp-proto closures: 0); patched 0.7.6 needs ssh-key-fork-arti on p256/elliptic-curve 0.14, not released \
          (0.6.7 requires ^0.13); removed in the first milestone after arti-client moves",
     ),
+    (
+        "RUSTSEC-2026-0459",
+        "ADR-051 Am. 7: libsqlite3-sys 0.37.0 (CVE-2026-119375, WAL short read) — bundled-sqlcipher builds are not reached by the patched range (sqlcipher-src 419.0.6 = SQLite 3.53.4); SQLCipher page HMAC rejects a planted frame; removed in the first milestone after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0",
+    ),
 ];
 
 /// TEST-SPEC-M7 ST-02 (CS-3.1, ADR-055 item 4, Q119): the oldest SQLCipher the store accepts — the version
@@ -2479,7 +2483,8 @@ mod tests {
     }
 
     /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
-    /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves, and M7 adds no ignore.
+    /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves. M7 adds Am. 7 (Q217):
+    /// RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0, bundled SQLCipher not reached by the patched range).
     #[test]
     fn audit_ignores_unchanged() {
         let ids: Vec<&str> = AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
@@ -2491,6 +2496,7 @@ mod tests {
                 "RUSTSEC-2024-0436",
                 "RUSTSEC-2025-0141",
                 "RUSTSEC-2026-0387",
+                "RUSTSEC-2026-0459",
             ]
         );
         let bigint = AUDIT_IGNORES
@@ -2503,5 +2509,18 @@ mod tests {
             "{bigint}"
         );
         assert!(bigint.contains("removed in the first milestone after arti-client moves"));
+        let sqlite = AUDIT_IGNORES
+            .iter()
+            .find(|(id, _)| *id == "RUSTSEC-2026-0459")
+            .map(|(_, why)| *why)
+            .unwrap_or_default();
+        assert!(
+            sqlite.starts_with("ADR-051 Am. 7: libsqlite3-sys 0.37.0"),
+            "{sqlite}"
+        );
+        assert!(
+            sqlite.contains("after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0"),
+            "{sqlite}"
+        );
     }
 }

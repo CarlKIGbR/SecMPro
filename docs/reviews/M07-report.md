@@ -1192,6 +1192,8 @@ Red-first lines of this step beside `b4-red-first.txt`: SE-02 (`target/wip/red-s
 | `ci-fast` (last) | PASS at `5838ed3` (clean tree) | `ci-fast-b-l-5838ed3.txt` |
 | `ci-full` | PASS at `1318baa` (clean tree; Kani step 4933 s = 82 min, 57/57; 36 fuzz targets; delegated: windows-native, windows-cross, mutants, ct, proverif-link). First run at `e365c9f` FAIL (fuzz only, D-B26) | `ci-full-b-1318baa.txt` |
 
+*[B-4c7 (Q217): RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0, CVE-2026-119375) is in `cargo audit`'s database and `cargo deny`'s output as of 2026-11-09, found by B-4c5's `ci-full` attempt 4 (the step-by-step run of the same day, on an older local database, was green). Ignored with ADR-051 Am. 7 (Q217) in `expect::AUDIT_IGNORES` and `deny.toml`; no lock movement. `ci-fast` PASS (`ci-fast-b4c7-ab72776.txt`): `deny` PASS, `audit` PASS — "ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141, RUSTSEC-2026-0387, RUSTSEC-2026-0459"; evidence of `cipher_use_hmac` = 1 and the page-HMAC rejection: `sqlcipher-hmac-b4c7-ab72776.txt`.]*
+
 ### §5 Deviations from the weisung (new: D-B16…; D-B10 and D-B11 closed)
 
 *[B-4c (VERIFY-B4 P3 m-9): the entries dictated earlier and missing here —]*

@@ -1,0 +1,3 @@
+crates/secmp-client-core/src/scheduler/run.rs:881:34: replace > with >= in Driver<P, D, R, H, W, C>::flush_wait
+crates/secmp-client-core/src/scheduler/run.rs:1081:54: replace > with >= in Driver<P, D, R, H, W, C>::apply
+crates/secmp-store/src/wrap.rs:134:9: replace Unlocked::lock with ()

@@ -176,8 +176,8 @@ pub struct Outgoing<'a> {
 /// content reaches a session. Nothing here wakes, adds or removes a slot — a refusal leaves the schedule as it was (the
 /// slots keep carrying dummies, spec §10.1), and an accepted message only changes the outbox and the history.
 ///
-/// Refusals, before anything is queued: [`Error::Unsupported`] for kind 2 (ADR-054 item 3), an unknown kind or a payload
-/// over [`MESSAGE_MAX`]; [`Error::Blocked`] for a removed contact or a changed identity that is not verified again;
+/// Refusals, before anything is queued: [`Error::Unsupported`] for kinds 2, 4, 5, 6, an unknown kind, or a text that is
+/// empty, longer than [`MESSAGE_MAX`], not UTF-8 or contains U+0000 (ADR-054 items 1, 3); [`Error::Blocked`] for a removed contact or a changed identity that is not verified again;
 /// [`Error::ReinviteRequired`]; [`Error::Frozen`]; [`Error::ResetRequested`]; [`Error::Unverified`] for a view-once
 /// (kind 3) to a contact that is not verified.
 ///
@@ -200,7 +200,7 @@ pub fn queue_message<S: EntropySource>(
         .into_iter()
         .find(|k| k.byte() == kind)
         .ok_or(Error::Unsupported)?;
-    if matches!(kind, AppKind::AttachmentInline) || payload.len() > MESSAGE_MAX {
+    if !actor::app_payload_ok(kind, payload) {
         return Err(Error::Unsupported);
     }
     contacts.check_send(contact)?;

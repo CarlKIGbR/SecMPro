@@ -403,7 +403,7 @@ fn inline_attachment_64k() -> R {
     big(|| {
         let mut w = established("se20", 23)?;
         let payload: Vec<u8> = (0..16_384_u32)
-            .map(|i| u8::try_from(i % 251).unwrap_or(0))
+            .map(|i| b'a'.saturating_add(u8::try_from(i % 26).unwrap_or(0)))
             .collect();
         w.g.outbox_mut().enqueue(
             OutMessage {
@@ -560,6 +560,141 @@ fn extb2_reset_with_argument_is_ignored() -> R {
             w.h.take_events().as_slice(),
             [SessionEvent::ResetRequested]
         ));
+        Ok(())
+    })
+}
+
+/// SE-23 (EXTB2-3; ADR-054 items 1, 3): the `Api` refuses an empty text, a text that is not UTF-8, a text with U+0000
+/// and the kinds 4, 5, 6 before anything is queued; a valid text is sent.
+#[cfg(feature = "kat")]
+#[test]
+fn extb2_api_rejects_undefined_kinds_and_invalid_text() -> R {
+    use crate::api::{Core, Request, Response};
+
+    big(|| {
+        let w = established("extb2-api", 601)?;
+        let mut core = Core::with_profile(
+            w.host.profile.clone(),
+            w.host.clock.clone(),
+            core_sources(602),
+        )?;
+        let mut accepted = Vec::new();
+        for (kind, payload) in [
+            (1, vec![]),
+            (1, vec![0xff]),
+            (1, b"a\0b".to_vec()),
+            (4, b"reaction".to_vec()),
+            (5, b"edit".to_vec()),
+            (6, b"delete".to_vec()),
+        ] {
+            if core
+                .handle(Request::Send {
+                    contact: ContactId(1),
+                    kind,
+                    payload: Zeroizing::new(payload),
+                    expire_after: 0,
+                })
+                .is_ok()
+            {
+                accepted.push(kind);
+            }
+        }
+        assert!(
+            accepted.is_empty(),
+            "ADR-054(1,3): Api accepted invalid cases with kinds {accepted:?}"
+        );
+        assert!(matches!(
+            core.handle(Request::Send {
+                contact: ContactId(1),
+                kind: 1,
+                payload: Zeroizing::new(b"ok".to_vec()),
+                expire_after: 0,
+            }),
+            Ok(Response::Sent(_))
+        ));
+        Ok(())
+    })
+}
+
+/// SE-24 (EXTB2-3; ADR-054 items 1, 3): a receiver drops an empty text, a text that is not UTF-8, a text with U+0000 and
+/// the kinds 4, 5, 6 — each cell is committed (acknowledged), nothing is delivered, receipted or written to the history;
+/// in a Batch only the invalid message is dropped.
+#[cfg(feature = "kat")]
+#[test]
+fn extb2_receive_drops_undefined_kinds_and_invalid_text() -> R {
+    use secmp_proto::wire::cell::{AppMessage, BatchBody, ContentBody};
+
+    big(|| {
+        let mut w = established("extb2-rx", 631)?;
+        let mut accepted = Vec::new();
+        let mut receipts = Vec::new();
+        for (n, (kind, payload)) in (1_u8..).zip([
+            (AppKind::Text, vec![]),
+            (AppKind::Text, vec![0xff]),
+            (AppKind::Text, b"a\0b".to_vec()),
+            (AppKind::Reaction, b"reaction".to_vec()),
+            (AppKind::Edit, b"edit".to_vec()),
+            (AppKind::Delete, b"delete".to_vec()),
+        ]) {
+            w.g.outbox_mut().enqueue(
+                OutMessage {
+                    msg_id: [n; 16],
+                    kind,
+                    expire_after: 0,
+                    payload: Zeroizing::new(payload),
+                },
+                0,
+            );
+            let cell = next(&mut w.g, ms(u64::from(n)))?;
+            let c = counters::persist_calls();
+            deliver(&mut w.h, &cell)?;
+            assert_eq!(
+                counters::persist_calls(),
+                c + 1,
+                "committed and acknowledged"
+            );
+            if !w.h.take_received().is_empty() {
+                accepted.push(kind.byte());
+            }
+            receipts.push(w.h.receipts_due());
+        }
+        assert!(
+            accepted.is_empty(),
+            "ADR-054(1,3): receiver delivered invalid cases with kinds {accepted:?}"
+        );
+        assert_eq!(receipts, [0; 6], "nothing receipted");
+        let delivered = |w: &World| -> Result<Vec<MsgId>, E> {
+            let store = w.host.profile.store();
+            let s = store.lock().map_err(|_| "lock")?;
+            Ok(s.delivered_ids(1)?)
+        };
+        let ids = delivered(&w)?;
+        for n in 1..=6_u8 {
+            assert!(!ids.contains(&[n; 16]), "no history row for case {n}");
+        }
+        w.g.queue_raw_content_test(ContentBody::Batch(BatchBody {
+            messages: vec![
+                AppMessage {
+                    msg_id: [40; 16],
+                    kind: AppKind::Text,
+                    expire_after: 0,
+                    payload: Zeroizing::new(b"a\0b".to_vec()),
+                },
+                AppMessage {
+                    msg_id: [41; 16],
+                    kind: AppKind::Text,
+                    expire_after: 0,
+                    payload: Zeroizing::new(b"ok".to_vec()),
+                },
+            ],
+        }));
+        deliver(&mut w.h, &next(&mut w.g, ms(7))?)?;
+        let got: Vec<MsgId> = w.h.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(got, [[41; 16]], "only the valid message of the Batch");
+        assert_eq!(w.h.receipts_due(), 1);
+        let ids = delivered(&w)?;
+        assert!(ids.contains(&[41; 16]));
+        assert!(!ids.contains(&[40; 16]));
         Ok(())
     })
 }

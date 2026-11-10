@@ -53,6 +53,7 @@ pub(crate) fn pair(
         key_b,
         START_UNIX,
     );
+    conv_a.raw_app_payloads_kat();
     let mut conv_b: TestConv = Conversation::new(
         sb,
         MemOutbox::new(),
@@ -61,6 +62,7 @@ pub(crate) fn pair(
         key_a,
         START_UNIX,
     );
+    conv_b.raw_app_payloads_kat();
     conv_a.bind(A_SEND, A_RECV);
     conv_b.bind(B_SEND, B_RECV);
     let mut convs = Conversations::new();

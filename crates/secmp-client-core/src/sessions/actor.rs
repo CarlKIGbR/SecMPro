@@ -221,6 +221,16 @@ struct Sent {
     total: u16,
 }
 
+/// ADR-054 items 1 and 3 (EXTB2-3): an `AppMessage` of kind 1 (text) or 3 (view-once text) whose payload is
+/// well-formed UTF-8 of 1 … [`super::MESSAGE_MAX`] bytes without U+0000; kinds 2, 4, 5 and 6 are not defined for M7. The
+/// `Api` refuses what fails here; a receiver drops it (the cell is committed and acknowledged, spec §9.3).
+pub(crate) fn app_payload_ok(kind: AppKind, payload: &[u8]) -> bool {
+    matches!(kind, AppKind::Text | AppKind::ViewOnceText)
+        && (1..=super::MESSAGE_MAX).contains(&payload.len())
+        && !payload.contains(&0)
+        && core::str::from_utf8(payload).is_ok()
+}
+
 /// The largest number of ids in one receipt: `2 + 16·n ≤ 1689` (spec §7.6).
 const RECEIPT_IDS_MAX: usize = 100;
 
@@ -340,6 +350,9 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     notified: BTreeSet<MsgId>,
     /// `T_RS` in ms; 0: no confirmation timeout (the host sets it from the queue's period).
     receipt_timeout_ms: u64,
+    /// ADR-054 items 1 and 3 at delivery (EXTB2-3): on in every constructor; off only through the test kit's
+    /// `raw_app_payloads_kat`.
+    app_rules: bool,
     /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
     #[cfg(feature = "kat")]
     mk_digests: Vec<[u8; 32]>,
@@ -396,6 +409,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             relayed_at: BTreeMap::new(),
             notified: BTreeSet::new(),
             receipt_timeout_ms: 0,
+            app_rules: true,
             #[cfg(feature = "kat")]
             mk_digests: Vec::new(),
         }
@@ -550,6 +564,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         if self.trust != Trust::Frozen {
             self.trust = trust;
         }
+    }
+
+    /// Test kit only: this conversation delivers the M6/M7 harness payloads ADR-054 items 1 and 3 drop (binary, NUL,
+    /// empty, over 16 KiB, kinds 2, 4, 5, 6); not in a product build (ADR-054, CLAUDE.md §1.5).
+    #[cfg(any(test, feature = "kat"))]
+    pub const fn raw_app_payloads_kat(&mut self) {
+        self.app_rules = false;
     }
 
     /// `T_RS` of this conversation in ms (0: none).
@@ -1191,8 +1212,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             .saturating_mul(1000)
             .saturating_add(self.last_now_ms);
         let fresh: Vec<DeliveredMessage<'_>> = match &delivery {
+            // ADR-054 items 1 and 3 (EXTB2-3): an invalid message is dropped, the cell is still committed and acknowledged
             Delivery::Messages(messages) => messages
                 .iter()
+                .filter(|m| !self.app_rules || app_payload_ok(m.kind, &m.payload))
                 .filter(|m| !self.seen.contains(&m.msg_id))
                 .map(|m| DeliveredMessage {
                     msg_id: m.msg_id,
@@ -1270,7 +1293,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         match delivery {
             Delivery::Messages(messages) => {
                 for m in messages {
-                    if self.seen.insert(m.msg_id) {
+                    // ADR-054 items 1 and 3 first: a dropped message is not taken into the dedup set (EXTB2-3)
+                    if (!self.app_rules || app_payload_ok(m.kind, &m.payload))
+                        && self.seen.insert(m.msg_id)
+                    {
                         self.receipts_due.push(m.msg_id);
                         self.received.push(Received {
                             msg_id: m.msg_id,
@@ -2034,6 +2060,46 @@ mod tests {
             [super::SessionEvent::ContactRemoved]
         ));
         assert!(!a.has_pending_real());
+        Ok(())
+    }
+
+    /// A Batch of text messages `(id byte, payload)`.
+    #[cfg(feature = "kat")]
+    fn text_batch(messages: &[(u8, &[u8])]) -> secmp_proto::wire::cell::ContentBody {
+        use secmp_proto::wire::cell::{AppKind, AppMessage, BatchBody, ContentBody};
+        ContentBody::Batch(BatchBody {
+            messages: messages
+                .iter()
+                .map(|(n, payload)| AppMessage {
+                    msg_id: [*n; 16],
+                    kind: AppKind::Text,
+                    expire_after: 0,
+                    payload: secmp_crypto::Zeroizing::new(payload.to_vec()),
+                })
+                .collect(),
+        })
+    }
+
+    /// SE-36 (EXTB2-3; ADR-054 items 1, 3; CLAUDE.md §1.5): a conversation built by `Conversation::new` applies the
+    /// receive rules without being asked — of a Batch with a text containing U+0000 and a valid one only the valid one is
+    /// delivered and receipted; only the test kit's switch lets the harness payloads through.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn adr054_receive_rules_on_without_the_switch() -> Result<(), Fail> {
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_raw_content_test(text_batch(&[(50, b"a\0b"), (51, b"ok")]));
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&cell).map_err(|_| "deliver")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(ids, [[51; 16]]);
+        assert_eq!(b.receipts_due(), 1);
+        b.raw_app_payloads_kat();
+        a.queue_raw_content_test(text_batch(&[(52, b"a\0b")]));
+        let cell = a.prepare_direct(1_000).map_err(|_| "seal")?.cell;
+        b.deliver_direct(&cell).map_err(|_| "deliver")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(ids, [[52; 16]], "the test kit's switch");
         Ok(())
     }
 

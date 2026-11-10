@@ -6,3 +6,23 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(extb2_reset_
     assertion `left == right` failed: a reset with an argument
       left: Err(Reset)
      right: Ok(())
+
+## step 2 EXTB2-3 (head 5e7094a + tests, field `app_rules`, switch and `app_payload_ok` added; no Api check, no receive filter)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(extb2_api_rejects) | test(extb2_receive_drops) | test(adr054_receive_rules)'
+### SE-23 sessions::tests::extb2_api_rejects_undefined_kinds_and_invalid_text
+    thread '<unnamed>' (2189109) panicked at crates/secmp-client-core/src/sessions/tests.rs:599:9:
+    ADR-054(1,3): Api accepted invalid cases with kinds [1, 1, 1, 4, 5, 6]
+### SE-24 sessions::tests::extb2_receive_drops_undefined_kinds_and_invalid_text
+    thread '<unnamed>' (2189108) panicked at crates/secmp-client-core/src/sessions/tests.rs:654:9:
+    ADR-054(1,3): receiver delivered invalid cases with kinds [1, 1, 1, 4, 5, 6]
+### SE-36 sessions::actor::tests::adr054_receive_rules_on_without_the_switch
+    thread 'sessions::actor::tests::adr054_receive_rules_on_without_the_switch' (2189105) panicked at crates/secmp-client-core/src/sessions/actor.rs:2090:9:
+    assertion `left == right` failed
+      left: [[50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50], [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51]]
+     right: [[51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51]]
+### SE-36 mutation: body of `raw_app_payloads_kat` emptied (fixed tree otherwise; reverted, `git diff` of the hunk empty)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(adr054_receive_rules)'
+    thread 'sessions::actor::tests::adr054_receive_rules_on_without_the_switch' (2190730) panicked at crates/secmp-client-core/src/sessions/actor.rs:2100:9:
+    assertion `left == right` failed: the test kit's switch
+      left: []
+     right: [[52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52]]

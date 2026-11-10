@@ -129,6 +129,7 @@ pub fn contact_on(
         peer_bob,
         START_UNIX,
     );
+    conv_alice.raw_app_payloads_kat();
     let mut conv_bob: TestConv = Conversation::new(
         state_bob,
         MemOutbox::new(),
@@ -140,6 +141,7 @@ pub fn contact_on(
         peer_alice,
         START_UNIX,
     );
+    conv_bob.raw_app_payloads_kat();
     conv_alice.bind(alice_send, alice_recv);
     conv_bob.bind(bob_send, bob_recv);
     let index_alice = sim.client(alice).convs.add(conv_alice);
@@ -219,6 +221,7 @@ pub fn half_contact(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u
         peer_bob,
         START_UNIX,
     );
+    conv_alice.raw_app_payloads_kat();
     let mut conv_bob: TestConv = Conversation::new(
         state_bob,
         MemOutbox::new(),
@@ -227,6 +230,7 @@ pub fn half_contact(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u
         peer_alice,
         START_UNIX,
     );
+    conv_bob.raw_app_payloads_kat();
     conv_alice.bind(QueueId(u32::MAX - 1), a_recv);
     conv_bob.bind(QueueId(u32::MAX), QueueId(u32::MAX - 2));
     let conv_a = sim.client(alice).convs.add(conv_alice);
@@ -300,6 +304,7 @@ pub fn send_only_full(
         peer,
         START_UNIX,
     );
+    conv.raw_app_payloads_kat();
     conv.bind(a_send, QueueId(u32::MAX));
     (sim.client(alice).convs.add(conv), sid, state_bob)
 }

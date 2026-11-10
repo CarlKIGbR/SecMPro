@@ -237,6 +237,7 @@ fn add_sender(
         key_b,
         START_UNIX,
     );
+    conv_a.raw_app_payloads_kat();
     let mut conv_b: TestConv = Conversation::new(
         state_b,
         MemOutbox::new(),
@@ -245,6 +246,7 @@ fn add_sender(
         key_a,
         START_UNIX,
     );
+    conv_b.raw_app_payloads_kat();
     conv_a.bind(a_send, QueueId(u32::MAX));
     conv_b.bind(QueueId(u32::MAX - 1), b_recv);
     let conv = sim.client(alice).convs.add(conv_a);

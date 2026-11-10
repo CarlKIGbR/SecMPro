@@ -54,6 +54,7 @@ fn conv_with_peer(tag: u32) -> (TestConv, secmp_proto::tr::RatchetState, Entropy
         peer_key,
         START_UNIX,
     );
+    conv.raw_app_payloads_kat();
     conv.bind(QueueId(0), QueueId(1));
     (conv, receiver, EntropyPool::new("m6-io-peer", tag))
 }

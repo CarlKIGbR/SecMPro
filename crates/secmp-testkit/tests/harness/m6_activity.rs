@@ -160,6 +160,7 @@ impl Rig {
                 key_p,
                 START_UNIX,
             );
+            conv_x.raw_app_payloads_kat();
             conv_x.bind(x_send, x_recv);
             let mut conv_p: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
                 state_p,
@@ -169,6 +170,7 @@ impl Rig {
                 key_x,
                 START_UNIX,
             );
+            conv_p.raw_app_payloads_kat();
             conv_p.bind(QueueId(0), QueueId(1));
             // the first cell goes to the peer by hand: from then on it can answer
             let first = conv_x.prepare_direct(0).unwrap();

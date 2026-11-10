@@ -519,7 +519,7 @@ impl<P: StreamProvider + 'static> World<P> {
         label: &'static str,
         seed: u64,
     ) -> Result<Node<P, R>, Fail> {
-        let conv = Conversation::new(
+        let mut conv = Conversation::new(
             s.state,
             MemOutbox::new(),
             MemPersist::new(),
@@ -527,6 +527,7 @@ impl<P: StreamProvider + 'static> World<P> {
             s.peer,
             self.unix_base,
         );
+        conv.raw_app_payloads_kat();
         let mut all = Conversations::new();
         all.add(conv);
         let convs = Arc::new(Mutex::new(all));

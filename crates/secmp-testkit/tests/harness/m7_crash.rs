@@ -229,6 +229,7 @@ fn open_side(dir: &Path, name: &str, seed: u64, life: u64, receipts: bool) -> Si
         1 << 21,
     )));
     let mut conv = Conversation::new(state, outbox, persist, source, peer, 0);
+    conv.raw_app_payloads_kat();
     let (send_q, recv_q) = if initiator { (AB, BA) } else { (BA, AB) };
     conv.bind(send_q, recv_q);
     conv.set_send_receipts(receipts);
@@ -605,6 +606,7 @@ fn open_side_fresh(dir: &Path, name: &str) -> SideRun {
         1 << 21,
     )));
     let mut conv = Conversation::new(state, outbox, persist, source, peer, 0);
+    conv.raw_app_payloads_kat();
     let (send_q, recv_q) = if initiator { (AB, BA) } else { (BA, AB) };
     conv.bind(send_q, recv_q);
     let mut convs = Convs::new();

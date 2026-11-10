@@ -331,6 +331,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                 key_p,
                 START_UNIX,
             );
+            conv_x.raw_app_payloads_kat();
             conv_x.bind(x_send, x_recv);
             let mut conv_p = Conversation::new(
                 state_p,
@@ -340,6 +341,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                 key_x,
                 START_UNIX,
             );
+            conv_p.raw_app_payloads_kat();
             conv_p.bind(QueueId(0), QueueId(1));
             let first = conv_x.prepare_direct(0).unwrap();
             let mut convs = PeerConvs::new();

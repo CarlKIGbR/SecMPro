@@ -1096,6 +1096,26 @@ reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
 
 ---
 
+### ADR-057 — Signed executor commits (SSH signing key in the container secret, owner's noreply committer, author unchanged)
+**Status.** Proposed (reviewer, 2026-11-09; the owner operates the key).
+**Context.** Today executor commits are authored and committed as `Claude Code <noreply@anthropic.com>` and are unsigned: `git log -3 --format='%an <%ae> / %cn <%ce> / %G?'` at `ab72776` gives `N` for each. The commit rules are Conventional Commits with squash merge to `main` (`docs/06` §7). Supply chain (`docs/06` §3) covers dependencies only. Release artefacts are signed offline with minisign (`docs/06` §5). No rule in `docs/06` or `CLAUDE.md` covers commit signatures, so nothing shows that a commit on a PR branch was made in the owner's executor container.
+**Decision.**
+1. Key: the owner generates a dedicated Ed25519 SSH key used **only for signing**. It is never an auth or deploy key. Its public half is registered on the owner's GitHub account as a *signing key*. The private half lives only in the executor container's secret mount `<SECRET-MOUNT>` (read-only, outside the repo, never in an env dump or log).
+2. Git config in the container:
+   - `gpg.format ssh`
+   - `user.signingkey <SECRET-MOUNT>`
+   - `commit.gpgsign true`
+3. Committer = the owner's name with the GitHub noreply address `<OWNER-NOREPLY>`. GitHub verifies an SSH signature only when the committer e-mail is a verified address of the account that owns the key.
+4. **Author unchanged** (`Claude Code <noreply@anthropic.com>`). The `modell=` line and the `Co-Authored-By:` trailer stay as they are.
+**Alternatives.** (a) Unsigned, as today: no provenance. (b) A GPG key: more tooling in the container, no gain. (c) Owner-side re-signing at push time: rewrites every SHA the reviewer pinned; rejected. (d) A bot account with its own key: a second account to administer; not for v1.
+**Consequences.**
+- PR commits show "Verified". The squash commit on `main` is signed by GitHub independently of this.
+- The signature attests "made in the owner's executor container", not human review. Review stays the reviewer's sign-off (`docs/06` §8 item 8).
+- The key is necessarily usable headless (no passphrase), so the container secret is the control. On compromise, the owner removes the key from GitHub (its signatures turn unverified) and rotates it.
+- `docs/06` §7 gains one line when this ADR is accepted. Dependencies are unaffected. Not decided here (a later weisung): an `allowed_signers` file and an xtask check that every commit of a pushed range has `%G?` = `G`.
+
+---
+
 ### ADR-058 — an authenticated repeat of the accepted KeyChange is a no-op (§7.7)
 
 **Status.** Accepted (Reviewer, 2026-11-10, under the owner's delegation of 2026-11-10 — "ich möchte die stärkste security, ich vertraue dir in adr entscheidungen"). Q222, WEISUNG M7-B-4f.

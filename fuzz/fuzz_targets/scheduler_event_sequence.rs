@@ -19,7 +19,8 @@
 //! padded with dummies.
 //!
 //! Invariants: no panic; every connection's in-flight count stays at most 2; every write is whole 4352-byte frames that
-//! open under the link's key as requests; no two `SEND`s to one queue are less than the queue's period apart; and
+//! open under the link's key as requests; the ticks of two `SEND`s to one queue (`Output::Write::at`, not the poll time, Q219) are at least the queue's
+//! period apart, and every write is at most `driver_jitter_ms` after its tick; and
 //! persist-before-ack (CLAUDE.md §1.7): every cell handed to the cell source with an id at or below the `ack` of the
 //! latest `FETCH` of its queue the relay opened is committed.
 #![no_main]
@@ -132,7 +133,7 @@ struct World {
     src: Src,
     now: u64,
     peers: BTreeMap<LinkId, Peer>,
-    /// `sid byte → period` and the time of the last `SEND` to it.
+    /// `sid byte → period` and the tick time (`Output::Write::at`) of the last `SEND` to it.
     periods: BTreeMap<u8, u64>,
     last_send: BTreeMap<u8, u64>,
     queues: Vec<QueueId>,
@@ -157,8 +158,15 @@ impl World {
                     let more = self.sched.work(self.now, &mut self.src).unwrap();
                     work.extend(more);
                 }
-                Output::Write { link, bytes, frame, .. } => {
+                Output::Write { link, at, bytes, frame } => {
                     assert!(!bytes.is_empty() && bytes.len() % FRAME_LEN == 0, "a write of {} bytes", bytes.len());
+                    // Q219: every write comes from `tick` and carries the tick's time; the driver may wake up to
+                    // `driver_jitter_ms` after it (never before)
+                    assert!(
+                        at <= self.now && self.now - at <= Params::default().driver_jitter_ms,
+                        "write {} ms after its tick",
+                        self.now.saturating_sub(at)
+                    );
                     let peer = self.peers.get_mut(&link).expect("a write on a link that is not up");
                     peer.unreported.push(frame);
                     for unit in bytes.chunks(FRAME_LEN) {
@@ -169,12 +177,12 @@ impl World {
                                 let period = self.periods[&key];
                                 if let Some(last) = self.last_send.get(&key) {
                                     assert!(
-                                        self.now.saturating_sub(*last) >= period,
+                                        at.saturating_sub(*last) >= period,
                                         "two SENDs {} ms apart on a queue of period {period}",
-                                        self.now.saturating_sub(*last)
+                                        at.saturating_sub(*last)
                                     );
                                 }
-                                self.last_send.insert(key, self.now);
+                                self.last_send.insert(key, at);
                             }
                             RequestCmd::Fetch { rid, ack, .. } => {
                                 if let Some(q) = self.rids.get(rid) {

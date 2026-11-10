@@ -2406,6 +2406,58 @@ mod tests {
         Ok(())
     }
 
+    /// Q219 (the fuzz target `scheduler_event_sequence` stamped a `SEND` with the driver's poll time, not the tick's): a
+    /// Strict send link up at 200 000 on a queue of period 10 000, polled 35 ms and then 20 ms after its ticks (inside
+    /// `driver_jitter_ms`). `Output::Write::at` is the tick's time — 210 000 and 220 000, exactly one period apart — and
+    /// the poll times are 35 and 20 ms later (green before and after; the red of Q219 is the fuzz seed
+    /// `regress-b4c13-00c9f834`).
+    #[test]
+    fn sends_stamped_at_tick_are_period_apart_under_late_polls() -> Result<(), Fail> {
+        fn stamps(outs: &[Output]) -> Vec<u64> {
+            outs.iter()
+                .filter_map(|o| match o {
+                    Output::Write { at, .. } => Some(*at),
+                    _ => None,
+                })
+                .collect()
+        }
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let jitter = params.driver_jitter_ms;
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[9; 32]).map_err(|_| "seed")?;
+        let cap = SendCap::from_route([1; 16], &seed).map_err(|_| "cap")?;
+        sched
+            .add_send_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let mut src = Dummies(0);
+        let outs = sched.poll(200_000, &mut src).map_err(|_| "poll")?;
+        let link = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::Connect { link, .. } => Some(*link),
+                _ => None,
+            })
+            .ok_or("no connect")?;
+        sched.link_up(link, 200_000, channel()?).map_err(|_| "up")?;
+        let _ = sched.work(200_000, &mut src).map_err(|_| "work")?;
+        let first = stamps(&sched.poll(210_035, &mut src).map_err(|_| "tick 1")?);
+        let second = stamps(&sched.poll(220_020, &mut src).map_err(|_| "tick 2")?);
+        let ([a], [b]) = (first.as_slice(), second.as_slice()) else {
+            return Err("one write per poll");
+        };
+        assert_eq!((*a, *b), (210_000, 220_000));
+        assert_eq!(b.checked_sub(*a), Some(10_000));
+        assert_eq!(
+            (210_035_u64.checked_sub(*a), 220_020_u64.checked_sub(*b)),
+            (Some(35), Some(20))
+        );
+        assert!(35 <= jitter);
+        Ok(())
+    }
+
     /// OPEN-M7-B-3 (red first on the tree where `delivery_committed` took no generation: the old generation's report
     /// acknowledged the new generation's cell 1): a commit of generation `g` that arrives after the queue was re-created as
     /// `g + 1` is ignored — the acknowledgement of `g + 1` is unchanged; the commit of the current generation moves it.

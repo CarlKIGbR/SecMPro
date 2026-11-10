@@ -48,9 +48,9 @@ def test_suite_tags():
     assert vectorfile.SUITE_TAGS == {"hkdf-labels": "hkdf", "caead": "caead", "msgencrypt": "msgenc",
                                      "hybridkem-768": "hk768", "hybridkem-1024": "hk1024",
                                      "hybridsign": "hsig", "fingerprint": "fp", "sas": "sas",
-                                     "encodings": "enc", "tr": "tr", "hx": "hx", "link": "link"}
+                                     "encodings": "enc", "tr": "tr", "hx": "hx", "link": "link", "store": "store"}
     assert set(vectorfile.SUITE_TAGS) == set(gen_vectors.SUITES)
-    assert set(cases.SUITES) == set(gen_vectors.SUITES) - {"encodings", "tr", "hx", "link"}
+    assert set(cases.SUITES) == set(gen_vectors.SUITES) - {"encodings", "tr", "hx", "link", "store"}
 
 
 def test_manipulations():

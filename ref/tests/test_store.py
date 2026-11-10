@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The `store` suite (ADR-053 items 1–8): every output of the generated table recomputed with its formula
+written out here (not through secmp_ref.store), every reject rejected with the one uniform error, the
+pre-KDF acceptance rule, and the four rev 2.7 labels prefix-free against labels.py."""
+
+import json
+
+import pytest
+
+from secmp_ref import caead, labels, primitives, store, store_cases, vectorfile
+from secmp_ref.errors import Reject
+
+DOC = json.loads(vectorfile.canonical_json(vectorfile.suite_document("store", store_cases.store_cases())))
+CASES = {c["id"]: c for c in DOC["cases"]}
+H = bytes.fromhex
+PARAMS = (262144).to_bytes(4, "big") + (3).to_bytes(4, "big") + (4).to_bytes(4, "big")
+
+
+def by_op(op):
+    return [c for c in DOC["cases"] if c["op"] == op]
+
+
+def test_header_and_validation():
+    vectorfile.validate_document(DOC)
+    assert (DOC["schema"], DOC["suite"], DOC["spec"], DOC["generator"]) == (8, "store", "SecMP/1 rev 2.7", "ref-python")
+    assert [c["id"] for c in DOC["cases"]] == [f"store-{i:04d}" for i in range(1, 20)]
+
+
+def test_keys_item_3_4():
+    (c,) = by_op("keys")
+    mk = H(c["inputs"]["mk"])
+    for t in ("identity", "prekeys", "relays", "contacts", "sessions", "outbox", "messages", "invitations", "settings"):
+        assert c["outputs"][f"k_{t}"] == primitives.hkdf(bytes(32), mk, f"SecMP-STORE/1 {t}".encode(), 32).hex()
+    assert c["outputs"]["k_db"] == primitives.hkdf(bytes(32), mk, b"SecMP-STORE/1 db", 32).hex()
+
+
+@pytest.mark.parametrize("c", by_op("wrap"), ids=lambda c: c["id"])
+def test_wrap_item_1_2(c):
+    i = c["inputs"]
+    pw, salt, n, mk = H(i["passphrase"]), H(i["salt"]), H(i["n"]), H(i["mk"])
+    kek = primitives.argon2id(pw, salt, t=3, m_kib=262144, p=4, length=32)
+    ad = b"SecMP-STORE/1 wrap" + b"\x01" + salt + PARAMS
+    wrap = b"\x01" + salt + PARAMS + n + caead.seal(kek, n, ad, mk)
+    assert (c["outputs"]["kek"], c["outputs"]["wrap"]) == (kek.hex(), wrap.hex()) and len(wrap) == 133
+    assert store.unwrap(pw, wrap) == mk
+
+
+def test_passphrases_are_utf8():
+    assert H(by_op("wrap")[1]["inputs"]["passphrase"]).decode("utf-8") == "Pässwört-Ω"
+
+
+def test_seal_item_5_am1():
+    expected = {"store-0008": 8, "store-0009": 17, "store-0010": 16, "store-0011": 24}
+    keys = CASES["store-0001"]["outputs"]
+    for c in by_op("seal"):
+        i, o = c["inputs"], c["outputs"]
+        rk = b"".join((p["int"].to_bytes(8, "big") if "int" in p else bytes([len(H(p["bytes"]))]) + H(p["bytes"]))
+                      for p in i["row_key_parts"])
+        ad = i["label"].encode() + bytes([len(i["column"])]) + i["column"].encode() + rk
+        assert len(rk) == expected[c["id"]]
+        assert i["k_t"] == keys["k_" + i["label"].split(" ")[1]]
+        assert o["row_key"] == rk.hex() and o["ad"] == ad.hex()
+        assert o["rec"] == (H(i["n"]) + caead.seal(H(i["k_t"]), H(i["n"]), ad, H(i["record"]))).hex()
+
+
+def test_backup_item_6():
+    (c,) = by_op("backup")
+    i, o = c["inputs"], c["outputs"]
+    salt, n1, mk, n, ident = (H(i[k]) for k in ("salt", "n_prime", "mk_bk", "n", "identity"))
+    assert len(ident) == 97 and ident[0] == 1
+    kek = primitives.argon2id(H(i["passphrase"]), salt, t=3, m_kib=262144, p=4, length=32)
+    bwrap = n1 + caead.seal(kek, n1, b"SecMP-STORE/1 bwrap\x01" + salt + PARAMS, mk)
+    body = ident + bytes(4) + bytes(2) + bytes(4)
+    table = b"\x04" + b"".join(bytes([t]) + n_.to_bytes(4, "big") for t, n_ in ((1, 97), (2, 4), (3, 2), (4, 4)))
+    header = b"\x01" + salt + PARAMS + bwrap + table
+    k_bk = primitives.hkdf(bytes(32), mk, b"SecMP-STORE/1 backup", 32)
+    file = b"SecMProbackup" + header + n + caead.seal(k_bk, n, b"SecMP-STORE/1 backup" + header, body)
+    assert len(bwrap) == 104 and len(header) == 154
+    assert o == {"kek_bk": kek.hex(), "bwrap": bwrap.hex(), "k_bk": k_bk.hex(), "header": header.hex(),
+                 "body": body.hex(), "file": file.hex()}
+
+
+def _attempt(c):
+    i, op = c["inputs"], c["op"]
+    if op == "wrap-reject":
+        return store.unwrap(H(i["passphrase"]), H(i["wrap"]))
+    if op == "backup-reject":
+        return store.open_backup(H(i["passphrase"]), H(i["file"]))
+    parts = [p["int"] if "int" in p else H(p["bytes"]) for p in i["row_key_parts"]]
+    if "rec" not in i:
+        return store.row_key(parts)
+    return store.open_record(H(i["k_t"]), i["label"].encode(), i["column"], parts, H(i["rec"]))
+
+
+REJECTS = [c for c in DOC["cases"] if c.get("expect") == "reject"]
+
+
+def test_reject_count_and_shape():
+    ops = [c["op"] for c in REJECTS]
+    assert (ops.count("wrap-reject"), ops.count("seal-reject"), ops.count("backup-reject")) == (4, 4, 3)
+    assert all("outputs" not in c for c in REJECTS)
+
+
+@pytest.mark.parametrize("c", REJECTS, ids=lambda c: f"{c['id']}-{c['manipulation']}")
+def test_every_reject_is_the_uniform_error(c):
+    with pytest.raises(Reject) as e:
+        _attempt(c)
+    assert type(e.value) is Reject and str(e.value) == "reject"
+
+
+def test_unacceptable_wraps_are_decided_before_the_kdf(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("KDF ran")
+    store.kek.cache_clear()
+    monkeypatch.setattr(primitives, "argon2id", boom)
+    for c in REJECTS:
+        if c["manipulation"] in ("ver=02", "params=65536,3,4", "drop-last") and c["op"] == "wrap-reject":
+            with pytest.raises(Reject):
+                _attempt(c)
+    store.kek.cache_clear()
+
+
+def test_ver_02_wrap_is_otherwise_valid():
+    """The ver=02 wrap is honestly built: opened with its own header as AD it yields MK, so that the
+    acceptance rule (not a broken tag) is what rejects it."""
+    blob = H(CASES["store-0005"]["inputs"]["wrap"])
+    base = CASES["store-0002"]["inputs"]
+    kek = store.kek(H(base["passphrase"]), H(base["salt"]))
+    assert blob[0] == 2
+    assert caead.open(kek, blob[29:53], b"SecMP-STORE/1 wrap" + blob[:29], blob[53:]) == H(base["mk"])
+
+
+def test_new_labels_are_prefix_free_against_labels_py():
+    new = [labels.STORE_WRAP, labels.STORE_DB, labels.STORE_BACKUP, labels.STORE_BWRAP]
+    assert new == [b"SecMP-STORE/1 wrap", b"SecMP-STORE/1 db", b"SecMP-STORE/1 backup", b"SecMP-STORE/1 bwrap"]
+    assert all(x in labels.APPENDIX_A for x in new) and len(labels.APPENDIX_A) == 53    # ADR-053 item 7: 49 + 4
+    others = [x for x in labels.APPENDIX_A if x not in new]
+    for a in new:
+        for b in others:
+            assert not a.startswith(b) and not b.startswith(a)
+        for b in new:
+            assert a == b or not a.startswith(b)
+
+
+def test_schema_4_12_is_rendered_from_this_table():
+    from tools import render_schema_4_12
+    assert render_schema_4_12.OUT.read_text(encoding="utf-8") == render_schema_4_12.render()

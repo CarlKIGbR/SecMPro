@@ -26,7 +26,7 @@ Sources: `docs/03` rev 2.6 (`docs/03:<line>` at `main` `bf55099`), `docs/07:137-
 | (l) gates G7, fuzz FZ, Kani K7, transport carry-overs C-T | 35 | 21 | 4 | 10 |
 | **total** | **179** | **66** | **73** | **40** |
 
-Built unconditionally: 174 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
+Built unconditionally: 174 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (condition met 2026-11-09, built in M7-DOCS1b), G7-20 (after `harness` joins the ruleset).
 
 ⚙ = owner-operated: E2-07 (nightly over real Tor to the test relay), the Windows VM re-run of the store KATs (G7-17).
 Their non-availability path is the M6 one (`TEST-SPEC-M6.md` "Conventions"): listed under "Blocked — owner
@@ -306,7 +306,7 @@ All CL rows live in the integration test binary `crates/secmp-cli/tests/cli_it.r
 | G7-16 | `xtask::expect::tests::audit_ignores_unchanged` | `AUDIT_IGNORES` keeps RUSTSEC-2026-0387 (ADR-051 Am. 6) until `arti-client` moves; no new ignore until Am. 8 (Q217): RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0) is the sixth entry | gate | A |
 | G7-17 | ⚙ `xtask::wintest::tests::win_test_runs_store_suites` | `windows-native` runs ST-*, PC-*, BK-*; the owner's VM run (`win-ondemand.yml`) logged | gate | C |
 | G7-18 | `secmp-proto::tr::state::tests::ratchet_state_v1_layout_unchanged` [O-14] | the frozen TR vectors' serialised states decode and re-encode byte-exact through `to_parts`/`from_parts`; `VECTOR_SUITES` and the vector SHA pins unchanged (decision 14) | gate | A |
-| G7-19 | `xtask::docs::tests::adr_018_status` (cond: the owner accepts ADR-018) | the pin `docs.rs:287-290` ("Proposed (owner decides after M6)", no "Accepted") re-dictated to the accepted status text in the same commit as the `docs/08` ADR-018 update | gate | C |
+| G7-19 | `xtask::docs::adr_018_status` (cond: owner accepted ADR-018 2026-11-09 (M7-DOCS1b)) | the pin `docs.rs:287-290` ("Proposed (owner decides after M6)", no "Accepted") re-dictated to the accepted status text in the same commit as the `docs/08` ADR-018 update | gate | C |
 | G7-20 | `xtask::gates::tests::optional_jobs_are_not_required` (cond: the owner adds `harness` to the ruleset) | `REQUIRED_JOBS` += `harness` and its exact pin (`gates.rs:7036`, five names → six) in one commit after the owner's ruleset change | gate | C |
 | G7-21 | `xtask::expect::tests::cli_dependency_row` | in the first Phase C commit that gives `secmp-cli` code: its `NORMAL_DEPENDENCY_ALLOW` row = {`secmp-client-core`, `secmp-crypto`, `secmp-proto`, `secmp-transport`, `tokio`} and the matching ADR-051 table entry; nothing else | gate | C |
 | FZ-01 | fuzz `backup_import` [O-01] | arbitrary bytes ⇒ no panic; Ok only for a decryptable, well-formed export | fuzz | A |

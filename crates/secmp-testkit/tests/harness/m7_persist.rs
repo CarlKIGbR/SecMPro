@@ -61,6 +61,14 @@ impl Persist for Logged {
         self.log.lock().unwrap().push(Ev::Commit(kind));
         Ok(())
     }
+
+    fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError> {
+        self.inner.control_relayed(ord)
+    }
+
+    fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError> {
+        self.inner.control_requeued(row)
+    }
 }
 
 /// The profile store in `dir`.

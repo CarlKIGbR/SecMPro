@@ -163,7 +163,6 @@ impl Persist for StorePersist {
                 trust: None,
                 block: None,
                 identity: None,
-                control_done: None,
                 previous_identity: None,
                 delivered: &[],
                 receipted: &[],
@@ -251,6 +250,21 @@ impl Persist for StorePersist {
         let _ = kind;
         Ok(())
     }
+
+    fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError> {
+        let session = self.session;
+        let mut s = self.store.lock().map_err(|_| PersistError)?;
+        s.txn(|tx| secmp_store::sessions::delete_pending_control(tx, session, ord))
+            .map_err(|_| PersistError)
+    }
+
+    fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError> {
+        let session = self.session;
+        let mut s = self.store.lock().map_err(|_| PersistError)?;
+        s.txn(|tx| secmp_store::sessions::insert_pending_control(tx, session, row))
+            .map(Some)
+            .map_err(|_| PersistError)
+    }
 }
 
 /// The parts of a commit besides the ratchet state (one transaction with it, persist-before-ack): the reassembly state,
@@ -287,10 +301,6 @@ fn write_parts(
     }
     if parts.clear_handshake {
         secmp_store::sessions::delete_handshake(tx, session)?;
-    }
-    // the last cell of a pending control content is sealed: its row goes with the state that sealed it (Q210 c)
-    if let Some(ord) = parts.control_done {
-        secmp_store::sessions::delete_pending_control(tx, session, ord)?;
     }
     for m in parts.delivered {
         match secmp_store::sessions::insert_delivered(
@@ -960,7 +970,6 @@ mod tests {
                     trust: Some(trust_code(secmp_proto::tr::content::Trust::Frozen)),
                     block: None,
                     identity: None,
-                    control_done: None,
                     previous_identity: None,
                     delivered: &[],
                     receipted: &[],
@@ -1012,7 +1021,6 @@ mod tests {
                             trust: Some(trust_code(secmp_proto::tr::content::Trust::Verified)),
                             block: None,
                             identity: None,
-                            control_done: None,
                             previous_identity: None,
                             delivered: &[],
                             receipted: &[],
@@ -1115,7 +1123,6 @@ mod tests {
                     trust: None,
                     block: None,
                     identity: None,
-                    control_done: None,
                     previous_identity: None,
                     delivered: &delivered,
                     receipted: &[],
@@ -1183,7 +1190,6 @@ mod tests {
                     trust: None,
                     block: None,
                     identity: None,
-                    control_done: None,
                     previous_identity: None,
                     delivered: &delivered,
                     receipted: &[],
@@ -1299,6 +1305,14 @@ mod tests {
                 self.0.push((kind, state.to_vec()));
                 Ok(())
             }
+
+            fn control_relayed(&mut self, _ord: i64) -> Result<(), PersistError> {
+                Ok(())
+            }
+
+            fn control_requeued(&mut self, _row: &[u8]) -> Result<Option<i64>, PersistError> {
+                Ok(None)
+            }
         }
         let (a, _, _, _) = pair(15)?;
         let bytes = f(a.to_bytes(), "a")?;
@@ -1313,7 +1327,6 @@ mod tests {
                     trust: None,
                     block: None,
                     identity: None,
-                    control_done: None,
                     previous_identity: None,
                     delivered: &[],
                     receipted: &[],

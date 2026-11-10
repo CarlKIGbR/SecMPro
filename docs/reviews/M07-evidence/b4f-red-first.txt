@@ -77,3 +77,65 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(older_key_ch
     assertion `left == right` failed
       left: KeyChanged
      right: Frozen
+
+## step 4 Q222 (1)–(3) (head a24ca32 + the step-4 tests and the helpers `evicted_direct`/`failed_direct`; no fix)
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(extb2_key_change_survives) | test(extb2_failed_control) | test(evicted_route_update_is_resent) | test(control_row_deleted_only) | test(superseded_control_attempt) | test(control_written_without_ok_send) | test(superseded_route_update_is_not) | test(late_eviction_rewrites)'
+### SE-25 sessions::tests::extb2_key_change_survives_last_seal_before_write_restart
+    thread '<unnamed>' (2267604) panicked at crates/secmp-client-core/src/sessions/tests.rs:2093:9:
+    assertion `left == right` failed: the row outlives the seal of the last cell (Q222 2)
+      left: 0
+     right: 1
+### SE-26 sessions::actor::tests::extb2_failed_control_send_remains_retryable
+    thread 'sessions::actor::tests::extb2_failed_control_send_remains_retryable' (2267595) panicked at crates/secmp-client-core/src/sessions/actor.rs:2193:9:
+    a failed SEND lost the reset notification
+### SE-27 sessions::tests::evicted_route_update_is_resent
+    thread '<unnamed>' (2267605) panicked at crates/secmp-client-core/src/sessions/tests.rs:2131:9:
+    assertion `left == right` failed: the evicted content keeps its row
+      left: 0
+     right: 1
+### SE-29 sessions::tests::control_row_deleted_only_after_last_ok_send
+    thread '<unnamed>' (2267602) panicked at crates/secmp-client-core/src/sessions/tests.rs:2162:13:
+    assertion `left == right` failed: after the seal of cell 3
+      left: 0
+     right: 1
+### SE-30 sessions::tests::superseded_control_attempt_outcomes_are_ignored
+    thread '<unnamed>' (2267607) panicked at crates/secmp-client-core/src/sessions/tests.rs:2193:17:
+    assertion `left == right` failed: after the last seal
+      left: 0
+     right: 1
+### SE-31 sessions::tests::control_written_without_ok_send_is_resent_after_restart
+    thread '<unnamed>' (2267603) panicked at crates/secmp-client-core/src/sessions/tests.rs:2241:9:
+    assertion `left == right` failed: read again after the restart
+      left: 0
+     right: 1
+### SE-41 sessions::tests::late_eviction_rewrites_the_control_row
+    thread '<unnamed>' (2267606) panicked at crates/secmp-client-core/src/sessions/tests.rs:2303:9:
+    assertion `left == right` failed: written again
+      left: 0
+     right: 1
+(SE-37 superseded_route_update_is_not_resent is green on this tree, as dictated: R1's row goes in its seal commit there;
+its red is the mutation below.)
+### step-4 mutation reds (fixed tree; each one-site mutation applied, run, reverted; `git diff` of the hunk empty after)
+## SE-30 (a) `on_relayed` without the attempt comparison (`&& e.attempt == r.attempt` deleted); cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(superseded_control_attempt)'
+    thread '<unnamed>' (2270980) panicked at crates/secmp-client-core/src/sessions/tests.rs:2202:17:
+    assertion `left == right` failed: after the last seal
+      left: 0
+     right: 1
+## SE-30 (b) `replan_control` without the attempt check (`if entry.attempt != r.attempt { return; }` deleted); same cmd
+    thread '<unnamed>' (2271544) panicked at crates/secmp-client-core/src/sessions/tests.rs:2208:9:
+    nothing planned again
+## SE-37 the supersession branch of `replan_control` deleted (the older `Routes` entry is planned again); cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(superseded_route_update_is_not)'
+    thread '<unnamed>' (2272108) panicked at crates/secmp-client-core/src/sessions/tests.rs:2279:9:
+    assertion `left == right` failed: the newer RouteUpdate only
+      left: 2
+     right: 1
+## SE-39 `MemPersist::control_requeued` body → `Ok(None)`; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(mem_persist_forwards)'
+    thread 'scheduler::outbox::tests::mem_persist_forwards_control_rows_to_its_mirror' (2272671) panicked at crates/secmp-client-core/src/scheduler/outbox.rs:586:9:
+    assertion `left == right` failed
+      left: Ok(None)
+     right: Ok(Some(7))
+## SE-40 "`Err` also sets `ord = None`" in `settle_controls`; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(settle_retries)'
+    thread 'sessions::actor::tests::settle_retries_a_failed_row_delete' (2273234) panicked at crates/secmp-client-core/src/sessions/actor.rs:2477:9:
+    assertion `left == right` failed: failed once, tried again
+      left: [4]
+     right: [4, 4]

@@ -1029,8 +1029,8 @@ fn key_change_identity_commits_with_receive() -> R {
 
 /// Q210 c (VERIFY-B4 P1 M-3; R-ROT-1): pending control content is durable with the commit that makes its effect durable —
 /// a rotation's `RouteUpdate`, a removal's `Control{1}` and an identity rotation's `KeyChange` — and re-planned when the
-/// session opens again: after a restart before any slot each reaches the peer, and the send commit of its last cell takes
-/// its row.
+/// session opens again: after a restart before any slot each reaches the peer, and the last cell's `OK_SEND` takes its
+/// row (at the next slot, Q222).
 #[cfg(feature = "kat")]
 #[test]
 fn pending_control_content_survives_restart() -> R {
@@ -1051,14 +1051,18 @@ fn pending_control_content_survives_restart() -> R {
             drop(core);
             assert_eq!(pending(&store)?, 1, "durable with its effect");
             let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(seed)), T0)?;
-            for i in 0..6 {
-                let cell = next(&mut h, ms(seed.saturating_mul(10).saturating_add(i)))?;
-                deliver(&mut g, &cell)?;
+            for (cell_id, i) in (1_u64..).zip(0..6) {
+                let p = h
+                    .prepare_direct(ms(seed.saturating_mul(10).saturating_add(i)))
+                    .map_err(|_| "prepare")?;
+                h.relayed_direct(p.token, cell_id);
+                deliver(&mut g, &p.cell)?;
             }
+            next(&mut h, ms(seed.saturating_mul(10).saturating_add(6)))?;
             assert_eq!(
                 pending(&store)?,
                 0,
-                "the last cell's send commit took the row"
+                "the last cell's OK_SEND took the row (Q222)"
             );
             Ok(g.take_events())
         };
@@ -2007,6 +2011,315 @@ fn old_key_cannot_announce_another_identity() -> R {
             [SessionEvent::KeyChangeInvalid]
         ));
         assert_eq!(contact_one(&w.host)?.0, fingerprint_of(new.public())?);
+        Ok(())
+    })
+}
+
+/// Write `content` as a pending control row of session 1 in one transaction: its `ord` and the row decoded again.
+#[cfg(feature = "kat")]
+fn pend(
+    store: &SharedStore,
+    content: &actor::PendingControl,
+) -> Result<(i64, actor::PendingControl), E> {
+    let row = content.encode().map_err(|_| "encode")?;
+    let ord = store
+        .lock()
+        .map_err(|_| "lock")?
+        .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &row))?;
+    Ok((
+        ord,
+        actor::PendingControl::decode(&row).map_err(|_| "decode")?,
+    ))
+}
+
+/// The pending control rows of session 1.
+#[cfg(feature = "kat")]
+fn control_rows(store: &SharedStore) -> Result<usize, E> {
+    Ok(store.lock().map_err(|_| "lock")?.pending_controls(1)?.len())
+}
+
+/// A `RouteUpdate` of the relay queue `n` as pending control content.
+#[cfg(feature = "kat")]
+fn routes_of(n: u8) -> Result<actor::PendingControl, E> {
+    Ok(actor::PendingControl::Routes(
+        secmp_proto::wire::cell::RouteUpdateBody {
+            routes: vec![route(n)?],
+        },
+    ))
+}
+
+/// The host after an identity rotation through a core, opened again from its rows (the `KeyChange` of four fragments
+/// is planned from its pending row): the host's store, its conversation and the guest's.
+#[cfg(feature = "kat")]
+fn rotated_host(
+    label: &str,
+    seed: u64,
+) -> Result<(Fixture, StoreConversation<Fixed>, StoreConversation<Fixed>), E> {
+    use crate::api::{Core, Request};
+
+    let World { host, h, g, .. } = established(label, seed)?;
+    drop(h);
+    let mut core = Core::with_profile(
+        host.profile.clone(),
+        host.clock.clone(),
+        core_sources(seed.wrapping_add(1)),
+    )?;
+    core.handle(Request::RotateIdentity)?;
+    drop(core);
+    let h = open_conversation(
+        &host.profile.store(),
+        ContactId(1),
+        Fixed(entropy(seed.wrapping_add(2))),
+        T0,
+    )?;
+    assert_eq!(control_rows(&host.profile.store())?, 1);
+    Ok((host, h, g))
+}
+
+/// SE-25 (EXTB2-1; spec §9.5, Q222 (2)): the process dies after the seal commit of the `KeyChange`'s last fragment and
+/// before its write — the row outlives that seal, and after the restart the whole `KeyChange` is sent again and reaches
+/// the peer.
+#[cfg(feature = "kat")]
+#[test]
+fn extb2_key_change_survives_last_seal_before_write_restart() -> R {
+    big(|| {
+        let (host, mut h, mut g) = rotated_host("extb2-kc-crash", 611)?;
+        let store = host.profile.store();
+        // type byte + body (§7.6)
+        let total = u64::try_from(secmp_proto::tr::content::chunk_total(1 + 5390))?;
+        for i in 0..total {
+            let cell = next(&mut h, ms(100 + i))?;
+            // the last one is sealed and committed, then the process dies before the write
+            if i + 1 < total {
+                deliver(&mut g, &cell)?;
+            }
+        }
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "the row outlives the seal of the last cell (Q222 2)"
+        );
+        assert!(
+            g.take_events().is_empty(),
+            "peer has only a partial KeyChange"
+        );
+        drop((h, store));
+        let host = host.reopen()?;
+        let mut h =
+            open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(614)), T0)?;
+        for i in 0..8 {
+            deliver(&mut g, &next(&mut h, ms(200 + i))?)?;
+        }
+        assert!(
+            matches!(g.take_events().as_slice(), [SessionEvent::KeyChanged(_)]),
+            "durable KeyChange must reach peer after restart; last sealed fragment was never written"
+        );
+        Ok(())
+    })
+}
+
+/// SE-27 (spec §9.5): an evicted `RouteUpdate` is sent again — new seal, new cell — and its row lives until the
+/// `OK_SEND` of the new cell (deleted at the next slot).
+#[cfg(feature = "kat")]
+#[test]
+fn evicted_route_update_is_resent() -> R {
+    use secmp_proto::wire::cell::RouteDescriptor;
+
+    big(|| {
+        let mut w = established("q222-evict", 641)?;
+        let store = w.host.profile.store();
+        let (ord, content) = pend(&store, &routes_of(2)?)?;
+        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
+        let p1 = w.h.prepare_direct(ms(10)).map_err(|_| "prepare")?;
+        w.h.relayed_direct(p1.token, 7);
+        w.h.evicted_direct(7);
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "the evicted content keeps its row"
+        );
+        assert!(w.h.has_pending_real(), "planned again");
+        let p2 = w.h.prepare_direct(ms(11)).map_err(|_| "prepare")?;
+        assert_ne!(p2.cell.as_bytes(), p1.cell.as_bytes(), "a new seal");
+        w.h.relayed_direct(p2.token, 8);
+        assert_eq!(control_rows(&store)?, 1, "deleted at the next slot");
+        next(&mut w.h, ms(12))?;
+        assert_eq!(control_rows(&store)?, 0);
+        deliver(&mut w.g, &p2.cell)?;
+        let events = w.g.take_events();
+        let [SessionEvent::Routes(r)] = events.as_slice() else {
+            return Err("one Routes event".into());
+        };
+        let [RouteDescriptor::RelayQueue(q)] = r.as_slice() else {
+            return Err("one relay queue".into());
+        };
+        assert_eq!(q.sid, [2; 16]);
+        Ok(())
+    })
+}
+
+/// SE-29 (Q222 (2)): the row of a `KeyChange` lives through the seals and the `OK_SEND`s of its four cells and goes at
+/// the slot after the last `OK_SEND`.
+#[cfg(feature = "kat")]
+#[test]
+fn control_row_deleted_only_after_last_ok_send() -> R {
+    big(|| {
+        let (host, mut h, _g) = rotated_host("q222-last", 643)?;
+        let store = host.profile.store();
+        for i in 0..4_u64 {
+            let p = h.prepare_direct(ms(10 + i)).map_err(|_| "prepare")?;
+            assert_eq!(control_rows(&store)?, 1, "after the seal of cell {i}");
+            h.relayed_direct(p.token, 10 + i);
+            assert_eq!(control_rows(&store)?, 1, "after the OK_SEND of cell {i}");
+        }
+        h.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+        assert_eq!(control_rows(&store)?, 0, "at the next slot");
+        Ok(())
+    })
+}
+
+/// SE-30 (Q222 (3)): after a failed `SEND` the whole `KeyChange` is planned again; the outcomes of the superseded attempt
+/// — an `OK_SEND`, a later eviction — count nothing and plan nothing; the row goes once every cell of the new attempt
+/// has its `OK_SEND`, and the peer gets the `KeyChange` once.
+#[cfg(feature = "kat")]
+#[test]
+fn superseded_control_attempt_outcomes_are_ignored() -> R {
+    big(|| {
+        let (host, mut h, mut g) = rotated_host("q222-super", 651)?;
+        let store = host.profile.store();
+        let p0 = h.prepare_direct(ms(10)).map_err(|_| "prepare")?;
+        let p1 = h.prepare_direct(ms(11)).map_err(|_| "prepare")?;
+        h.failed_direct(p0.token);
+        h.relayed_direct(p1.token, 5);
+        let q0 = h.prepare_direct(ms(12)).map_err(|_| "prepare")?;
+        h.relayed_direct(q0.token, 6);
+        // the superseded attempt's cell is evicted late
+        h.evicted_direct(5);
+        let mut cells = vec![p1.cell, q0.cell];
+        for i in 1..=3_u64 {
+            let q = h.prepare_direct(ms(12 + i)).map_err(|_| "prepare")?;
+            if i == 3 {
+                assert_eq!(control_rows(&store)?, 1, "after the last seal");
+            }
+            h.relayed_direct(q.token, 6 + i);
+            cells.push(q.cell);
+        }
+        assert_eq!(control_rows(&store)?, 1, "after the last OK_SEND");
+        assert!(!h.has_pending_real(), "nothing planned again");
+        h.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+        assert_eq!(control_rows(&store)?, 0);
+        for cell in &cells {
+            deliver(&mut g, cell)?;
+        }
+        assert!(matches!(
+            g.take_events().as_slice(),
+            [SessionEvent::KeyChanged(_)]
+        ));
+        Ok(())
+    })
+}
+
+/// SE-31 (Q222 (2)): a removal's `Control{1}` whose cell was written but got no `OK_SEND` before the process ended is
+/// read again from its row after the restart and sent again; its row goes after that cell's `OK_SEND`.
+#[cfg(feature = "kat")]
+#[test]
+fn control_written_without_ok_send_is_resent_after_restart() -> R {
+    use crate::api::{Core, Request};
+
+    big(|| {
+        let World { host, h, mut g, .. } = world("q222-remove", 647)?;
+        drop(h);
+        let mut core =
+            Core::with_profile(host.profile.clone(), host.clock.clone(), core_sources(648))?;
+        core.handle(Request::Remove {
+            contact: ContactId(1),
+        })?;
+        drop(core);
+        let mut h =
+            open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(649)), T0)?;
+        let c = next(&mut h, ms(5))?;
+        deliver(&mut g, &c)?;
+        assert!(matches!(
+            g.take_events().as_slice(),
+            [SessionEvent::ContactRemoved]
+        ));
+        // no OK_SEND: the process ends
+        drop(h);
+        let host = host.reopen()?;
+        let store = host.profile.store();
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(650)), T0)?;
+        assert_eq!(control_rows(&store)?, 1, "read again after the restart");
+        let p = h.prepare_direct(ms(6)).map_err(|_| "prepare")?;
+        deliver(&mut g, &p.cell)?;
+        assert_eq!(g.may_send_real(), Err(Refusal::Removed));
+        h.relayed_direct(p.token, 1);
+        next(&mut h, ms(7))?;
+        assert_eq!(control_rows(&store)?, 0);
+        Ok(())
+    })
+}
+
+/// SE-37 (spec §10.6 (5)): an evicted `RouteUpdate` for which a newer one is pending is not sent again — its row goes,
+/// only the newer one reaches the peer.
+#[cfg(feature = "kat")]
+#[test]
+fn superseded_route_update_is_not_resent() -> R {
+    use secmp_proto::wire::cell::RouteDescriptor;
+
+    big(|| {
+        let mut w = established("q222-routes", 653)?;
+        let store = w.host.profile.store();
+        let (ord, content) = pend(&store, &routes_of(3)?)?;
+        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
+        let p1 = w.h.prepare_direct(ms(10)).map_err(|_| "prepare")?;
+        w.h.relayed_direct(p1.token, 7);
+        let (ord, content) = pend(&store, &routes_of(4)?)?;
+        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
+        w.h.evicted_direct(7);
+        assert_eq!(control_rows(&store)?, 1, "the newer RouteUpdate only");
+        let mut sids = Vec::new();
+        for i in 0..3_u64 {
+            deliver(&mut w.g, &next(&mut w.h, ms(11 + i))?)?;
+            for e in w.g.take_events() {
+                if let SessionEvent::Routes(r) = e {
+                    for d in &r {
+                        if let RouteDescriptor::RelayQueue(q) = d {
+                            sids.push(q.sid);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(sids, [[4; 16]], "one RouteUpdate, the newer one");
+        Ok(())
+    })
+}
+
+/// SE-41 (spec §9.5): an eviction after the row went (the content had all its `OK_SEND`s) writes the row again; the
+/// content is sent again and its new row goes after the new cell's `OK_SEND`.
+#[cfg(feature = "kat")]
+#[test]
+fn late_eviction_rewrites_the_control_row() -> R {
+    big(|| {
+        let mut w = established("q222-late", 655)?;
+        let store = w.host.profile.store();
+        let (ord, content) = pend(&store, &routes_of(2)?)?;
+        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
+        let p1 = w.h.prepare_direct(ms(10)).map_err(|_| "prepare")?;
+        w.h.relayed_direct(p1.token, 7);
+        next(&mut w.h, ms(11))?;
+        assert_eq!(control_rows(&store)?, 0, "the row went after the OK_SEND");
+        w.h.evicted_direct(7);
+        assert_eq!(control_rows(&store)?, 1, "written again");
+        let p2 = w.h.prepare_direct(ms(12)).map_err(|_| "prepare")?;
+        w.h.relayed_direct(p2.token, 8);
+        next(&mut w.h, ms(13))?;
+        assert_eq!(control_rows(&store)?, 0);
+        deliver(&mut w.g, &p2.cell)?;
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::Routes(_)]
+        ));
         Ok(())
     })
 }

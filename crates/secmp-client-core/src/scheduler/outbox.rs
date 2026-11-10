@@ -321,8 +321,6 @@ pub struct CommitParts<'a> {
     /// The contact's identity before the verified `KeyChange` of this cell: kept so that a repeat of it verifies,
     /// ADR-058.
     pub previous_identity: Option<&'a [u8]>,
-    /// A sent cell that is the last of a pending control content: the `ord` of its row, deleted in this commit (Q210 c).
-    pub control_done: Option<i64>,
     /// The messages delivered by the received cell.
     pub delivered: &'a [DeliveredMessage<'a>],
     /// The messages that a `Receipt{delivered}` in the received cell confirms: `Delivered` in the same commit (SE-21).
@@ -366,6 +364,18 @@ pub trait Persist {
         let bytes = parts.ratchet.to_bytes().map_err(|_| PersistError)?;
         self.commit(kind, &bytes)
     }
+
+    /// The last cell of the pending control content at `ord` has its `OK_SEND`: its row goes (Q222).
+    ///
+    /// # Errors
+    /// [`PersistError`]: the row stays; the caller tries again.
+    fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError>;
+
+    /// A control content whose row went is planned again: its row is written again; `None`: no durable row.
+    ///
+    /// # Errors
+    /// [`PersistError`]: nothing is written; the caller tries again.
+    fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError>;
 }
 
 /// The in-memory durability: the last durable state, counters, and failure injection for the tests.
@@ -469,6 +479,20 @@ impl Persist for MemPersist {
         let bytes = parts.ratchet.to_bytes().map_err(|_| PersistError)?;
         self.keep(&bytes)
     }
+
+    fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError> {
+        match self.mirror.as_mut() {
+            Some(m) => m.control_relayed(ord),
+            None => Ok(()),
+        }
+    }
+
+    fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError> {
+        match self.mirror.as_mut() {
+            Some(m) => m.control_requeued(row),
+            None => Ok(None),
+        }
+    }
 }
 
 impl MemPersist {
@@ -520,5 +544,53 @@ mod tests {
         assert!(outbox.discard(&[1; 16]));
         assert_eq!(outbox.state(&[1; 16]), None);
         assert_eq!(outbox.state(&[3; 16]), Some(MsgState::Queued));
+    }
+
+    /// The calls a mirror saw: `("requeued", row length)`, `("relayed", ord)`.
+    type Calls = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, i64)>>>;
+
+    /// A mirror that records the control-row calls and answers `ord` 7 for a written row.
+    struct Mirror(Calls);
+
+    impl Persist for Mirror {
+        fn commit(&mut self, _kind: PersistKind, _state: &[u8]) -> Result<(), PersistError> {
+            Ok(())
+        }
+
+        fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError> {
+            self.0
+                .lock()
+                .map_err(|_| PersistError)?
+                .push(("relayed", ord));
+            Ok(())
+        }
+
+        fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError> {
+            let len = i64::try_from(row.len()).map_err(|_| PersistError)?;
+            self.0
+                .lock()
+                .map_err(|_| PersistError)?
+                .push(("requeued", len));
+            Ok(Some(7))
+        }
+    }
+
+    /// SE-39 (PC-03, Q222): without a mirror the in-memory durability has no control rows (a written row has no `ord`);
+    /// with one, both control-row calls go to it and its answers come back.
+    #[test]
+    fn mem_persist_forwards_control_rows_to_its_mirror() -> Result<(), PersistError> {
+        let calls = Calls::default();
+        let mut persist = MemPersist::new();
+        assert_eq!(persist.control_requeued(b"r"), Ok(None));
+        assert_eq!(persist.control_relayed(3), Ok(()));
+        assert!(calls.lock().map_err(|_| PersistError)?.is_empty());
+        persist.set_mirror(Box::new(Mirror(std::sync::Arc::clone(&calls))));
+        assert_eq!(persist.control_requeued(b"r"), Ok(Some(7)));
+        assert_eq!(persist.control_relayed(7), Ok(()));
+        assert_eq!(
+            *calls.lock().map_err(|_| PersistError)?,
+            [("requeued", 1), ("relayed", 7)]
+        );
+        Ok(())
     }
 }

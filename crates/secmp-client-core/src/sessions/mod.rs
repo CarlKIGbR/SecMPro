@@ -114,7 +114,8 @@ pub(crate) fn trust_write_refusal(
 
 /// Block real sends on the session of `contact` and tell the peer (`Removed`: `Control{1}`, `Reset`: `Control{2}`;
 /// Q210 b, c): in one store transaction the block byte of the trust row — set and never cleared — and the `Control` as a
-/// pending control content; then both in memory (the `Control` goes out on a coming slot, its row with its send commit).
+/// pending control content; then both in memory (the `Control` goes out on a coming slot, its row goes after the last
+/// cell's `OK_SEND`, Q222).
 ///
 /// # Errors
 /// [`Error::Unavailable`] if the store cannot be written or `block` is not a block (nothing changes).
@@ -395,7 +396,7 @@ pub fn open_conversation<S: EntropySource>(
         .and_then(|row| IksPublic::decode(&row).ok())
         .and_then(|iks| ik_sig(&iks).ok());
     conversation.set_peer_identity(peer_identity(store, contact)?, previous);
-    // the control contents whose effect is durable and that were not sealed yet (Q210 c)
+    // the control contents whose effect is durable and whose last cell has no `OK_SEND` yet (Q210 c, Q222)
     let pending = store
         .lock()
         .map_err(|_| Error::Unavailable)?

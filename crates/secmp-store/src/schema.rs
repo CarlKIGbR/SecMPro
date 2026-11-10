@@ -40,7 +40,7 @@ pub mod part {
     /// The three sealed handshake cells of an initiator, until the first decrypted reply (Q150, IN-14).
     pub const HANDSHAKE: i64 = 4;
     /// A pending control content (a `RouteUpdate`, a `KeyChange`, a `Control`), one row per content (`ord`), from the
-    /// commit that makes its effect durable until the send commit of its last cell (Q210 c).
+    /// commit that makes its effect durable until the last cell's `OK_SEND` (Q210 c, Q222).
     pub const CONTROL: i64 = 5;
     /// The contact's identity (`IKSPublic`) before the last accepted `KeyChange`: its `IK_sig` verifies a repeat of that
     /// `KeyChange` (ADR-058). One row, ord 0.

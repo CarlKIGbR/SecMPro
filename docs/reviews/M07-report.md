@@ -236,6 +236,7 @@ Phase A, A-4 (times: `ci-fast-a4-6-4383c8a.txt`; red-first lines: `redfirst-a4-1
 
 | Gate | Result |
 |---|---|
+| PR run 41293668505 on `9b511a2` (Draft-PR #15) | main jobs green; mutants-shards 1, 2, 8 red with one undocumented survivor each: `secmp-client-core/src/testutil.rs:23:22`, `:26:71`, `:199:64` (Q20 trap: `cfg(all(test, feature = "kat"))`); shard 9 red, cause not yet read, re-run on the next push. Fix Q198 (`mutants-list-testutil-07ad07c.txt`: 30 → 0; `mutants-list-proto-cfg-07ad07c.txt`: 268 → 268, none inside the split modules; `ci-fast-ci2-07ad07c.txt` PASS) |
 | `cargo xtask ci-fast` at `fa0adef` (`ci-fast-a1-fa0adef.txt`) | PASS: kat 93 s, harness 942 s |
 | `cargo xtask ci-fast` at `62c2dbc` (`ci-fast-a1c-62c2dbc.txt`, first line names the head, clean tree) | PASS: fmt 0 s, clippy 0 s, policy 1 s, deny 1 s, vet 1 s, audit 2 s, cooldown 23 s (561 packages), nextest 16 s, doctest 1 s, hello 0 s, kat 89 s, harness 1023 s |
 | `cargo xtask ci-fast` at `bf54d98` (`ci-fast-a2-bf54d98.txt`, first line names the head, clean tree) | PASS: fmt 1 s, clippy 0 s, policy 1 s, deny 1 s, vet 1 s, audit 1 s, cooldown 24 s, nextest 42 s, doctest 1 s, hello 2 s, kat 141 s, harness 862 s |
@@ -1399,3 +1400,4 @@ $ git diff --stat 9290e20..HEAD -- crates/secmp-proto vectors docs/03-protocol-s
 $
 ```
 (empty; `HEAD` = `e80e11c`.)
+- **D-CI3:** `secmp-client-core/src/testutil.rs` was mutated in PR run 41293668505 because `lib.rs` declared it under `cfg(all(test, feature = "kat"))` (cargo-mutants skips only a plain `cfg(test)`; Q20 rule, `5e1a136`). Fixed by splitting into `#[cfg(test)]` + `#[cfg(feature = "kat")]` at three sites (`client-core/src/lib.rs` `mod testutil`, `proto/src/prekeys.rs` `mod tests`, `proto/src/tr/state.rs` `mod tr_digest`; the two proto edits permitted by the reviewer, CI2c ruling); no `mutants-accepted` row. Proto list unchanged at 268: the proto test modules were already outside the list.

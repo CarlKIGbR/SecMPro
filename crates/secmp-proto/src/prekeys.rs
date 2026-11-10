@@ -1061,7 +1061,8 @@ impl PrekeyStore for MemoryPrekeyStore {
     }
 }
 
-#[cfg(all(test, feature = "kat"))]
+#[cfg(test)]
+#[cfg(feature = "kat")]
 mod tests {
     use super::*;
     use crate::tr::FixedEntropy;

@@ -497,7 +497,8 @@ impl RatchetState {
 
 /// `StateDigestV1` of the `tr` suite, parsed from `RatchetStateV1` at the documented offsets (shared with the replay test
 /// `tests/tr_vectors.rs` and the generator; G7-18).
-#[cfg(all(test, feature = "kat"))]
+#[cfg(test)]
+#[cfg(feature = "kat")]
 #[path = "../../tests/common/tr_digest.rs"]
 mod tr_digest;
 

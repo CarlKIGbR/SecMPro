@@ -1,0 +1,34 @@
+07ad07c09de9103a079860cccede76cab3c0604f
+== before (START 07ad07c)
+crates/secmp-client-core/src/testutil.rs:23:5: replace stream -> Vec<u8> with vec![]
+crates/secmp-client-core/src/testutil.rs:23:5: replace stream -> Vec<u8> with vec![0]
+crates/secmp-client-core/src/testutil.rs:23:5: replace stream -> Vec<u8> with vec![1]
+crates/secmp-client-core/src/testutil.rs:23:22: replace | with & in stream
+crates/secmp-client-core/src/testutil.rs:23:22: replace | with ^ in stream
+crates/secmp-client-core/src/testutil.rs:26:71: replace ^ with | in stream
+crates/secmp-client-core/src/testutil.rs:26:71: replace ^ with & in stream
+crates/secmp-client-core/src/testutil.rs:34:5: replace entropy -> FixedEntropy with Default::default()
+crates/secmp-client-core/src/testutil.rs:34:39: replace << with >> in entropy
+crates/secmp-client-core/src/testutil.rs:39:5: replace hex -> String with String::new()
+crates/secmp-client-core/src/testutil.rs:39:5: replace hex -> String with "xyzzy".into()
+crates/secmp-client-core/src/testutil.rs:49:5: replace unhex -> Result<Vec<u8>, E> with Ok(vec![])
+crates/secmp-client-core/src/testutil.rs:49:5: replace unhex -> Result<Vec<u8>, E> with Ok(vec![0])
+crates/secmp-client-core/src/testutil.rs:49:5: replace unhex -> Result<Vec<u8>, E> with Ok(vec![1])
+crates/secmp-client-core/src/testutil.rs:60:5: replace vector_field -> Result<String, E> with Ok(String::new())
+crates/secmp-client-core/src/testutil.rs:60:5: replace vector_field -> Result<String, E> with Ok("xyzzy".into())
+crates/secmp-client-core/src/testutil.rs:98:9: replace Fixture::reopen -> Result<Self, E> with Ok(Default::default())
+crates/secmp-client-core/src/testutil.rs:116:9: replace Fixture::at_day with ()
+crates/secmp-client-core/src/testutil.rs:123:5: replace relay_ref -> secmp_proto::wire::inv::RelayRef with Default::default()
+crates/secmp-client-core/src/testutil.rs:133:5: replace wire_profile -> Result<secmp_proto::wire::inv::Profile, E> with Ok(Default::default())
+crates/secmp-client-core/src/testutil.rs:144:9: replace Fixture::add_relay -> Result<(), E> with Ok(())
+crates/secmp-client-core/src/testutil.rs:168:9: replace <impl crate::sessions::actor::EntropySource for Fixed>::entropy -> &mut FixedEntropy with Box::leak(Box::new(Default::default()))
+crates/secmp-client-core/src/testutil.rs:184:5: replace ratchet_pair -> Result<(secmp_proto::tr::RatchetState, FixedEntropy, secmp_proto::tr::RatchetState, FixedEntropy,), E, > with Ok((Default::default(), Default::default(), Default::default(), Default::default()))
+crates/secmp-client-core/src/testutil.rs:189:75: replace << with >> in ratchet_pair
+crates/secmp-client-core/src/testutil.rs:190:75: replace << with >> in ratchet_pair
+crates/secmp-client-core/src/testutil.rs:198:64: replace << with >> in ratchet_pair
+crates/secmp-client-core/src/testutil.rs:199:64: replace << with >> in ratchet_pair
+crates/secmp-client-core/src/testutil.rs:211:5: replace insert_record -> Result<(), E> with Ok(())
+crates/secmp-client-core/src/testutil.rs:260:5: replace round_on -> Result<(crate::scheduler::types::RelayId, crate::scheduler::types::QueueId,), E, > with Ok((Default::default(), Default::default()))
+crates/secmp-client-core/src/testutil.rs:267:28: replace == with != in round_on
+== after (edited tree)
+after-count: 0 (testutil.rs); before-count: 30

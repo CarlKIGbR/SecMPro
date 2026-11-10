@@ -37,6 +37,7 @@ pub mod scheduler;
 pub mod sessions;
 #[cfg(not(kani))]
 pub mod settings;
-#[cfg(all(test, feature = "kat"))]
+#[cfg(test)]
+#[cfg(feature = "kat")]
 mod testutil;
 pub mod timing;

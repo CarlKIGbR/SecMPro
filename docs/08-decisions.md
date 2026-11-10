@@ -1081,6 +1081,20 @@ reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
 
 ---
 
+### ADR-058 — an authenticated repeat of the accepted KeyChange is a no-op (§7.7)
+
+**Status.** Accepted (Reviewer, 2026-11-10, under the owner's delegation of 2026-11-10 — "ich möchte die stärkste security, ich vertraue dir in adr entscheidungen"). Q222, WEISUNG M7-B-4f.
+
+**Context.** Q222 keeps a pending control content until its last cell's `OK_SEND` and re-plans it after a failure, an eviction, a lost queue, a send-queue switch or a restart (§9.5, §10.4); a KeyChange can therefore reach the peer twice. The peer verifies a KeyChange under the contact's current `IK_sig` (§7.7), which after the first copy is the new key; the second copy, signed by the old key, does not verify there and would freeze the session although nothing changed.
+
+**Decision.** (1) The receiver keeps, per contact, the identity (`IKSPublic`) the contact had immediately before the last accepted KeyChange — written in the same receive commit that stores the new identity (`sessions` part 6, sealed like every `sessions` row; absent until the first accepted KeyChange; a stored value that does not load is treated as absent). (2) A KeyChange is verified under the current `IK_sig` as before. Only if that fails, a previous `IK_sig` is held, the KeyChange's new `IKSPublic` equals the stored current identity, and `HybridVerify(previous IK_sig, "SecMP-TR/1 keychange", fingerprint(new))` succeeds, the content is the already-accepted succession: no-op — the cell's commit runs and it is acknowledged (§9.3); no event, no identity, trust, block or verified change; not frozen. Every other failing KeyChange freezes as before. No KeyChange is dropped without a valid signature. Only the existing construction and label are used (`HybridVerify`, `"SecMP-TR/1 keychange"`); the API is `secmp_proto::tr::content::Inbox::receive_known` and `Delivery::KeyChangeUnchanged`.
+
+**Alternatives.** (a) Compare-only no-op (drop a KeyChange naming the stored identity before verification) — rejected: it drops an unverifiable KeyChange and loses §7.7's alarm. (b) Exempt KeyChange from re-sending — rejected: EXTB2-1 stays open for identity succession. (c) Freeze on every repeat (§7.7 as written) — rejected: with Q222's re-sends a lost `OK_SEND`, a lost queue or a restart would freeze sessions without an attacker.
+
+**Consequences.** One stored public identity per contact (no schema or sealed-layout change; `ref/` and the store vectors are unaffected). `secmp-proto` gains `Inbox::receive_known` and `Delivery::KeyChangeUnchanged` (API only; no wire, label, vector or `formal/` change). A KeyChange older than the last accepted one (KC1 after KC2) still freezes (OPEN-M7-B-12). `docs/03` is unchanged; a §7.7 erratum line is the owner's/DOCS queue, not B-4f.
+
+---
+
 *Template for new entries:*
 
 ### ADR-0NN — Title

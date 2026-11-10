@@ -334,6 +334,10 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     inbox: Inbox,
     trust: Trust,
     peer: HybridVerifyingKey,
+    /// The identity the contact row holds (`IK_sig` of it is `peer`), when the host knows it (ADR-058).
+    peer_iks: Option<IksPublic>,
+    /// The `IK_sig` before the last accepted `KeyChange`: a repeat of that `KeyChange` verifies under it (ADR-058).
+    prev_peer: Option<HybridVerifyingKey>,
     seen: BTreeSet<MsgId>,
     received: Vec<Received>,
     receipts_due: Vec<MsgId>,
@@ -397,6 +401,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             inbox: Inbox::new(),
             trust: Trust::Verified,
             peer,
+            peer_iks: None,
+            prev_peer: None,
             seen: BTreeSet::new(),
             received: Vec::new(),
             receipts_due: Vec::new(),
@@ -571,6 +577,14 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     #[cfg(any(test, feature = "kat"))]
     pub const fn raw_app_payloads_kat(&mut self) {
         self.app_rules = false;
+    }
+
+    /// The identity the contact row holds (`current`, whose `IK_sig` is the conversation's peer key) and the `IK_sig` the
+    /// contact had before its last accepted `KeyChange` (`previous`): a `KeyChange` naming `current` and signed by
+    /// `previous` is the accepted succession again and changes nothing (ADR-058, spec §7.7).
+    pub fn set_peer_identity(&mut self, current: IksPublic, previous: Option<HybridVerifyingKey>) {
+        self.peer_iks = Some(current);
+        self.prev_peer = previous;
     }
 
     /// `T_RS` of this conversation in ms (0: none).
@@ -952,6 +966,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     block: None,
                     identity: None,
                     control_done: pending,
+                    previous_identity: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,
@@ -1203,30 +1218,25 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         // comes again)
         let mut inbox = self.inbox.clone();
         let mut trust = self.trust;
-        let delivery = inbox.receive(opened.plaintext(), &self.peer, &mut trust);
+        // a repeat of the accepted key change, signed by the previous `IK_sig`, changes nothing (ADR-058)
+        let delivery = inbox.receive_known(
+            opened.plaintext(),
+            &self.peer,
+            self.peer_iks.as_ref(),
+            self.prev_peer.as_ref(),
+            &mut trust,
+        );
         // a verified key change whose new `IK_sig` cannot be loaded is unverifiable: the session freezes (spec §7.7)
         let (delivery, new_peer) = admit_key_change(delivery, &mut trust);
+        // the identity an admitted key change replaces is durable with it (ADR-058); one that does not encode fails the
+        // commit, as the new identity does
+        let previous_identity = replaced_identity(&delivery, self.peer_iks.as_ref());
         // the messages this cell delivers for the first time are durable with the state that consumed it
         let received_ms = self
             .unix_base
             .saturating_mul(1000)
             .saturating_add(self.last_now_ms);
-        let fresh: Vec<DeliveredMessage<'_>> = match &delivery {
-            // ADR-054 items 1 and 3 (EXTB2-3): an invalid message is dropped, the cell is still committed and acknowledged
-            Delivery::Messages(messages) => messages
-                .iter()
-                .filter(|m| !self.app_rules || app_payload_ok(m.kind, &m.payload))
-                .filter(|m| !self.seen.contains(&m.msg_id))
-                .map(|m| DeliveredMessage {
-                    msg_id: m.msg_id,
-                    kind: m.kind.byte(),
-                    payload: m.payload.as_slice(),
-                    expire_after: m.expire_after,
-                    received_ms,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
+        let fresh = self.fresh_messages(&delivery, received_ms);
         // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
         let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
         let trust_changed = (trust != self.trust).then_some(trust_code(trust));
@@ -1266,6 +1276,11 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     routes: routes.as_ref().map(|r| r.as_slice()),
                     clear_handshake,
                     control_done: None,
+                    previous_identity: previous_identity
+                        .as_ref()
+                        .map_err(|e| *e)?
+                        .as_ref()
+                        .map(|b| b.as_slice()),
                 },
             )?;
             *durable = Zeroizing::new(bytes.to_vec());
@@ -1286,6 +1301,31 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
         self.apply_delivery(delivery, new_peer);
         Ok(())
+    }
+
+    /// The messages of `delivery` the history does not hold yet, stamped `received_ms`: durable with the state that
+    /// consumed their cell. ADR-054 items 1 and 3 (EXTB2-3): an invalid message is dropped, the cell is still committed
+    /// and acknowledged.
+    fn fresh_messages<'d>(
+        &self,
+        delivery: &'d Delivery,
+        received_ms: u64,
+    ) -> Vec<DeliveredMessage<'d>> {
+        match delivery {
+            Delivery::Messages(messages) => messages
+                .iter()
+                .filter(|m| !self.app_rules || app_payload_ok(m.kind, &m.payload))
+                .filter(|m| !self.seen.contains(&m.msg_id))
+                .map(|m| DeliveredMessage {
+                    msg_id: m.msg_id,
+                    kind: m.kind.byte(),
+                    payload: m.payload.as_slice(),
+                    expire_after: m.expire_after,
+                    received_ms,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// What a committed cell tells the session: messages for the application, receipts, the events for the host.
@@ -1324,9 +1364,11 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             }
             Delivery::KeyChange(iks) => {
                 // the contact row holds the new identity already (the receive commit); later key changes verify under it
+                // the replaced key verifies a repeat of this change (ADR-058)
                 if let Some(peer) = new_peer {
-                    self.peer = peer;
+                    self.prev_peer = Some(core::mem::replace(&mut self.peer, peer));
                 }
+                self.peer_iks = Some(iks.clone());
                 self.events.push(SessionEvent::KeyChanged(Box::new(iks)));
             }
             Delivery::KeyChangeRefused => self.events.push(SessionEvent::KeyChangeInvalid),
@@ -1385,6 +1427,19 @@ fn routes_bytes(routes: &[RouteDescriptor]) -> Option<Zeroizing<Vec<u8>>> {
         out.extend_from_slice(&r.encode().ok()?);
     }
     Some(out)
+}
+
+/// The identity an admitted `KeyChange` replaces (`current`, encoded), durable with the new one (ADR-058); `None` for
+/// any other delivery or when the conversation does not know the identity. One that does not encode fails the commit, as
+/// the new identity does.
+fn replaced_identity(
+    delivery: &Delivery,
+    current: Option<&IksPublic>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> {
+    match (delivery, current) {
+        (Delivery::KeyChange(_), Some(cur)) => cur.encode().map(Some).map_err(|_| PersistError),
+        _ => Ok(None),
+    }
 }
 
 /// The peer's new identity of a verified `KeyChange`: the encoded `IksPublic` and its fingerprint.

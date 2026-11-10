@@ -49,13 +49,22 @@ pub const fn trust_of(code: u8) -> Option<Trust> {
 /// # Errors
 /// [`Error::Unavailable`] if there is no such contact or its identity does not decode.
 pub fn peer_key(store: &SharedStore, contact: ContactId) -> Result<HybridVerifyingKey, Error> {
+    Ok(ik_sig(&peer_identity(store, contact)?)?)
+}
+
+/// The identity (`IKSPublic`) the contact row of `contact` holds (ADR-058: a `KeyChange` naming it and signed by the
+/// previous `IK_sig` is the accepted succession again).
+///
+/// # Errors
+/// [`Error::Unavailable`] if there is no such contact or its identity does not decode.
+pub fn peer_identity(store: &SharedStore, contact: ContactId) -> Result<IksPublic, Error> {
     let s = store.lock().map_err(|_| Error::Unavailable)?;
     let row = s
         .contacts()?
         .into_iter()
         .find(|c| c.id == contact.0)
         .ok_or(Error::Unavailable)?;
-    Ok(ik_sig(&IksPublic::decode(&row.iks)?)?)
+    Ok(IksPublic::decode(&row.iks)?)
 }
 
 /// The user verified the safety number of `contact` (spec §6.7): the contact and the session are verified, in one store
@@ -376,6 +385,16 @@ pub fn open_conversation<S: EntropySource>(
     .map_err(|_| Error::Unavailable)?;
     conversation.seed_seen(history);
     conversation.restore_block(block);
+    // the identity before the last accepted key change (ADR-058): a read or open error fails the open like every other
+    // part; a row that does not decode or whose `IK_sig` does not load is treated as absent (fail closed: a repeat
+    // freezes)
+    let previous = store
+        .lock()
+        .map_err(|_| Error::Unavailable)?
+        .previous_identity(contact.0)?
+        .and_then(|row| IksPublic::decode(&row).ok())
+        .and_then(|iks| ik_sig(&iks).ok());
+    conversation.set_peer_identity(peer_identity(store, contact)?, previous);
     // the control contents whose effect is durable and that were not sealed yet (Q210 c)
     let pending = store
         .lock()

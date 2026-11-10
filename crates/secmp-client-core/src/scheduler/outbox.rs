@@ -318,6 +318,9 @@ pub struct CommitParts<'a> {
     /// The peer's new identity of a verified `KeyChange` in the received cell (encoded `IksPublic`, fingerprint): the
     /// contact row takes it, unverified, in the same commit (Q210 a, spec §7.7).
     pub identity: Option<(&'a [u8], &'a [u8])>,
+    /// The contact's identity before the verified `KeyChange` of this cell: kept so that a repeat of it verifies,
+    /// ADR-058.
+    pub previous_identity: Option<&'a [u8]>,
     /// A sent cell that is the last of a pending control content: the `ord` of its row, deleted in this commit (Q210 c).
     pub control_done: Option<i64>,
     /// The messages delivered by the received cell.

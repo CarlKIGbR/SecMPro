@@ -26,3 +26,54 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(adr054_recei
     assertion `left == right` failed: the test kit's switch
       left: []
      right: [[52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52]]
+
+## step 3 ADR-058
+### SE-33 sessions::tests::duplicate_key_change_is_dropped_not_frozen (head 7ac3307 + the step-3 tests only; no fix)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(duplicate_key_change_is_dropped) | test(forged_duplicate) | test(older_key_change_after) | test(old_key_cannot_announce)'
+    thread '<unnamed>' (2216009) panicked at crates/secmp-client-core/src/sessions/tests.rs:1876:9:
+    assertion `left == right` failed: a repeat is not frozen
+      left: Frozen
+     right: KeyChanged
+(SE-42, SE-44, SE-45 are green on the unfixed tree — the unfixed tree freezes every failing KeyChange; their reds are the
+named mutations of the fix, below.)
+### proto tr::tests::content_key_change_authenticated_repeat_branches — mutation (1): the fallback arm deleted (reverted)
+cmd: cargo nextest run -p secmp-proto --features kat -E 'test(content_key_change_authenticated_repeat_branches)'
+    thread 'tr::tests::content_key_change_authenticated_repeat_branches' (2219189) panicked at crates/secmp-proto/src/tr/tests.rs:2467:5:
+    assertion `left == right` failed: (b)
+      left: "KeyChangeRefused"
+     right: "KeyChangeUnchanged"
+### proto tr::tests::content_key_change_authenticated_repeat_branches — mutation (2): `current == Some(&kc.iks) &&` deleted (reverted)
+    thread 'tr::tests::content_key_change_authenticated_repeat_branches' (2220770) panicked at crates/secmp-proto/src/tr/tests.rs:2480:5:
+    assertion `left == right` failed: (e)
+      left: "KeyChangeUnchanged"
+     right: "KeyChangeRefused"
+### store sessions::tests::previous_identity_round_trip — mutation: `put_previous_identity` body `Ok(())` (new items; reverted)
+cmd: cargo nextest run -p secmp-store --features kat -E 'test(previous_identity_round_trip)'
+    thread 'sessions::tests::previous_identity_round_trip' (2222081) panicked at crates/secmp-store/src/sessions.rs:458:9:
+    assertion `left == right` failed
+      left: None
+     right: Some([105, 107, 115, 45, 97])
+### SE-42 sessions::tests::forged_duplicate_key_change_freezes — mutation `previous.is_some_and(|p| key_change_verifies(&kc, p).is_ok())` → `previous.is_some()` (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(forged_duplicate)'
+    thread '<unnamed>' (2224816) panicked at crates/secmp-client-core/src/sessions/tests.rs:1916:9:
+    assertion `left == right` failed
+      left: KeyChanged
+     right: Frozen
+### SE-43 sessions::tests::key_change_naming_current_identity_without_previous_freezes — mutation → `previous.map_or(true, |p| key_change_verifies(&kc, p).is_ok())` (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(key_change_naming_current)'
+    thread '<unnamed>' (2225938) panicked at crates/secmp-client-core/src/sessions/tests.rs:1941:9:
+    assertion `left == right` failed
+      left: Unverified
+     right: Frozen
+### SE-45 sessions::tests::old_key_cannot_announce_another_identity — mutation `current == Some(&kc.iks) &&` deleted (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(old_key_cannot_announce)'
+    thread '<unnamed>' (2227069) panicked at crates/secmp-client-core/src/sessions/tests.rs:2003:9:
+    assertion `left == right` failed
+      left: KeyChanged
+     right: Frozen
+### SE-44 sessions::tests::older_key_change_after_a_newer_one_freezes — the named two-line mutation: actor.rs `self.prev_peer = Some(core::mem::replace(&mut self.peer, peer));` → `self.prev_peer.get_or_insert(core::mem::replace(&mut self.peer, peer));` and content.rs `current == Some(&kc.iks) &&` deleted (both reverted; `git diff` of both hunks empty)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(older_key_change_after)'
+    thread '<unnamed>' (2228199) panicked at crates/secmp-client-core/src/sessions/tests.rs:1980:9:
+    assertion `left == right` failed
+      left: KeyChanged
+     right: Frozen

@@ -128,6 +128,15 @@ pub fn delete_handshake(tx: &mut Tx<'_>, session: i64) -> Result<()> {
     Ok(())
 }
 
+/// Write the contact's identity before the last accepted `KeyChange` (`IKSPublic` encoding; ADR-058): sealed like every
+/// `sessions` row, one row (ord 0), replaced by the next accepted `KeyChange`.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails.
+pub fn put_previous_identity(tx: &mut Tx<'_>, session: i64, iks: &[u8]) -> Result<()> {
+    put(tx, session, part::PREVIOUS_IDENTITY, 0, iks)
+}
+
 /// Write a pending control content of `session` (Q210 c): sealed, at the next `ord` of the CONTROL part; returns that
 /// `ord`. The client's encoding is opaque here.
 ///
@@ -385,6 +394,18 @@ impl Store {
         self.read_part(session, part::CONTROL)
     }
 
+    /// The contact's identity before the last accepted `KeyChange` of `session` (ADR-058); `None` before the first one.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a read or an open fails.
+    pub fn previous_identity(&self, session: i64) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        Ok(self
+            .read_part(session, part::PREVIOUS_IDENTITY)?
+            .into_iter()
+            .next()
+            .map(|(_, d)| d))
+    }
+
     /// The reassembly state and the trust of `session` (the INBOX and TRUST parts only).
     ///
     /// # Errors
@@ -424,6 +445,39 @@ mod tests {
     use crate::kat::{TempDir, TestKey};
 
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
+
+    /// ADR-058: the previous identity of a session is one sealed row (part 6, ord 0) — absent at first, written, replaced
+    /// by the next write, apart per session, and not in the clear in `sessions.data`.
+    #[test]
+    fn previous_identity_round_trip() -> R {
+        let dir = TempDir::new("previous-identity")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        assert!(store.previous_identity(4)?.is_none());
+        store.txn(|tx| put_previous_identity(tx, 4, b"iks-a"))?;
+        assert_eq!(
+            store.previous_identity(4)?.as_deref().map(Vec::as_slice),
+            Some(&b"iks-a"[..])
+        );
+        store.txn(|tx| put_previous_identity(tx, 4, b"iks-b"))?;
+        assert_eq!(
+            store.previous_identity(4)?.as_deref().map(Vec::as_slice),
+            Some(&b"iks-b"[..])
+        );
+        let rows: i64 = store.connection_kat().query_row(
+            "SELECT count(*) FROM sessions WHERE session_id = 4 AND part = 6",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(rows, 1, "one row");
+        assert!(store.previous_identity(5)?.is_none(), "another session");
+        let raw: Vec<u8> = store.connection_kat().query_row(
+            "SELECT data FROM sessions WHERE session_id = 4 AND part = 6 AND ord = 0",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_ne!(raw.as_slice(), b"iks-b", "sealed");
+        Ok(())
+    }
 
     /// Q175 (A4-1-09): a skipped entry shorter than its key (`SKIPPED_KEY_LEN` = 36 B) is malformed — the uniform
     /// `Unavailable`, nothing written; a 36-byte entry is stored.

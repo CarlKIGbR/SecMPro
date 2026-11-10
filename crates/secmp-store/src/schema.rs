@@ -42,6 +42,9 @@ pub mod part {
     /// A pending control content (a `RouteUpdate`, a `KeyChange`, a `Control`), one row per content (`ord`), from the
     /// commit that makes its effect durable until the send commit of its last cell (Q210 c).
     pub const CONTROL: i64 = 5;
+    /// The contact's identity (`IKSPublic`) before the last accepted `KeyChange`: its `IK_sig` verifies a repeat of that
+    /// `KeyChange` (ADR-058). One row, ord 0.
+    pub const PREVIOUS_IDENTITY: i64 = 6;
 }
 
 /// The statements of schema version 1.

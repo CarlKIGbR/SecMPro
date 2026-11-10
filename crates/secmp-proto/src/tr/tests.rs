@@ -2081,6 +2081,7 @@ fn kind(d: &Delivery) -> &'static str {
         Delivery::Control(_) => "Control",
         Delivery::KeyChange(_) => "KeyChange",
         Delivery::KeyChangeRefused => "KeyChangeRefused",
+        Delivery::KeyChangeUnchanged => "KeyChangeUnchanged",
         Delivery::Partial => "Partial",
         Delivery::Malformed => "Malformed",
         Delivery::Frozen => "Frozen",
@@ -2424,6 +2425,60 @@ fn content_verified_key_change() -> Result<()> {
         assert_eq!(trust, Trust::Verified);
         assert!(trust.may_send_real());
     }
+    Ok(())
+}
+
+/// ADR-058: the branches of an authenticated repeat. A `KeyChange` old → new, verified under the current `IK_sig`, is
+/// the change (a); the same `KeyChange` at a receiver whose current identity is the new one and whose previous `IK_sig`
+/// is the old one is unchanged, the trust untouched (b); with another previous key (c) or none (d) it freezes; a
+/// `KeyChange` signed by the previous key naming a third identity freezes (e).
+#[test]
+fn content_key_change_authenticated_repeat_branches() -> Result<()> {
+    let (old_sk, old_iks) = identity(1)?;
+    let (_, new_iks) = identity(2)?;
+    let (_, other_iks) = identity(3)?;
+    let (old, new, other) = (peer(1)?, peer(2)?, peer(3)?);
+    let kc = key_change(&old_sk, Label::TrKeychange, &new_iks, &new_iks)?;
+    let contents = fragments(1, &kc, 1669)?;
+    assert_eq!(contents.len(), 4);
+    let pts = plaintexts(&contents)?;
+    let kc2 = key_change(&old_sk, Label::TrKeychange, &other_iks, &other_iks)?;
+    let pts2 = plaintexts(&fragments(2, &kc2, 1669)?)?;
+    // the kind of the last delivery and the trust, from `Verified`, through a fresh inbox
+    let run = |pts: &[Plaintext],
+               peer: &HybridVerifyingKey,
+               current: Option<&IksPublic>,
+               previous: Option<&HybridVerifyingKey>|
+     -> (&'static str, Trust) {
+        let mut inbox = Inbox::new();
+        let mut trust = Trust::Verified;
+        let mut last = "none";
+        for pt in pts {
+            last = kind(&inbox.receive_known(pt, peer, current, previous, &mut trust));
+        }
+        (last, trust)
+    };
+    assert_eq!(
+        run(&pts, &old, Some(&old_iks), None),
+        ("KeyChange", Trust::KeyChanged),
+        "(a)"
+    );
+    let (last, trust) = run(&pts, &new, Some(&new_iks), Some(&old));
+    assert_eq!(last, "KeyChangeUnchanged", "(b)");
+    assert_eq!(trust, Trust::Verified, "(b) trust untouched");
+    assert_eq!(
+        run(&pts, &new, Some(&new_iks), Some(&other)),
+        ("KeyChangeRefused", Trust::Frozen),
+        "(c)"
+    );
+    assert_eq!(
+        run(&pts, &new, Some(&new_iks), None),
+        ("KeyChangeRefused", Trust::Frozen),
+        "(d)"
+    );
+    let (last, trust) = run(&pts2, &new, Some(&new_iks), Some(&old));
+    assert_eq!(last, "KeyChangeRefused", "(e)");
+    assert_eq!(trust, Trust::Frozen, "(e)");
     Ok(())
 }
 

@@ -164,6 +164,7 @@ impl Persist for StorePersist {
                 block: None,
                 identity: None,
                 control_done: None,
+                previous_identity: None,
                 delivered: &[],
                 receipted: &[],
                 routes: None,
@@ -271,6 +272,10 @@ fn write_parts(
     // (Q210 a)
     if let Some((iks, fingerprint)) = parts.identity {
         secmp_store::contacts::put_contact_identity(tx, session, iks, fingerprint)?;
+    }
+    // the identity it replaces, in the same transaction: a repeat of this key change verifies under it (ADR-058)
+    if let Some(p) = parts.previous_identity {
+        secmp_store::sessions::put_previous_identity(tx, session, p)?;
     }
     // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
     for id in parts.receipted {
@@ -956,6 +961,7 @@ mod tests {
                     block: None,
                     identity: None,
                     control_done: None,
+                    previous_identity: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,
@@ -1007,6 +1013,7 @@ mod tests {
                             block: None,
                             identity: None,
                             control_done: None,
+                            previous_identity: None,
                             delivered: &[],
                             receipted: &[],
                             routes: None,
@@ -1109,6 +1116,7 @@ mod tests {
                     block: None,
                     identity: None,
                     control_done: None,
+                    previous_identity: None,
                     delivered: &delivered,
                     receipted: &[],
                     routes: None,
@@ -1176,6 +1184,7 @@ mod tests {
                     block: None,
                     identity: None,
                     control_done: None,
+                    previous_identity: None,
                     delivered: &delivered,
                     receipted: &[],
                     routes: None,
@@ -1305,6 +1314,7 @@ mod tests {
                     block: None,
                     identity: None,
                     control_done: None,
+                    previous_identity: None,
                     delivered: &[],
                     receipted: &[],
                     routes: None,

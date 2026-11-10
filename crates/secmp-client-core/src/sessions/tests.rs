@@ -1807,3 +1807,206 @@ fn no_unconfirmed_report_without_receipts() -> R {
         Ok(())
     })
 }
+
+/// The stored trust code and block byte of the session of contact 1.
+#[cfg(feature = "kat")]
+fn trust_and_block(store: &SharedStore) -> Result<(u8, u8), E> {
+    let s = store.lock().map_err(|_| "lock")?;
+    let (_, t) = s.inbox_trust(1)?;
+    Ok(secmp_store::sessions::trust_row(&t.ok_or("trust")?)?)
+}
+
+/// The fingerprint and the verified flag of contact 1 in `fx`'s store.
+#[cfg(feature = "kat")]
+fn contact_one(fx: &Fixture) -> Result<([u8; 32], bool), E> {
+    let contacts = Contacts::new(fx.profile.store(), fx.profile.fingerprint()?);
+    let c = contacts.get(ContactId(1))?;
+    Ok((c.fingerprint, c.verified))
+}
+
+/// What [`accepted_key_change`] made: the world, the accepted body and the new identity.
+#[cfg(feature = "kat")]
+type Accepted = (
+    World,
+    secmp_proto::wire::cell::KeyChangeBody,
+    secmp_proto::prekeys::IdentityKeys,
+);
+
+/// A world in which the guest announced a new identity (`IdentityKeys` of stream 911, signed by the guest's identity) and
+/// the host accepted it: the host's session is `KeyChanged`.
+#[cfg(feature = "kat")]
+fn accepted_key_change(label: &str, seed: u64) -> Result<Accepted, E> {
+    use secmp_proto::prekeys::IdentityKeys;
+    use secmp_proto::tr::content::key_change_body;
+
+    let mut w = established(label, seed)?;
+    let new = IdentityKeys::generate(&mut entropy(911))?;
+    let body = key_change_body(&w.guest.profile.signing_key()?, new.public())?;
+    w.g.queue_key_change(body.clone()).map_err(|_| "queue")?;
+    flush(&mut w.g, &mut w.h, 4)?;
+    assert!(matches!(
+        w.h.take_events().as_slice(),
+        [SessionEvent::KeyChanged(_)]
+    ));
+    Ok((w, body, new))
+}
+
+/// SE-33 (ADR-058, Q222): an authenticated repeat of the accepted `KeyChange` — signed by the previous `IK_sig`, naming the
+/// identity the contact row holds — is a no-op: no event, the trust (`KeyChanged`, then `Verified` after the user
+/// verified), the contact's fingerprint and verified flag and the stored trust row stay; the previous key is durable, so a
+/// repeat after a restart is a no-op too.
+#[cfg(feature = "kat")]
+#[test]
+fn duplicate_key_change_is_dropped_not_frozen() -> R {
+    use secmp_proto::prekeys::fingerprint_of;
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (w, body, new) = accepted_key_change("dup-kc", 913)?;
+        let World {
+            host,
+            guest,
+            mut h,
+            mut g,
+        } = w;
+        let new_fp = fingerprint_of(new.public())?;
+        // copy 2
+        g.queue_key_change(body.clone()).map_err(|_| "queue")?;
+        flush(&mut g, &mut h, 4)?;
+        assert_eq!(h.trust(), Trust::KeyChanged, "a repeat is not frozen");
+        assert!(h.take_events().is_empty(), "no event");
+        assert_eq!(contact_one(&host)?, (new_fp, false));
+        assert_eq!(trust_and_block(&host.profile.store())?, (2, 0));
+        set_verified(&host.profile.store(), &mut h, ContactId(1))?;
+        // copy 3
+        g.queue_key_change(body.clone()).map_err(|_| "queue")?;
+        flush(&mut g, &mut h, 4)?;
+        assert_eq!(h.trust(), Trust::Verified);
+        assert!(h.take_events().is_empty());
+        assert_eq!(contact_one(&host)?, (new_fp, true));
+        assert_eq!(trust_and_block(&host.profile.store())?, (1, 0));
+        // copy 4, after a restart of the host
+        drop(h);
+        let host = host.reopen()?;
+        let mut h =
+            open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(914)), T0)?;
+        g.queue_key_change(body).map_err(|_| "queue")?;
+        flush(&mut g, &mut h, 4)?;
+        assert_eq!(h.trust(), Trust::Verified, "the previous key is durable");
+        assert!(h.take_events().is_empty());
+        assert_eq!(trust_and_block(&host.profile.store())?, (1, 0));
+        drop(guest);
+        Ok(())
+    })
+}
+
+/// SE-42 (§7.7, ADR-058): a `KeyChange` naming the accepted identity but signed by another key is not a repeat: frozen.
+#[cfg(feature = "kat")]
+#[test]
+fn forged_duplicate_key_change_freezes() -> R {
+    use secmp_proto::tr::content::{Trust, key_change_body};
+
+    big(|| {
+        let (mut w, _, new) = accepted_key_change("dup-kc-forged", 915)?;
+        let forged = key_change_body(
+            &secmp_proto::tr::Entropy::hybrid_signing_key(&mut entropy(915))?,
+            new.public(),
+        )?;
+        w.g.queue_key_change(forged).map_err(|_| "queue")?;
+        flush(&mut w.g, &mut w.h, 4)?;
+        assert_eq!(w.h.trust(), Trust::Frozen);
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::KeyChangeInvalid]
+        ));
+        Ok(())
+    })
+}
+
+/// SE-43 (§7.7): without an accepted key change there is no previous key — a `KeyChange` naming the contact's current
+/// identity and signed by another key freezes, and no previous identity is stored.
+#[cfg(feature = "kat")]
+#[test]
+fn key_change_naming_current_identity_without_previous_freezes() -> R {
+    use secmp_proto::tr::content::{Trust, key_change_body};
+
+    big(|| {
+        let mut w = established("kc-current", 917)?;
+        let current = peer_identity(&w.host.profile.store(), ContactId(1))?;
+        let body = key_change_body(
+            &secmp_proto::tr::Entropy::hybrid_signing_key(&mut entropy(917))?,
+            &current,
+        )?;
+        w.g.queue_key_change(body).map_err(|_| "queue")?;
+        flush(&mut w.g, &mut w.h, 4)?;
+        assert_eq!(w.h.trust(), Trust::Frozen);
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::KeyChangeInvalid]
+        ));
+        let store = w.host.profile.store();
+        assert!(
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .previous_identity(1)?
+                .is_none()
+        );
+        Ok(())
+    })
+}
+
+/// SE-44 (§7.7; OPEN-M7-B-12 residual, fail closed): a `KeyChange` older than the last accepted one (KC1 after KC2) does
+/// not verify under the current or the previous `IK_sig`: frozen.
+#[cfg(feature = "kat")]
+#[test]
+fn older_key_change_after_a_newer_one_freezes() -> R {
+    use secmp_proto::prekeys::IdentityKeys;
+    use secmp_proto::tr::content::{Trust, key_change_body};
+
+    big(|| {
+        let (mut w, kc1, _) = accepted_key_change("dup-kc-older", 916)?;
+        let kc2 = key_change_body(
+            &secmp_proto::tr::Entropy::hybrid_signing_key(&mut entropy(911))?,
+            IdentityKeys::generate(&mut entropy(912))?.public(),
+        )?;
+        w.g.queue_key_change(kc2).map_err(|_| "queue")?;
+        flush(&mut w.g, &mut w.h, 4)?;
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::KeyChanged(_)]
+        ));
+        w.g.queue_key_change(kc1).map_err(|_| "queue")?;
+        flush(&mut w.g, &mut w.h, 4)?;
+        assert_eq!(w.h.trust(), Trust::Frozen);
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::KeyChangeInvalid]
+        ));
+        Ok(())
+    })
+}
+
+/// SE-45 (§7.7, ADR-058): after a succession, the previous key cannot announce a third identity: frozen, the contact keeps
+/// the accepted identity.
+#[cfg(feature = "kat")]
+#[test]
+fn old_key_cannot_announce_another_identity() -> R {
+    use secmp_proto::prekeys::{IdentityKeys, fingerprint_of};
+    use secmp_proto::tr::content::{Trust, key_change_body};
+
+    big(|| {
+        let (mut w, _, new) = accepted_key_change("dup-kc-other", 918)?;
+        let other = IdentityKeys::generate(&mut entropy(919))?;
+        let body = key_change_body(&w.guest.profile.signing_key()?, other.public())?;
+        w.g.queue_key_change(body).map_err(|_| "queue")?;
+        flush(&mut w.g, &mut w.h, 4)?;
+        assert_eq!(w.h.trust(), Trust::Frozen);
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::KeyChangeInvalid]
+        ));
+        assert_eq!(contact_one(&w.host)?.0, fingerprint_of(new.public())?);
+        Ok(())
+    })
+}

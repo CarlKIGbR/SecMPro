@@ -116,7 +116,7 @@ Nothing that touches the network or wall clock in unit tests; `secmp-client-core
 
 ## 5. CI pipeline (`cargo xtask ci-fast` / `cargo xtask ci-full` mirror it locally)
 
-`ci-fast` (minutes; run after every logical unit): steps 1–5. `ci-full` (before a milestone report; nightly in CI): everything. `cargo xtask ci` is an alias for `ci-full`. `ci-fast` ends with the build check `fuzz-check`: `cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets` on the pinned stable, so a fuzz target that no longer compiles is found without the smoke of step 6 (ADR-045 Amendment 14).
+`ci-fast` (minutes; run after every logical unit): steps 1–6 (`fuzz-check`). `ci-full` (before a milestone report; nightly in CI): everything. `cargo xtask ci` is an alias for `ci-full`. `ci-fast` ends with the build check `fuzz-check`: `cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets` on the pinned stable, so a fuzz target that no longer compiles is found without the smoke of step 6 (ADR-045 Amendment 14).
 
 1. `cargo fmt --check`
 2. `cargo clippy --workspace --all-targets --locked -- -D warnings`

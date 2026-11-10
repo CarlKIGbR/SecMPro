@@ -718,6 +718,32 @@ fn frozen_survives_verify_and_reopen() -> R {
     })
 }
 
+/// Q210 b, e (CI3 killer for `Conversation::mark_reset`): after `mark_reset` the session refuses real sends with
+/// `Reset`, a queued message waits at the per-cell gate (the slot carries a dummy), and once persisted
+/// (`block_session`) the session reopens with the block `Reset`.
+#[cfg(feature = "kat")]
+#[test]
+fn mark_reset_blocks_the_session_and_persists() -> R {
+    big(|| {
+        let mut w = established("ci3mr", 53)?;
+        w.h.outbox_mut().enqueue(text(1, 20), 0);
+        assert_eq!(w.h.may_send_real(), Ok(()));
+        w.h.mark_reset();
+        assert_eq!(w.h.may_send_real(), Err(Refusal::Reset));
+        let cell = next(&mut w.h, 5_000)?;
+        deliver(&mut w.g, &cell)?;
+        assert!(w.g.received().is_empty(), "a dummy, not the message");
+        assert_eq!(w.h.outbox().waiting(), 1, "the message waits");
+        let World { host, mut h, .. } = w;
+        let store = host.profile.store();
+        block_session(&store, &mut h, ContactId(1), Refusal::Reset)?;
+        drop(h);
+        let conv = open_conversation(&store, ContactId(1), Fixed(entropy(54)), T0)?;
+        assert_eq!(conv.may_send_real(), Err(Refusal::Reset));
+        Ok(())
+    })
+}
+
 /// Q210 b (VERIFY-B4 P1 M-3, probe P2; SE-15): the block is durable — a received `Control{SessionResetRequest}` is
 /// committed with its cell and the session reopens refusing real sends (`Reset`); a `Request::Remove` through the core
 /// leaves the host's session `Removed` after a restart.

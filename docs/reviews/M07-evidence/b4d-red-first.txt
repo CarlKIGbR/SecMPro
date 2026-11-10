@@ -59,3 +59,10 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(unloadable_n
 cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(second_key_change_verifies)'
     thread '<unnamed>' (1632566) panicked at crates/secmp-client-core/src/sessions/tests.rs:1583:9:
     the second key change is accepted under the first new key
+
+## C1-6a scheduler::core::tests::empty_fetch_not_armed_on_error_or_starved_queue (compiling mutation: had_dummy = frames < self.params.f_m restored in the fixed tree, reverted; the test's by-value cells / Refusing source need the fix to compile)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(empty_fetch_not_armed)'
+    thread 'scheduler::core::tests::empty_fetch_not_armed_on_error_or_starved_queue' (1657699) panicked at crates/secmp-client-core/src/scheduler/core/mod.rs:2756:13:
+    assertion `left == right` failed: mine 0, others 8, error false, F_M 16
+      left: true
+     right: false

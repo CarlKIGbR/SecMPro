@@ -609,7 +609,6 @@ mod tests {
         assert_eq!(flush_bound(u64::MAX, None, 0), u64::MAX);
     }
 
-    /// SC-09 (unit): the `FETCH` is built at once when nothing waits, else at its lead; a `SEND` notes its tick.
     /// Q212 (5) (VERIFY-B4 P2 m-1, hand mutant 1): `fetch_gate(tear, send_missing, fetch_missing)` over all eight inputs —
     /// open only without a teardown, with the `SEND` part built and the `FETCH` part missing.
     #[test]
@@ -636,6 +635,7 @@ mod tests {
         );
     }
 
+    /// SC-09 (unit): the `FETCH` is built at once when nothing waits, else at its lead; a `SEND` notes its tick.
     #[test]
     fn fetch_due_and_note_sent() {
         assert!(fetch_due(false, false, 0, 10_000, 1_000));

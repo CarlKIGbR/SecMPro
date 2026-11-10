@@ -1022,18 +1022,22 @@ impl World {
     /// transport decoded the `F_M` frames. Every queue's present cells go to the cell source and its error is handled; a
     /// queue counts as "a `FETCH` returned no present cell" only if, after the error loop, it is not in error, no present
     /// frame is for it (decodable or not) and the response held at least one dummy frame — present and error frames fewer
-    /// than `F_M` (docs/03 `FETCH_MULTI`: "… then dummies"; Q209). A queue starved by a full batch of other queues' cells
-    /// may still hold cells.
+    /// than `F_M` (docs/03 `FETCH_MULTI`: "… then dummies"; Q209) — the `F_M` the transport enforces, the frames of a
+    /// response (`secmp_proto::link::FETCH_MULTI_BATCH`), not the scheduler's parameter. A queue starved by a full batch of
+    /// other queues' cells may still hold cells. The cells are taken by value: each queue's go to the source as they are
+    /// (no copy, no second parse), so a queue is "present" exactly if it has a cell here.
     fn fetched_multi<S: CellSource>(
         &mut self,
         queues: &[(QueueId, u64)],
-        cells: &[(QueueRef, u64, secmp_proto::wire::cell::Cell)],
+        cells: Vec<(QueueRef, u64, secmp_proto::wire::cell::Cell)>,
         errors: &[(QueueRef, TransportError)],
         source: &mut S,
         now: u64,
     ) -> Result<(), SchedError> {
         let frames = u64::try_from(cells.len().saturating_add(errors.len())).unwrap_or(u64::MAX);
-        let had_dummy = frames < self.params.f_m;
+        let batch = u64::try_from(secmp_proto::link::FETCH_MULTI_BATCH).unwrap_or(u64::MAX);
+        let had_dummy = frames < batch;
+        let mut cells = cells;
         let mut quiet = Vec::new();
         for (q, generation) in queues {
             let Some(rid) = self
@@ -1044,19 +1048,12 @@ impl World {
             else {
                 continue;
             };
-            // a present frame counts, decodable or not
-            let present = cells.iter().any(|(r, _, _)| *r == rid);
-            let mine: Vec<_> = cells
-                .iter()
-                .filter(|(r, _, _)| *r == rid)
-                .map(|(_, id, cell)| {
-                    (
-                        *id,
-                        secmp_proto::wire::cell::Cell::from_bytes(cell.as_bytes()),
-                    )
-                })
-                .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
-                .collect();
+            let (taken, rest): (Vec<_>, Vec<_>) =
+                cells.into_iter().partition(|(r, _, _)| *r == rid);
+            cells = rest;
+            let mine: Vec<_> = taken.into_iter().map(|(_, id, cell)| (id, cell)).collect();
+            // a present cell counts, whatever the source decides about it
+            let present = !mine.is_empty();
             self.take_cells(*q, *generation, mine, source);
             if !self.current(*q, *generation) {
                 continue;
@@ -1124,7 +1121,7 @@ impl World {
                 Err(_) => {}
             },
             (ReqKind::FetchMulti(queues), Outcome::FetchMulti(result)) => match result {
-                Ok(done) => self.fetched_multi(&queues, &done.cells, &done.errors, source, now)?,
+                Ok(done) => self.fetched_multi(&queues, done.cells, &done.errors, source, now)?,
                 Err(e) => {
                     if let Some((first, generation)) = queues.first()
                         && self.current(*first, *generation)
@@ -2302,6 +2299,33 @@ mod tests {
         }
     }
 
+    /// A cell source that refuses every received cell (`deliver` fails) and has nothing to send.
+    struct Refusing;
+
+    impl CellSource for Refusing {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            Ok(None)
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &Cell,
+        ) -> Result<Delivered, SourceError> {
+            Err(SourceError)
+        }
+    }
+
     /// A cell source whose decisions are never committed in the call (`Delivered::Pending`).
     struct PendingSource;
 
@@ -2674,16 +2698,22 @@ mod tests {
         let seed = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]).map_err(|_| "seed");
         let cap =
             |b: u8| -> Result<RecvCap, Fail> { RecvCap::from_seed(&seed(b)?).map_err(|_| "cap") };
-        // (cells for the queue, cells for the other queue, the queue in error) -> armed
-        for (mine, others, error, armed) in [
-            (0_u64, 0_u64, true, false),
-            (0, 8, false, false),
-            (1, 0, false, false),
-            (0, 2, false, true),
-            (0, 0, false, true),
+        // (cells for the queue, cells for the other queue, the queue in error, `F_M` of the parameters) -> armed. The one
+        // present cell of `(1, 0, ..)` is present although its source refuses it; `F_M = 16` with 8 frames of the other
+        // queue: the response is full at the transport's batch of 8, whatever the parameter says (C1-6 a)
+        for (mine, others, error, f_m, armed) in [
+            (0_u64, 0_u64, true, 8_u64, false),
+            (0, 8, false, 8, false),
+            (1, 0, false, 8, false),
+            (0, 2, false, 8, true),
+            (0, 0, false, 8, true),
+            (0, 8, false, 16, false),
         ] {
-            let mut sched =
-                Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(21));
+            let params = Params {
+                f_m,
+                ..Params::default()
+            };
+            let mut sched = Scheduler::new(params, Mode::Balanced, TimingRng::seeded(21));
             let q = sched
                 .add_recv_queue(0, RelayId(0), cap(0x41)?, 10_000)
                 .map_err(|_| "queue")?;
@@ -2712,15 +2742,21 @@ mod tests {
             } else {
                 Vec::new()
             };
-            let mut src = Dummies(0);
-            sched
-                .world
-                .fetched_multi(&[(q, 0), (o, 0)], &cells, &errors, &mut src, 1_000)
-                .map_err(|_| "fetched")?;
+            let queues = [(q, 0), (o, 0)];
+            let done = if mine == 1 {
+                sched
+                    .world
+                    .fetched_multi(&queues, cells, &errors, &mut Refusing, 1_000)
+            } else {
+                sched
+                    .world
+                    .fetched_multi(&queues, cells, &errors, &mut Dummies(0), 1_000)
+            };
+            done.map_err(|_| "fetched")?;
             assert_eq!(
                 !sched.world.control.awaits_empty_fetch(op),
                 armed,
-                "mine {mine}, others {others}, error {error}"
+                "mine {mine}, others {others}, error {error}, F_M {f_m}"
             );
         }
         Ok(())

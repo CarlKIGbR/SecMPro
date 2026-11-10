@@ -148,6 +148,16 @@ pub struct LinkMaterial {
     pub expires_bucket: u32,
 }
 
+/// The `QUEUE_DEL` of `queue` ran (or the relay says it is gone): the hub of a store-backed client records it; its failure
+/// is a hub error, not dropped.
+fn hub_queue_deleted(client: &mut SimClient, queue: QueueId) {
+    if let Some(hub) = client.hub.as_mut()
+        && let Err(err) = hub.queue_deleted(queue)
+    {
+        client.hub_errors.push(format!("queue_deleted: {err}"));
+    }
+}
+
 /// What the driver does with a client's connections.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
@@ -157,6 +167,10 @@ pub struct Options {
     pub refuse_connections: bool,
     /// What to keep of the scheduled connections.
     pub inspect: Inspect,
+    /// The relay drops a queue immediately before the client's `QUEUE_DEL` request for it is sent, so the request meets
+    /// `ERR_NOQUEUE` and no `FETCH` has seen the queue gone (B4b-8).
+    #[doc(hidden)]
+    pub relay_drops_before_queue_del: bool,
 }
 
 /// What the driver keeps of a scheduled connection.
@@ -240,7 +254,10 @@ impl Source for Convs {
 /// operations and reports their results.
 pub trait StoreHub: Source {
     /// The virtual time is `now_ms`; the hub works on what the sessions delivered and retires what is due.
-    fn step(&mut self, now_ms: u64);
+    ///
+    /// # Errors
+    /// The hub's failure to work on what the sessions delivered, as text (the tick runs all the same).
+    fn step(&mut self, now_ms: u64) -> Result<(), String>;
     /// What the hub asks of the scheduler since the last call.
     fn actions(&mut self) -> Vec<Action>;
     /// The material of the `LINK_PUT` of link data `n`.
@@ -253,7 +270,10 @@ pub trait StoreHub: Source {
     /// The hub's refusal of the accept, as text.
     fn link_consumed(&mut self, n: u32, blob: Option<Vec<u8>>) -> Result<(), String>;
     /// The `QUEUE_DEL` of `queue` ran.
-    fn queue_deleted(&mut self, queue: QueueId);
+    ///
+    /// # Errors
+    /// The hub's failure to record it, as text.
+    fn queue_deleted(&mut self, queue: QueueId) -> Result<(), String>;
     /// The hub as `Any`, for the tests to reach its own methods.
     fn any(&mut self) -> &mut dyn std::any::Any;
 }
@@ -265,10 +285,11 @@ impl<S: EntropySource> Source for Hub<ManualClock, S> {
 }
 
 impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
-    fn step(&mut self, now_ms: u64) {
+    fn step(&mut self, now_ms: u64) -> Result<(), String> {
         self.core().clock().set_ms(now_ms);
-        let _ = self.pump();
+        let pumped = self.pump().map_err(|e| e.to_string());
         self.tick(now_ms);
+        pumped
     }
 
     fn actions(&mut self) -> Vec<Action> {
@@ -296,8 +317,8 @@ impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
             .map_err(|e| e.to_string())
     }
 
-    fn queue_deleted(&mut self, queue: QueueId) {
-        let _ = Hub::queue_deleted(self, queue);
+    fn queue_deleted(&mut self, queue: QueueId) -> Result<(), String> {
+        Hub::queue_deleted(self, queue).map_err(|e| e.to_string())
     }
 
     fn any(&mut self) -> &mut dyn std::any::Any {
@@ -800,7 +821,9 @@ impl VirtualDriver {
             let actions = {
                 let c = self.clients.get_mut(i).unwrap();
                 let Some(hub) = c.hub.as_mut() else { return };
-                hub.step(t);
+                if let Err(e) = hub.step(t) {
+                    c.hub_errors.push(format!("step: {e}"));
+                }
                 hub.actions()
             };
             if actions.is_empty() {
@@ -983,8 +1006,8 @@ impl VirtualDriver {
                 Output::Event(e) => {
                     let client = self.clients.get_mut(i).unwrap();
                     // the retirement of a queue the relay no longer has is complete (Q201)
-                    if let (LinkEvent::QueueGone(q), Some(hub)) = (&e, client.hub.as_mut()) {
-                        hub.queue_deleted(*q);
+                    if let LinkEvent::QueueGone(q) = &e {
+                        hub_queue_deleted(client, *q);
                     }
                     client.events.push((t, e));
                 }
@@ -1304,6 +1327,13 @@ impl VirtualDriver {
                 Ok(())
             }
             ControlKind::QueueDel(queue) => {
+                if self
+                    .clients
+                    .get(idx)
+                    .is_some_and(|c| c.opts.relay_drops_before_queue_del)
+                {
+                    self.drop_queue_on_relay(idx, queue);
+                }
                 let client = self.clients.get_mut(idx).unwrap();
                 let (recv, _) = *client
                     .material
@@ -1316,9 +1346,7 @@ impl VirtualDriver {
                     Ok(()) | Err(TransportError::NoQueue) => {}
                     Err(e) => return Err(e),
                 }
-                if let Some(hub) = client.hub.as_mut() {
-                    hub.queue_deleted(queue);
-                }
+                hub_queue_deleted(client, queue);
                 Ok(())
             }
             ControlKind::LinkPut(n) => {
@@ -1369,6 +1397,22 @@ impl VirtualDriver {
                 Ok(())
             }
         }
+    }
+
+    /// The relay loses `queue` (a `QUEUE_DEL` by its owner's key on a connection of its own; the client's connections and
+    /// requests are untouched).
+    fn drop_queue_on_relay(&mut self, idx: usize, queue: QueueId) {
+        let access = self.harness.access_key();
+        let fp = self.harness.relay_fp();
+        let unix = self.harness.clock().unix();
+        let stream = self.harness.open_stream().unwrap();
+        let client = self.clients.get_mut(idx).unwrap();
+        let (recv, _) = *client.material.queues.get(&queue.0).unwrap();
+        let mut t =
+            RelayQueueTransport::connect(stream, fp, Some(&access), unix, client.entropy.get())
+                .unwrap();
+        t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap()).unwrap())
+            .unwrap();
     }
 
     /// A store-backed client keeps the material of its control operations in the store: the queues' seeds, the link data.

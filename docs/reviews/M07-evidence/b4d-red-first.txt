@@ -26,3 +26,19 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(stored_encod
     assertion `left == right` failed
       left: 856
      right: 472
+
+## B4b-6/hub-errors harness::m7_restart::queue_deleted_failure_reaches_hub_errors (driver.rs hub-error edit stashed)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(hub_errors) | test(relay_restart_with_store)'
+    thread 'm7_restart::queue_deleted_failure_reaches_hub_errors' (1575158) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:304:5:
+    the refused write of queue_deleted is reported
+
+
+## hub-errors harness::m7_restart::hub_step_error_reaches_hub_errors (driver.rs hub-error edit stashed)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(hub_step_error)'
+    thread 'm7_restart::hub_step_error_reaches_hub_errors' (1578958) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:340:5:
+    Hub::pump failed on the ContactRemoved control: []
+
+## B4b-8 harness::m7_restart::queue_del_on_a_gone_queue_completes (compiling mutation driver.rs: Ok(()) | Err(TransportError::NoQueue) => {} replaced by Ok(()) => {}, reverted)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(queue_del_on_a_gone)'
+    thread 'm7_restart::queue_del_on_a_gone_queue_completes' (1584173) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:400:5:
+    the QUEUE_DEL completed on ERR_NOQUEUE

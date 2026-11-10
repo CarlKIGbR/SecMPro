@@ -19,3 +19,10 @@ cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(queue_new_withou
     thread 'm7_restart::queue_new_without_sender_seed_fails_closed' (1526055) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:238:5:
     no QUEUE_NEW without a sender seed
     note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+## Q215 invitations::tests::stored_encode_reserves_exact_capacity (unfixed encode body, TRAILER_LEN kept)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(stored_encode_reserves)'
+    thread 'invitations::tests::stored_encode_reserves_exact_capacity' (1549095) panicked at crates/secmp-client-core/src/invitations_tests.rs:2188:9:
+    assertion `left == right` failed
+      left: 856
+     right: 472

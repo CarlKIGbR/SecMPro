@@ -141,11 +141,19 @@ pub(crate) struct Stored {
     pub(crate) blob: Option<Zeroizing<Vec<u8>>>,
 }
 
+/// The bytes `Stored::encode` writes after the record and before the blob: `relay u32 ‖ queue u32 ‖ flags u8 ‖
+/// inv_send_seed [32] ‖ inv_period_s u16 ‖ blob tag u8` (Q215).
+const TRAILER_LEN: usize = 4 + 4 + 1 + 32 + 2 + 1;
+
 impl Stored {
     /// The plaintext that is sealed: the record, the trailer, the blob if any.
     pub(crate) fn encode(&self) -> Zeroizing<Vec<u8>> {
         let blob_len = self.blob.as_ref().map_or(0, |b| b.len());
-        let mut v = Zeroizing::new(Vec::with_capacity(blob_len.saturating_add(RECORD_LEN)));
+        // the exact length: a reallocation would leave an unzeroized copy of the keys behind (Q215)
+        let len = RECORD_LEN
+            .saturating_add(TRAILER_LEN)
+            .saturating_add(blob_len);
+        let mut v = Zeroizing::new(Vec::with_capacity(len));
         v.extend_from_slice(&self.record.to_bytes());
         v.extend_from_slice(&self.relay.0.to_be_bytes());
         v.extend_from_slice(&self.queue.0.to_be_bytes());
@@ -159,6 +167,8 @@ impl Stored {
             }
             None => v.push(0),
         }
+        debug_assert_eq!(v.len(), len);
+        debug_assert_eq!(v.capacity(), len);
         v
     }
 

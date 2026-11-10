@@ -2170,3 +2170,22 @@ fn queue_deleted_keeps_consumed_row_without_retiring_entry() -> R {
     );
     Ok(())
 }
+
+/// Q215 (VERIFY-DELTA-B4b 5): `Stored::encode` reserves the exact length of its encoding, so the buffer that holds
+/// `link_key`, `owner_seed` and both seeds is never reallocated (a grown buffer leaves an unzeroized copy behind).
+#[cfg(feature = "kat")]
+#[test]
+fn stored_encode_reserves_exact_capacity() -> R {
+    let (fx, mut e) = inviter("q215", 61, 1)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let mut stored = record_of(&fx, &issued.invitation.ld_id)?;
+    for blob in [Some(Zeroizing::new(vec![7_u8; 300])), None] {
+        let blob_len = blob.as_ref().map_or(0, |b| b.len());
+        stored.blob = blob;
+        let encoded = stored.encode();
+        assert_eq!(encoded.len(), RECORD_LEN + TRAILER_LEN + blob_len);
+        assert_eq!(encoded.capacity(), encoded.len());
+    }
+    Ok(())
+}

@@ -600,6 +600,17 @@ that 5 is affordable; `_k0_2` at unwind 5 is then the floor `max(k_max + 2, TR_S
 `opened` run 4 times + exit), and at the original bound it is the original's cost (96–97 %). A remedy for `_k4` needs a decision outside
 Q137 (e.g. arrays of length `k` per harness instead of `TR_SKIPPED_KEYS`, an exception like A-3's, or the limit).
 
+**Blocked — STOP (WEISUNG M7-B-4f §5: "any instruction that cannot be followed literally"; step 5, SE-28).** `modell=claude-opus-5-5`.
+The dictated expectations of SE-28 `queue_lost_replans_unsealed_and_sealed_control_content` ("`rows == 3` (B, C, A re-written);
+… exactly one `ResetRequested` and three `Routes`") contradict the dictated `replan_control` supersession of §2 ("a `Routes` entry
+… for which `controls` holds a `Routes` entry with a higher id is **not** re-planned: its row goes …"), which SE-37 requires. Probe
+(not committed): with both as dictated, after `lost_direct()` the rows are 2 (A re-written, C) and the peer gets one
+`ResetRequested` and one `Routes`; only with the supersession branch deleted (SE-37's red mutation) are they 3 / 1 / 3 — the
+in-memory `RouteUpdate` of `established`'s reply (id 0) and B are both superseded by C. Evidence:
+`docs/reviews/M07-evidence/b4f-stop-se28-probe.txt`. Question: which holds after a lost queue — (A) supersession also there (SE-28
+re-dictated: rows 2, one `ResetRequested`, one `Routes` with `sid == [4; 16]`), or (B) a lost queue re-sends every `Routes` entry
+(then `replan_control` needs a "no supersession" path for `on_lost`, and SE-37 stays as it is)? Steps 5 (rest)–10 not done; see §B-4f.
+
 **Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).
 
 **A-4 built @ `c3c1dcf` (`modell=claude-opus-5-5`); Phase A closes with the green PR run
@@ -1490,3 +1501,75 @@ Product hits of the widened scans: none (`no_derive_debug_on_secret_carriers` an
 
 ### §B-4e.4 Blocked
 None.
+
+## §B-4f — control content keeps its owner until `OK_SEND` (Q222), ADR-058, EXTB2-2, EXTB2-3 (WEISUNG M7-B-4f; `modell=claude-opus-5-5`) — STOPPED at step 5
+
+### §B-4f.0 Guard and inventory
+
+- Guard (`modell=claude-opus-5-5`): `git status --short` empty; branch `m07-client-core`; `test(core): killer for mark_reset (Q210b)` in the log (1); `grep -c '^| Q221' docs/reviews/M07-planning/OPEN-M7-decided.md` = 1; `^### ADR-058` absent. `<START>` = `git rev-parse HEAD` = `8f4bcbdecee5e7926749aac0ccc1e5f156f40682` (B4F-START `8f4bcbd`), subject `docs(m7): ci-fast evidence for CI3` — **DOCS1 had not run**: `git log --oneline 8f4bcbd..HEAD` was empty, `HEAD` = `8f4bcbd`; `^### ADR-056` and `^### ADR-057` do not exist (the weisung allows this start; ADR-058 was inserted after ADR-055's closing `---`, before `*Template for new entries:*`). Highest D entry: `D-B48`; new entries start at `D-B49`.
+- Fixture grep (`grep -rnE 'AppKind::(Reaction|Edit|Delete|AttachmentInline)|kind: [2456],' crates/secmp-client-core/src crates/secmp-testkit`): `crates/secmp-client-core/src/outbox.rs:413` (`m.kind = AppKind::Edit;`), `:420` (`assert_eq!(m.kind.byte(), AppKind::Edit.byte());`) — the StoreOutbox field test, not through `queue_message` — and `crates/secmp-client-core/src/sessions/mod.rs:203` (the check step 2 replaced). No other hit.
+- Kani/fuzz: `grep -n 'Conversation\|Owner\|Delivery\|receive' crates/secmp-client-core/src/kani_proofs.rs fuzz/fuzz_targets/*.rs` gives only `kani_proofs.rs:579` (`l.received().len()`, a link), `:911` (a doc string) and comment/fixture lines of `link_relay_handshake.rs:119`, `tr_decrypt.rs:3,7,9,20,46,70`, `link_frame_open.rs:5,10`: no harness models the actor, `Owner`, `Delivery` or `Inbox::receive` (`tr_state` decodes `Inbox::from_bytes` only; `InboxV1` unchanged). No model step.
+- Commits (`git log --oneline 8f4bcbd..HEAD`): `5e7094a` EXTB2-2 · `7ac3307` EXTB2-3 · `a24ca32` ADR-058 · `4251a0b` Q222 (1)–(3) · the docs commit of this STOP.
+
+### §B-4f.1 Findings: fix, test, red-first
+
+Every red line is quoted verbatim, with its command, in `docs/reviews/M07-evidence/b4f-red-first.txt` (line 1 `head 8f4bcbd…`). "Mutation" = a one-site mutation of the fix in the committed tree, applied, run and reverted (`git diff` empty after).
+
+| Item | Commit | Test | Red-first (`path:line:col`) |
+|---|---|---|---|
+| EXTB2-2 | `5e7094a` | SE-22 `sessions::tests::extb2_reset_with_argument_is_ignored` | `sessions/tests.rs:543:9` `left: Err(Reset)` `right: Ok(())` (unfixed tree) |
+| EXTB2-3 Api | `7ac3307` | SE-23 `sessions::tests::extb2_api_rejects_undefined_kinds_and_invalid_text` | `sessions/tests.rs:599:9` "ADR-054(1,3): Api accepted invalid cases with kinds [1, 1, 1, 4, 5, 6]" (unfixed tree) |
+| EXTB2-3 receive | `7ac3307` | SE-24 `sessions::tests::extb2_receive_drops_undefined_kinds_and_invalid_text` | `sessions/tests.rs:654:9` "ADR-054(1,3): receiver delivered invalid cases with kinds [1, 1, 1, 4, 5, 6]" (unfixed tree) |
+| EXTB2-3 every constructor | `7ac3307` | SE-36 `sessions::actor::tests::adr054_receive_rules_on_without_the_switch` | `actor.rs:2090:9` `left: [[50; 16], [51; 16]]` (unfixed tree); mutation: empty body of `raw_app_payloads_kat` → `actor.rs:2100:9` "the test kit's switch" `left: []` |
+| ADR-058 proto | `a24ca32` | `tr::tests::content_key_change_authenticated_repeat_branches` | mutation (1) fallback arm deleted → `tr/tests.rs:2467:5` "(b)" `left: "KeyChangeRefused"`; (2) `current == Some(&kc.iks) &&` deleted → `tr/tests.rs:2480:5` "(e)" `left: "KeyChangeUnchanged"` |
+| ADR-058 store | `a24ca32` | `secmp-store` `sessions::tests::previous_identity_round_trip` | mutation `put_previous_identity` body `Ok(())` → `secmp-store/src/sessions.rs:458:9` `left: None` |
+| ADR-058 receiver | `a24ca32` | SE-33 `sessions::tests::duplicate_key_change_is_dropped_not_frozen` | `sessions/tests.rs:1876:9` "a repeat is not frozen" `left: Frozen` `right: KeyChanged` (unfixed tree) |
+| ADR-058 forged | `a24ca32` | SE-42 `forged_duplicate_key_change_freezes` | mutation `previous.is_some_and(…)` → `previous.is_some()`: `sessions/tests.rs:1916:9` `left: KeyChanged` `right: Frozen` |
+| ADR-058 no previous | `a24ca32` | SE-43 `key_change_naming_current_identity_without_previous_freezes` | mutation → `previous.map_or(true, …)`: `sessions/tests.rs:1941:9` `left: Unverified` `right: Frozen` |
+| OPEN-M7-B-12 residual | `a24ca32` | SE-44 `older_key_change_after_a_newer_one_freezes` | green on the unfixed tree; the named two-line mutation (`get_or_insert` + current check deleted): `sessions/tests.rs:1980:9` `left: KeyChanged` `right: Frozen` |
+| ADR-058 third identity | `a24ca32` | SE-45 `old_key_cannot_announce_another_identity` | green on the unfixed tree; mutation current check deleted: `sessions/tests.rs:2003:9` `left: KeyChanged` `right: Frozen` |
+| Q222 (2) restart | `4251a0b` | SE-25 `sessions::tests::extb2_key_change_survives_last_seal_before_write_restart` | `sessions/tests.rs:2093:9` "the row outlives the seal of the last cell (Q222 2)" `left: 0 right: 1` (unfixed tree) |
+| Q222 (3) failure | `4251a0b` | SE-26 `sessions::actor::tests::extb2_failed_control_send_remains_retryable` | `actor.rs:2193:9` "a failed SEND lost the reset notification" (unfixed tree) |
+| Q222 eviction | `4251a0b` | SE-27 `evicted_route_update_is_resent` | `sessions/tests.rs:2131:9` `left: 0 right: 1` (unfixed tree) |
+| Q222 (2) | `4251a0b` | SE-29 `control_row_deleted_only_after_last_ok_send` | `sessions/tests.rs:2162:13` "after the seal of cell 3" `left: 0 right: 1` (unfixed tree) |
+| Q222 (3) superseded | `4251a0b` | SE-30 `superseded_control_attempt_outcomes_are_ignored` | `sessions/tests.rs:2193:17` "after the last seal" `left: 0 right: 1` (unfixed tree); mutations: `on_relayed` without the attempt comparison → `:2202:17` same assert; `replan_control` without the attempt check → `:2208:9` "nothing planned again" |
+| Q222 (2) restart | `4251a0b` | SE-31 `control_written_without_ok_send_is_resent_after_restart` | `sessions/tests.rs:2241:9` "read again after the restart" `left: 0 right: 1` (unfixed tree) |
+| M-4 Routes | `4251a0b` | SE-37 `superseded_route_update_is_not_resent` | green on the step-3 tree (as dictated); mutation supersession branch deleted → `sessions/tests.rs:2279:9` `left: 2 right: 1` |
+| PC-03 | `4251a0b` | SE-39 `scheduler::outbox::tests::mem_persist_forwards_control_rows_to_its_mirror` | mutation `MemPersist::control_requeued` → `Ok(None)`: `scheduler/outbox.rs:586:9` `left: Ok(None)` `right: Ok(Some(7))` |
+| Q222 (2) settle | `4251a0b` | SE-40 `sessions::actor::tests::settle_retries_a_failed_row_delete` | mutation "`Err` also sets `ord = None`": `actor.rs:2477:9` `left: [4]` `right: [4, 4]` |
+| §9.5 late eviction | `4251a0b` | SE-41 `late_eviction_rewrites_the_control_row` | `sessions/tests.rs:2303:9` "written again" `left: 0 right: 1` (unfixed tree) |
+| Q222 (3) lost queue, Q-5 switch, M-3 hub, Q222 (5), KC guard, VD-1/2/3, PP-1…4, L1–L5 | — | SE-28, SE-35, SE-32, SE-38, SE-34; step 7 | **not done (STOP at SE-28, §B-4f.5)** |
+
+Sanctioned edits made: SE-20 payload (`inline_attachment_64k`, ASCII letters); `pending_control_content_survives_restart` (its cells relayed, cell ids `1..`, one more `next` before the row-0 assert, message "the last cell's OK_SEND took the row (Q222)", doc line); the test `Persist` impls `Stamps`, `Commits`, `Blocks` (`actor.rs`), `Whole` (`persist.rs`), `Logged` (`m7_persist.rs`, forwards to `inner`); `tr/tests.rs` `kind()` arm `KeyChangeUnchanged`; `raw_app_payloads_kat()` after `Conversation::new` at the 17 listed sites (`two_clients/run.rs:522` binding made `mut`; `m6_activity.rs:155,164` and `m6_tokio.rs:326,335` one line each); no unlisted site needed it (ci-fast of `7ac3307` green). Mechanical (signature change of `plan_control`): `receive_commit_carries_the_block` and `contact_removed_needs_an_empty_argument` pass `super::Owner::Dummy` where they passed `None`.
+
+Anchors re-found (old @aac2242 → `4251a0b`): `sessions/actor.rs` `Owner` `:134` → `:135`, `Planned` `:143` → `:146`, `PendingControl` `:156` → `:182`, `Conversation` `:302` → `:338`, `new` `:355` → `:401`, `from_parts` `:409` → `:460`, `plan_control` `:429` → `:480`, `queue_pending` `:473` → `:519`, `plan_key_change` `:493` → `:661`, `restart_from` `:605` → `:783`, `switch_send_queue` `:661` → `:840`, `seal` `:905` → `:1081`, `restore` `:957` → `:1133`, `prepare` `:1019` → `:1216`, `hold_planned_real` `:1092` → `:1290`, `on_relayed` `:1115` → `:1317`, `on_evicted` `:1134` → `:1347`, `on_failed` `:1140` → `:1353`, `on_lost` `:1146` → `:1359`, `on_deliver` `:1156` → `:1369`, `apply_delivery` `:1263` → `:1502`, `effects` `:1401` → `:1659`, `CellSource` `:1507` → `:1765`, `mod tests` `:1576` → `:1834`, `session()` `:1858` → `:2144`; new: `app_payload_ok` `:253`, `key_change_in_flight` `:526`, `add_control` `:532`, `plan_content` `:568`, `replan_control` `:591`, `settle_controls` `:639`. `sessions/mod.rs` `peer_key` `:51` (unchanged), new `peer_identity` `:60`, `set_verified` `:68` → `:77`, `block_session` `:112` → `:122`, `MESSAGE_MAX` `:163` → `:173`, `queue_message` `:186` → `:196`, `open_conversation` `:343` → `:353`. `persist.rs` `write_parts` `:273` (unchanged; `put_previous_identity` `:292`), `impl Persist for StorePersist` `:155`. `scheduler/outbox.rs` `CommitParts` `:309`, `trait Persist` `:346` → `:347`, `MemPersist` impl `:457`. `hub.rs` `register_route` `:308`, `register_route_sets_t_rs` `:1327`; `api.rs` `rotate_identity` `:909` (unchanged, not touched). `sessions/tests.rs` `world` `:153`, `established` `:381`, SE-20 `:402`, `flush` `:549` → `:723`, `pending_control_content_survives_restart` `:836` → `:1036` (the file map's `:836` was already `:862` at `8f4bcbd`).
+
+### §B-4f.2 Gates
+
+| Gate | Result |
+|---|---|
+| `cargo xtask ci-fast` per step (foreground; raw output, `head <40-hex>` on line 1) | PASS: `ci-fast-b4f-1-5e7094a.txt`, `ci-fast-b4f-2-7ac3307.txt`, `ci-fast-b4f-3-a24ca32.txt`, `ci-fast-b4f-4-4251a0b.txt` (each with the harness step, 915–960 s: the constant-rate oracles SE-19, AI-01…AI-06, `m6_tokio_ai`/`m6_tokio`/`m6_sim`/`m6_props` green with their assertions unchanged). A first commit of step 2 failed `cargo fmt --check` (layout of SE-23) and was amended before its ci-fast. Clippy findings on the way (`doc_markdown`, `too_many_lines` of `on_deliver`, `needless_pass_by_value` of `plan_key_change`) were fixed in the code, not allowed. |
+| mutants, coverage, final ci-fast (step 8), ci-full (step 9) | not run (STOP at step 5) |
+
+### §B-4f.3 Deviations (new: D-B49…D-B58)
+
+- **D-B49 (a).** `Owner::Control(ControlRef { id, attempt })`, `ControlEntry { row, ord, durable, attempt, total, relayed, done }`, `Conversation::{controls, next_control}`: the id is conversation-local because `insert_pending_control` reuses `ord`s (`MAX(ord) + 1` after a delete). `Owner::Dummy` stays for dummies and the raw test content.
+- **D-B50 (b).** `Persist::control_relayed` and `Persist::control_requeued` are required methods (no default body); `CommitParts::control_done` and `seal`'s `pending` parameter are removed (the eight literals dropped it), `CommitParts::previous_identity` is added (`None` in every literal but the receive commit).
+- **D-B51 (c).** A control row goes at the next `prepare` after the last cell's `OK_SEND` (`settle_controls`, first in `prepare`): the scheduler reports an `OK_SEND` as `relayed`, then the evictions it names (`scheduler/core/mod.rs:1092-1095`).
+- **D-B52 (d).** A later eviction re-writes the row (`control_requeued`); a failed re-write is retried before the next seal; a failed delete is retried at the next `prepare`.
+- **D-B53 (e).** The ADR-054 receive rules are on in every constructor (`app_rules = true` in `new`); the only opt-out is `raw_app_payloads_kat` (`cfg(any(test, feature = "kat"))`), called at the 17 harness sites (4 in constant-rate oracle files, one line each); SE-20's payload is ASCII.
+- **D-B54 (f).** SE-25 detects the last seal by count (`chunk_total(1 + 5390)` cells), not by the row's disappearance; `pending_control_content_survives_restart` relays its cells.
+- **D-B55 (g).** A re-sent `Control{1|2}` repeats its event at the peer (state idempotent; UI de-dup is Phase C) — SE-31 asserts the state, not the event; an older `RouteUpdate` is dropped when a newer one exists (`replan_control`). The hub's "register a repeated route once" (`send_routes`) is step 5, not done.
+- **D-B56 (h).** `sessions` part 6 `PREVIOUS_IDENTITY` (no DDL; ADR-058), one row at ord 0, sealed like every `sessions` row; `Store::previous_identity`, `sessions::put_previous_identity`. A row that reads but does not decode or whose `ik_sig` does not load is treated as absent at open; a read/open error fails the open.
+- **D-B57 (i).** `queue_route_update`/`queue_control` no longer plan a body that does not encode; a content whose re-plan fails stays unplanned until the next open; `add_control` removes the entry again when its first plan fails (no live entry without cells).
+- **D-B58 (implementer's choices).** (1) The dictated test helper `rows(store)` is `control_rows(store)`: `rows(fx, table)` exists in `sessions/tests.rs`. Further test helpers: `rotated_host` (the scene of SE-25/29/30: `established`, a core's `RotateIdentity`, reopen — seeds `seed + 1`, `seed + 2`, i.e. SE-25's 612/613), `routes_of`, `accepted_key_change` (SE-33/42/44/45 up to copy 1), `contact_one`, `trust_and_block`, actor `text_batch`, `FlakyDelete`. (2) `on_deliver` exceeded clippy's 100 lines: `fresh_messages` (the `fresh` filter, ADR-054) and `replaced_identity` (the ADR-058 previous identity) are factored out; `plan_key_change` consumes its `owner` through `core::iter::repeat_n` (`needless_pass_by_value`). (3) `Inbox::receive`'s doc gains one sentence ("No repeat … is recognised (see `Inbox::receive_known`)"). (4) The subject of `4251a0b` reads `(Q222 1-3)` with an ASCII hyphen instead of the dictated `(Q222 1–3)`; not amended, because its ci-fast evidence names `4251a0b`. (5) `secmp-store` `delete_pending_control`'s doc still says "its last cell was sealed and persisted" (not in the dictated doc list; stale since Q222).
+
+### §B-4f.4 Risks
+
+- OPEN-M7-B-12 (two successions in flight; KC1 after KC2 freezes, SE-44) — the rotation guard (step 6) is not built: a second `RotateIdentity` while a `KeyChange` entry lives is still accepted.
+- Until step 5: a lost queue re-plans only the planned (not yet sealed) control cells; a sealed, unrelayed control cell of a lost queue is not re-sent, and a send-queue switch does not re-plan unsettled control content (SE-28/SE-35 not built); the hub registers a repeated `RouteUpdate` as a new send queue (SE-38 not built). Q222 makes re-sent `RouteUpdate`s reachable (eviction, failure) already in `4251a0b`.
+- OPEN-M7-B-13, OPEN-M7-B-14 rows not written (step 10).
+
+### §B-4f.5 Blocked
+
+**STOP at step 5, SE-28** (§8 paragraph "Blocked — STOP (WEISUNG M7-B-4f …)"; probe `docs/reviews/M07-evidence/b4f-stop-se28-probe.txt`). Anchor: WEISUNG M7-B-4f §3 step 5 SE-28 "`lost_direct()` — `rows == 3` (B, C, A re-written); up to 8 cells to `g` → exactly one `ResetRequested` and three `Routes`" against §2 `replan_control` "A `Routes` entry … for which `controls` holds a `Routes` entry with a higher id is **not** re-planned" and §2 `on_lost` "then `replan_control` for every entry in id order". Measured (probe on `4251a0b`): step-4 tree `(rows, ResetRequested, Routes)` = `(2, 0, 1)`; with the dictated `on_lost` hunk `(2, 1, 1)`; with that hunk and without the supersession branch `(3, 1, 3)` (green). Not done: the rest of step 5 (`on_lost`, `switch_send_queue`, hub `send_routes`, SE-28, SE-35, SE-32, SE-38), steps 6–10 (KC guard SE-34; VD-1/2/3, L1; mutants, coverage, final ci-fast; ci-full; the docs of §4 — OPEN-M7-decided Q220/Q222 rows, OPEN-M7 B-12/13/14, ADR-051 Am. 8 residual, TEST-SPEC SE-22…SE-45, PP-1…4, L2–L5, CHANGELOG).

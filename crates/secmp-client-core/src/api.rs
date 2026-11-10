@@ -1540,6 +1540,48 @@ mod tests {
         })
     }
 
+    /// C1-4 a (VERIFY-DELTA-B4c part 1): `Request::Verify` of a contact that is not in `Core.index` (no loaded session) whose
+    /// stored trust is `Frozen` is refused with `Err(Frozen)` and the contact flag is not written — the unguarded
+    /// `contacts.verified` writer is gone (Q205).
+    #[cfg(feature = "kat")]
+    #[test]
+    fn verify_without_session_keeps_stored_frozen() -> R {
+        use secmp_store::sessions::{TRUST_FROZEN, update_trust};
+
+        big(|| {
+            let w = world("api-vf", 97)?;
+            let host = w.host;
+            drop((w.h, w.g));
+            let store = host.profile.store();
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| update_trust(tx, 1, Some(TRUST_FROZEN), None))?;
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(990))?;
+            core.index.remove(&1);
+            let Response::SafetyNumber(digits) = core.handle(Request::SafetyNumber {
+                contact: ContactId(1),
+            })?
+            else {
+                return Err("safety number".into());
+            };
+            let verified = core.handle(Request::Verify {
+                contact: ContactId(1),
+                digits,
+            });
+            assert_eq!(verified.err(), Some(Error::Frozen));
+            drop(core);
+            let reopened =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(991))?;
+            let s = reopened.store.lock().map_err(|_| "lock")?;
+            let rows = s.contacts()?;
+            let row = rows.iter().find(|c| c.id == 1).ok_or("contact")?;
+            assert!(!row.verified, "the contact stays unverified");
+            Ok(())
+        })
+    }
+
     /// B-4c killer (`<Event as Debug>::fmt`, Q206): an event prints its variant's name and nothing of its fields.
     #[test]
     fn event_debug_names_the_variant_only() {

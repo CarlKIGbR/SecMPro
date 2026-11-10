@@ -552,11 +552,6 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
     }
 
-    /// The contact's new `IK_sig` after a key change was accepted (§7.7).
-    pub fn set_peer(&mut self, peer: HybridVerifyingKey) {
-        self.peer = peer;
-    }
-
     /// `T_RS` of this conversation in ms (0: none).
     pub const fn set_receipt_timeout_ms(&mut self, ms: u64) {
         self.receipt_timeout_ms = ms;
@@ -1175,6 +1170,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let mut inbox = self.inbox.clone();
         let mut trust = self.trust;
         let delivery = inbox.receive(opened.plaintext(), &self.peer, &mut trust);
+        // a verified key change whose new `IK_sig` cannot be loaded is unverifiable: the session freezes (spec §7.7)
+        let (delivery, new_peer) = admit_key_change(delivery, &mut trust);
         // the messages this cell delivers for the first time are durable with the state that consumed it
         let received_ms = self
             .unix_base
@@ -1251,12 +1248,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             self.state = RatchetState::from_bytes(&self.durable).ok();
             return Err(SourceError);
         }
-        self.apply_delivery(delivery);
+        self.apply_delivery(delivery, new_peer);
         Ok(())
     }
 
     /// What a committed cell tells the session: messages for the application, receipts, the events for the host.
-    fn apply_delivery(&mut self, delivery: Delivery) {
+    fn apply_delivery(&mut self, delivery: Delivery, new_peer: Option<HybridVerifyingKey>) {
         match delivery {
             Delivery::Messages(messages) => {
                 for m in messages {
@@ -1288,7 +1285,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             }
             Delivery::KeyChange(iks) => {
                 // the contact row holds the new identity already (the receive commit); later key changes verify under it
-                if let Ok(peer) = secmp_proto::tr::content::ik_sig(&iks) {
+                if let Some(peer) = new_peer {
                     self.peer = peer;
                 }
                 self.events.push(SessionEvent::KeyChanged(Box::new(iks)));
@@ -1365,6 +1362,33 @@ struct Effects {
     /// A verified key change's new identity (Q210 a, spec §7.7); one that does not encode fails the commit — nothing is
     /// decided, the cell comes again.
     identity: Result<Option<NewIdentity>, PersistError>,
+}
+
+/// A verified key change (spec §7.7) is admitted only if its new `IK_sig` loads (`tr::content::ik_sig`): the key that later
+/// key changes verify under is returned with it. Otherwise the change is unverifiable — the session freezes (`trust` becomes
+/// `Frozen`), the delivery becomes `KeyChangeRefused` (no identity is committed, the event is `KeyChangeInvalid`) and the
+/// peer key stays. Any other delivery passes unchanged.
+fn admit_key_change(
+    delivery: Delivery,
+    trust: &mut Trust,
+) -> (Delivery, Option<HybridVerifyingKey>) {
+    admit_key_change_with(delivery, trust, secmp_proto::tr::content::ik_sig)
+}
+
+/// [`admit_key_change`] with the loader of the `IK_sig` given.
+fn admit_key_change_with(
+    delivery: Delivery,
+    trust: &mut Trust,
+    verify: impl FnOnce(&IksPublic) -> Result<HybridVerifyingKey, secmp_proto::Error>,
+) -> (Delivery, Option<HybridVerifyingKey>) {
+    let Delivery::KeyChange(iks) = delivery else {
+        return (delivery, None);
+    };
+    if let Ok(key) = verify(&iks) {
+        return (Delivery::KeyChange(iks), Some(key));
+    }
+    *trust = Trust::Frozen;
+    (Delivery::KeyChangeRefused, None)
 }
 
 fn effects(delivery: &Delivery) -> Effects {
@@ -2161,6 +2185,43 @@ mod tests {
                 removed
             );
         }
+        Ok(())
+    }
+
+    /// C1-4 c (spec §7.7: "Unsigned/unverifiable changes freeze the session with a warning"): a verified `KeyChange`
+    /// whose new `IK_sig` cannot be loaded freezes the session — the delivery becomes `KeyChangeRefused`, the trust
+    /// `Frozen`, no key is taken. With a loader that works, the change is admitted with its key and the trust is left as
+    /// it was. (No such `IksPublic` can be built through `secmp-proto`: `Ed25519Pk` decodes strictly and the ML-DSA key
+    /// decode cannot fail, hence the injected loader.)
+    #[cfg(feature = "kat")]
+    #[test]
+    fn unloadable_new_ik_sig_freezes() -> Result<(), Fail> {
+        use super::Delivery;
+        use secmp_proto::prekeys::IdentityKeys;
+        use secmp_proto::tr::FixedEntropy;
+        use secmp_proto::tr::content::{Trust, ik_sig};
+
+        let keys = IdentityKeys::generate(&mut FixedEntropy::new(&stream(907, 1 << 20)))
+            .map_err(|_| "keys")?;
+        let iks = keys.public().clone();
+
+        let mut trust = Trust::KeyChanged;
+        let (delivery, key) =
+            super::admit_key_change_with(Delivery::KeyChange(iks.clone()), &mut trust, |_| {
+                Err(secmp_proto::Error::Rejected)
+            });
+        assert!(matches!(delivery, Delivery::KeyChangeRefused));
+        assert_eq!(trust, Trust::Frozen);
+        assert!(key.is_none());
+
+        let mut trust = Trust::KeyChanged;
+        let (delivery, key) =
+            super::admit_key_change_with(Delivery::KeyChange(iks.clone()), &mut trust, |i| {
+                ik_sig(i)
+            });
+        assert!(matches!(delivery, Delivery::KeyChange(_)));
+        assert_eq!(trust, Trust::KeyChanged);
+        assert_eq!(key, Some(ik_sig(&iks).map_err(|_| "ik_sig")?));
         Ok(())
     }
 }

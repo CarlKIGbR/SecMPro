@@ -600,8 +600,7 @@ fn key_change_blocks_sending() -> R {
         flush(&mut w.g, &mut w.h, 3)?;
         assert!(w.h.received().is_empty());
         assert_eq!(w.g.outbox().waiting(), 1);
-        // the contact takes the new identity, unverified; verifying it releases the message (SE-07)
-        accept_key_change(&w.guest.profile.store(), &mut w.g, ContactId(1), &new)?;
+        // the receive commit wrote the new identity, unverified; verifying it releases the message (SE-07)
         let contacts =
             crate::contacts::Contacts::new(w.guest.profile.store(), w.guest.profile.fingerprint()?);
         assert!(!contacts.get(ContactId(1))?.verified);
@@ -1557,7 +1556,8 @@ fn message_limit_and_reopened_trust() -> R {
     })
 }
 
-/// B-4 killer (`Conversation::set_peer`, `accept_key_change`): after the first key change is accepted, a second one signed by
+/// B-4 killer (the `KeyChange` arm of `apply_delivery`, which sets `peer` from the key it verified; the identity is written by
+/// the receive commit, Q210 a): after the first key change is accepted, a second one signed by
 /// the identity it announced verifies — the session verifies under the new `IK_sig`.
 #[cfg(feature = "kat")]
 #[test]
@@ -1567,13 +1567,12 @@ fn second_key_change_verifies_under_the_new_key() -> R {
 
     big(|| {
         let mut w = established("se06b", 49)?;
-        let first = key_change(&mut w, false)?;
+        key_change(&mut w, false)?;
         flush(&mut w.h, &mut w.g, 4)?;
         assert!(matches!(
             w.g.take_events().as_slice(),
             [SessionEvent::KeyChanged(_)]
         ));
-        accept_key_change(&w.guest.profile.store(), &mut w.g, ContactId(1), &first)?;
         // the identity of `key_change` (stream 901) signs the next one
         let signer = secmp_proto::tr::Entropy::hybrid_signing_key(&mut entropy(901))?;
         let newer = IdentityKeys::generate(&mut entropy(907))?;

@@ -58,30 +58,6 @@ pub fn peer_key(store: &SharedStore, contact: ContactId) -> Result<HybridVerifyi
     Ok(ik_sig(&IksPublic::decode(&row.iks)?)?)
 }
 
-/// A verified key change was announced (`SessionEvent::KeyChanged`, spec §7.7): the contact takes the new identity — the
-/// row, the fingerprint, unverified — and the session verifies later key changes under the new `IK_sig`. The trust of the
-/// session (`KeyChanged`) was committed with the cell; real sends stay held until the new safety number is verified.
-///
-/// # Errors
-/// [`Error::Unavailable`] if the store cannot be written.
-pub fn accept_key_change<S: EntropySource>(
-    store: &SharedStore,
-    conversation: &mut StoreConversation<S>,
-    contact: ContactId,
-    new: &IksPublic,
-) -> Result<(), Error> {
-    use secmp_proto::Encode as _;
-
-    let iks = new.encode()?;
-    let fp = secmp_proto::prekeys::fingerprint_of(new)?;
-    store
-        .lock()
-        .map_err(|_| Error::Unavailable)?
-        .txn(|tx| secmp_store::contacts::put_contact_identity(tx, contact.0, &iks, &fp))?;
-    conversation.set_peer(ik_sig(new)?);
-    Ok(())
-}
-
 /// The user verified the safety number of `contact` (spec §6.7): the contact and the session are verified, in one store
 /// transaction; a held message goes out with the next slots. A frozen session stays frozen (Q205): the store's guarded
 /// trust writer refuses, and nothing is written — the contact stays unverified.
@@ -103,17 +79,28 @@ pub fn set_verified<S: EntropySource>(
         secmp_store::contacts::set_contact_verified(tx, contact.0, true)
     });
     if written.is_err() {
-        // the refusal of the guard: the stored trust is `Frozen`
-        let (_, row) = s.inbox_trust(contact.0)?;
-        let stored = row.as_deref().map(|r| trust_row(r)).transpose()?;
-        return Err(match stored {
-            Some((code, _)) if trust_of(code) == Some(Trust::Frozen) => Error::Frozen,
-            _ => Error::Unavailable,
-        });
+        return Err(trust_write_refusal(&s, contact)?);
     }
     drop(s);
     conversation.set_trust(Trust::Verified);
     Ok(())
+}
+
+/// The error for a refused trust write: [`Error::Frozen`] if the stored trust is `Frozen` (the store's guard), else
+/// [`Error::Unavailable`].
+///
+/// # Errors
+/// [`Error::Unavailable`] if the trust row cannot be read or does not decode.
+pub(crate) fn trust_write_refusal(
+    store: &secmp_store::Store,
+    contact: ContactId,
+) -> Result<Error, Error> {
+    let (_, row) = store.inbox_trust(contact.0)?;
+    let stored = row.as_deref().map(|r| trust_row(r)).transpose()?;
+    Ok(match stored {
+        Some((code, _)) if trust_of(code) == Some(Trust::Frozen) => Error::Frozen,
+        _ => Error::Unavailable,
+    })
 }
 
 /// Block real sends on the session of `contact` and tell the peer (`Removed`: `Control{1}`, `Reset`: `Control{2}`;

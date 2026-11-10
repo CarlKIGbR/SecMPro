@@ -665,7 +665,6 @@ mod tests {
     fn rotate_identity_announces_key_change() -> R {
         use crate::api::ContactId;
         use crate::invitations::Invitations;
-        use crate::sessions::accept_key_change;
         use crate::sessions::actor::SessionEvent;
         use crate::sessions::tests::{Link, big, connect, deliver, next, party, pending_handshake};
         use crate::testutil::entropy;
@@ -705,7 +704,7 @@ mod tests {
                 .map_err(|_| "queue")?;
             h2.queue_key_change(bodies.next().ok_or("body")?)
                 .map_err(|_| "queue")?;
-            for (h, c, g) in [(&mut h1, &mut c1, &g1), (&mut h2, &mut c2, &g2)] {
+            for (h, c) in [(&mut h1, &mut c1), (&mut h2, &mut c2)] {
                 for i in 0_u64..4 {
                     let cell = next(h, 30_000_u64.saturating_add(i.saturating_mul(1_000)))?;
                     deliver(c, &cell)?;
@@ -716,7 +715,6 @@ mod tests {
                     matches!(events.as_slice(), [SessionEvent::KeyChanged(iks)] if **iks == *new.public()),
                     "each contact verified the key change under the old IK_sig"
                 );
-                accept_key_change(&g.profile.store(), c, ContactId(1), new.public())?;
             }
             let store = host.profile.store();
             {

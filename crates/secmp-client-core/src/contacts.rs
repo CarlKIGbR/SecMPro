@@ -22,6 +22,7 @@ use secmp_store::contacts::{
     STATE_ACTIVE, STATE_REINVITE_REQUIRED, STATE_REMOVED, StoredContact, set_contact_state,
     set_contact_verified,
 };
+use secmp_store::sessions::{TRUST_VERIFIED, update_trust};
 
 use crate::api::{Error, Event};
 use crate::persist::SharedStore;
@@ -258,7 +259,7 @@ impl Contacts {
     ///
     /// # Errors
     /// [`Error::Unavailable`] if the contact is unknown or the store cannot be written.
-    pub fn confirm_digits(&self, id: ContactId, typed: &str) -> Result<bool, Error> {
+    pub(crate) fn confirm_digits(&self, id: ContactId, typed: &str) -> Result<bool, Error> {
         let ok = self.digits_match(id, typed)?;
         self.verified_if(id, ok)
     }
@@ -279,19 +280,38 @@ impl Contacts {
     ///
     /// # Errors
     /// [`Error::Unavailable`] if the contact is unknown or the store cannot be written.
-    pub fn confirm_qr(&self, id: ContactId, scanned: &[u8]) -> Result<bool, Error> {
+    ///
+    /// No `Request` carries a scanned QR yet (the UI milestone): until then this writer is compiled for the tests only, so
+    /// that no unguarded caller exists in the product (C1-4 a).
+    #[cfg(test)]
+    #[cfg(feature = "kat")]
+    pub(crate) fn confirm_qr(&self, id: ContactId, scanned: &[u8]) -> Result<bool, Error> {
         let c = self.get(id)?;
         let want = [Label::Sas.as_bytes(), &c.fingerprint, &self.own_fp].concat();
         let ok = bool::from(scanned.ct_eq(want.as_slice()));
         self.verified_if(id, ok)
     }
 
+    /// Verify contact `id` if `ok`: the contact flag and — when the session has a TRUST row — the trust, in one
+    /// transaction under one store lock, so a stored `Frozen` refuses both ([`Error::Frozen`], nothing written; Q205). A
+    /// contact without a TRUST row gets the flag only: `update_trust` would create the row and the `init_trust` of the
+    /// session's first write would refuse.
     fn verified_if(&self, id: ContactId, ok: bool) -> Result<bool, Error> {
-        if ok {
-            self.lock()?
-                .txn(|tx| set_contact_verified(tx, id.0, true))?;
+        if !ok {
+            return Ok(false);
         }
-        Ok(ok)
+        let mut store = self.lock()?;
+        let has_trust = store.inbox_trust(id.0)?.1.is_some();
+        let written = store.txn(|tx| {
+            if has_trust {
+                update_trust(tx, id.0, Some(TRUST_VERIFIED), None)?;
+            }
+            set_contact_verified(tx, id.0, true)
+        });
+        if written.is_err() {
+            return Err(crate::sessions::trust_write_refusal(&store, id)?);
+        }
+        Ok(true)
     }
 
     /// A `Control` content from contact `id` (§7.6): `ContactRemoved` without an argument marks the contact removed

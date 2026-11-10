@@ -42,3 +42,20 @@ cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(hub_step_error)'
 cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(queue_del_on_a_gone)'
     thread 'm7_restart::queue_del_on_a_gone_queue_completes' (1584173) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:400:5:
     the QUEUE_DEL completed on ERR_NOQUEUE
+
+## C1-4a api::tests::verify_without_session_keeps_stored_frozen (contacts.rs fix hunk stashed)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(verify_without_session)'
+    thread '<unnamed>' (1629050) panicked at crates/secmp-client-core/src/api.rs:1573:13:
+    assertion `left == right` failed
+      left: None
+     right: Some(Frozen)
+
+## C1-4c sessions::actor::tests::unloadable_new_ik_sig_freezes (compiling mutation actor.rs admit_key_change_with: Err(_) => (Delivery::KeyChange(iks), None), reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(unloadable_new_ik_sig)'
+    thread 'sessions::actor::tests::unloadable_new_ik_sig_freezes' (1632001) panicked at crates/secmp-client-core/src/sessions/actor.rs:2212:9:
+    assertion failed: matches!(delivery, Delivery::KeyChangeRefused)
+
+## C1-4b sessions::tests::second_key_change_verifies_under_the_new_key (proof, compiling mutation actor.rs apply_delivery KeyChange arm: if let Some(peer) = new_peer {..} replaced by let _ = new_peer;, reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(second_key_change_verifies)'
+    thread '<unnamed>' (1632566) panicked at crates/secmp-client-core/src/sessions/tests.rs:1583:9:
+    the second key change is accepted under the first new key

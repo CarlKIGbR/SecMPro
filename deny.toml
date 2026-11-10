@@ -18,7 +18,7 @@ yanked = "deny"
 ignore = [
     "RUSTSEC-2023-0071", # ADR-051 Am. 1: rsa 0.9.10 Marvin — no RSA private-key operation reachable from the selected client paths (call-site check, tor-llcrypto src/pk/rsa.rs)
     "RUSTSEC-2024-0436", # ADR-051 Am. 1: paste (unmaintained proc-macro) is compile-time only
-    "RUSTSEC-2026-0459", # ADR-051 Am. 7: libsqlite3-sys 0.37.0 (CVE-2026-119375, WAL short read) — bundled-sqlcipher builds are not reached by the patched range (sqlcipher-src 419.0.6 = SQLite 3.53.4); SQLCipher page HMAC rejects a planted frame; removed in the first milestone after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0
+    "RUSTSEC-2026-0459", # ADR-051 Am. 8: libsqlite3-sys 0.37.0 (CVE-2026-119375, WAL short read) — bundled-sqlcipher builds are not reached by the patched range (sqlcipher-src 419.0.6 = SQLite 3.53.4); SQLCipher page HMAC rejects a planted frame; removed in the first milestone after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0
 ]
 
 [licenses]

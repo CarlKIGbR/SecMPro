@@ -172,7 +172,7 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
     ),
     (
         "RUSTSEC-2026-0459",
-        "ADR-051 Am. 7: libsqlite3-sys 0.37.0 (CVE-2026-119375, WAL short read) — bundled-sqlcipher builds are not reached by the patched range (sqlcipher-src 419.0.6 = SQLite 3.53.4); SQLCipher page HMAC rejects a planted frame; removed in the first milestone after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0",
+        "ADR-051 Am. 8: libsqlite3-sys 0.37.0 (CVE-2026-119375, WAL short read) — bundled-sqlcipher builds are not reached by the patched range (sqlcipher-src 419.0.6 = SQLite 3.53.4); SQLCipher page HMAC rejects a planted frame; removed in the first milestone after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0",
     ),
 ];
 
@@ -2483,7 +2483,7 @@ mod tests {
     }
 
     /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
-    /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves. M7 adds Am. 7 (Q217):
+    /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves. M7 adds Am. 8 (Q217):
     /// RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0, bundled SQLCipher not reached by the patched range).
     #[test]
     fn audit_ignores_unchanged() {
@@ -2515,7 +2515,7 @@ mod tests {
             .map(|(_, why)| *why)
             .unwrap_or_default();
         assert!(
-            sqlite.starts_with("ADR-051 Am. 7: libsqlite3-sys 0.37.0"),
+            sqlite.starts_with("ADR-051 Am. 8: libsqlite3-sys 0.37.0"),
             "{sqlite}"
         );
         assert!(

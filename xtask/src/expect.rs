@@ -826,6 +826,11 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "store_backed_source_activity_independent",
         "SE-19, three modes x (idle, active) x 6 h virtual over four profiles each, in parallel: 551 s",
     ),
+    // M7 B-4d (WEISUNG M7-B-4d Q214; Q121)
+    (
+        "queue_new_without_sender_seed_fails_closed",
+        "a QUEUE_NEW without a stored sender seed, an established pair, a relay restart, 30 min virtual: 13 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

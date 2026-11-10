@@ -274,7 +274,12 @@ impl Rig {
                     .unwrap();
                 let removed = self.removed(target);
                 let outcome = send(&mut self.sim, &self.client, target, count);
-                if removed && outcome == Err(Error::Blocked) {
+                if removed {
+                    assert_eq!(
+                        outcome,
+                        Err(Error::Blocked),
+                        "a send to a Removed contact is refused"
+                    );
                     self.refused.removed = self.refused.removed.saturating_add(1);
                 } else {
                     self.note(outcome);

@@ -789,6 +789,27 @@ mod tests {
         moved: QueueId,
     }
 
+    /// A scene of two hubs over `host` and `guest`, nothing done yet.
+    #[cfg(feature = "kat")]
+    fn scene(host: Fixture, guest: &Fixture) -> Result<Scene, crate::api::Error> {
+        Ok(Scene {
+            inviter: hub_over(&host, "host", 200)?,
+            invitee: hub_over(guest, "guest", 300)?,
+            host,
+            issued: None,
+            inv_queue: QueueId(0),
+            n_link: 0,
+            material_recv: [0; 32],
+            guest_send: QueueId(0),
+            host_send: QueueId(0),
+            reply_queue: QueueId(0),
+            contact: ContactId(0),
+            pooled: QueueId(0),
+            retire_from: 0,
+            moved: QueueId(0),
+        })
+    }
+
     /// Step 1: the inviter issues: the invitation queue is fetched, the `LINK_PUT` runs at once.
     #[cfg(feature = "kat")]
     fn step_invite(sc: &mut Scene) -> R {
@@ -1293,6 +1314,106 @@ mod tests {
             ));
             assert!(again.invitations.retiring()?.is_empty());
             assert!(again.queue_material(queue).is_none());
+            Ok(())
+        })
+    }
+
+    /// C1-8 a (SE-13b, Q210 d): `register_route` sets `T_RS` of the conversation from the period of the queue it sends to. The
+    /// timeout is set to 0 first (every `PERIODS` value gives the minimum of 24 h, which `open_session` has set already, so
+    /// only a 0 → 24 h change is observable); after a `RouteUpdate` with period `S80` it is `receipt_timeout_ms(80_000)`, and
+    /// through the `Api` a relayed message of the verified contact is reported `NotConfirmed` only once that long has passed.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn register_route_sets_t_rs() -> R {
+        use crate::sessions::actor::receipt_timeout_ms;
+        use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
+
+        big(|| {
+            let (host, guest) = (party("hub-t-h", 77)?, party("hub-t-g", 79)?);
+            let mut sc = scene(host, &guest)?;
+            step_invite(&mut sc)?;
+            step_accept(&mut sc)?;
+            step_handshake(&mut sc)?;
+            step_reply(&mut sc)?;
+            let (contact, hub) = (sc.contact, &mut sc.invitee);
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let timeout = |hub: &Hub<ManualClock, Fixed>| {
+                hub.core
+                    .convs
+                    .get(at)
+                    .map(crate::sessions::actor::Conversation::receipt_timeout_ms_kat)
+            };
+            hub.core
+                .convs
+                .get_mut(at)
+                .ok_or("conversation")?
+                .set_receipt_timeout_ms(0);
+            assert_eq!(timeout(hub), Some(0));
+            let update = RouteUpdateBody {
+                routes: vec![RouteDescriptor::RelayQueue(RelayQueue {
+                    relay: crate::testutil::relay_ref(),
+                    sid: [9; 16],
+                    send_seed: secmp_crypto::SecretBytes::from_slice(&[9; 32])?,
+                    period_s: Period::S80,
+                })],
+            };
+            hub.register_route(contact, at, &update.encode()?)?;
+            assert_eq!(timeout(hub), Some(receipt_timeout_ms(80_000)));
+            // through the Api: relayed on the new queue, reported only after `T_RS`
+            let new_queue = hub.take_actions().iter().find_map(|a| match a {
+                Action::AddSend { queue, .. } => Some(*queue),
+                _ => None,
+            });
+            let new_queue = new_queue.ok_or("the new send queue")?;
+            let Response::SafetyNumber(digits) =
+                hub.core_mut().handle(Request::SafetyNumber { contact })?
+            else {
+                return Err("safety number".into());
+            };
+            assert!(matches!(
+                hub.core_mut().handle(Request::Verify { contact, digits })?,
+                Response::Verified(true)
+            ));
+            let Response::Sent(id) = hub.core_mut().handle(Request::Send {
+                contact,
+                kind: 1,
+                payload: secmp_crypto::Zeroizing::new(b"t_rs".to_vec()),
+                expire_after: 0,
+            })?
+            else {
+                return Err("sent".into());
+            };
+            let cell = hub
+                .prepare_cell(new_queue, ms(100))
+                .map_err(|_| "prepare")?
+                .ok_or("cell")?;
+            hub.relayed(new_queue, cell.token, 3);
+            hub.core_mut().take_events();
+            let reported = |hub: &mut Hub<ManualClock, Fixed>,
+                            now: u64|
+             -> Result<usize, crate::testutil::E> {
+                hub.prepare_cell(new_queue, now).map_err(|_| "prepare")?;
+                hub.pump()?;
+                Ok(hub
+                    .core_mut()
+                    .take_events()
+                    .iter()
+                    .filter(|e| {
+                        e.event
+                            == crate::api::Event::NotConfirmed {
+                                contact,
+                                msg_id: id,
+                            }
+                    })
+                    .count())
+            };
+            let t_rs = receipt_timeout_ms(80_000);
+            let relayed_at = ms(100);
+            assert_eq!(
+                reported(hub, relayed_at.saturating_add(t_rs).saturating_sub(1))?,
+                0
+            );
+            assert_eq!(reported(hub, relayed_at.saturating_add(t_rs))?, 1);
             Ok(())
         })
     }

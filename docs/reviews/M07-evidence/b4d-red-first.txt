@@ -66,3 +66,31 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(empty_fetch_
     assertion `left == right` failed: mine 0, others 8, error false, F_M 16
       left: true
      right: false
+
+## B4b-1 invitations::tests::killers_rounds_and_contact (compiling mutation invitations.rs encode_queues: QueueEntry { send_seed: None, ..stored.entry()? }, reverted; KAT test seed)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(killers_rounds_and_contact)'
+    thread 'invitations::tests::killers_rounds_and_contact' (1683267) panicked at crates/secmp-client-core/src/invitations_tests.rs:1282:9:
+    assertion `left == right` failed
+      left: None
+     right: Some([210, 221, 42, 229, 249, 21, 160, 63, 53, 248, 38, 160, 195, 104, 230, 181, 20, 239, 112, 100, 240, 180, 27, 0, 132, 131, 38, 228, 186, 12, 141, 174])
+
+## C1-8a hub::tests::register_route_sets_t_rs (compiling mutation: the set_receipt_timeout_ms call in register_route deleted, reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(register_route_sets_t_rs)'
+    thread '<unnamed>' (1685022) panicked at crates/secmp-client-core/src/hub.rs:1349:13:
+    assertion `left == right` failed
+      left: Some(0)
+     right: Some(86400000)
+
+## C1-8b harness::m7_scheduled::expired_invitation_queue_del_end_to_end (compiling mutation: Hub::tick does not call maintain, reverted)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(expired_invitation_queue_del_end_to_end)'
+    thread 'm7_scheduled::expired_invitation_queue_del_end_to_end' (1688600) panicked at crates/secmp-testkit/tests/harness/m7_scheduled.rs:173:5:
+    assertion `left == right` failed: exactly one QUEUE_DEL: []
+      left: 0
+     right: 1
+
+## C2-4 harness::m7_activity::store_backed_source_activity_independent (compiling mutation contacts.rs check_send: ContactState::Removed => Err(Error::Unavailable), reverted; the one-line mutation ContactState::Removed => Ok(()) stays green because the session's block (Refusal::Removed) refuses too, defence in depth)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(store_backed_source_activity_independent)'
+    thread '<unnamed>' (1691977) panicked at crates/secmp-testkit/tests/harness/m7_activity.rs:278:21:
+    assertion `left == right` failed: a send to a Removed contact is refused
+      left: Err(Unavailable)
+     right: Err(Blocked)

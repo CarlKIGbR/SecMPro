@@ -697,6 +697,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         (self.recv_queue, self.overlap_recv.clone())
     }
 
+    /// `T_RS` of this conversation in ms (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub const fn receipt_timeout_ms_kat(&self) -> u64 {
+        self.receipt_timeout_ms
+    }
+
     /// The queue we send to and the ones in send overlap (tests only).
     #[cfg(feature = "kat")]
     #[must_use]

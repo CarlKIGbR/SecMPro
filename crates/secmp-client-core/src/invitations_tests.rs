@@ -1180,6 +1180,18 @@ fn assert_stored_route(routes: &[u8], route: &RelayQueue) -> R {
     Ok(())
 }
 
+/// The invitation queue's entry in `contacts.queues` carries the record's sender seed and period (Q199, B4b-1): a
+/// `QUEUE_NEW` after a relay restart is identical.
+#[cfg(feature = "kat")]
+fn assert_queue_entry_is_the_records(
+    entry: &crate::sessions::rotation::QueueEntry,
+    record: &Stored,
+) {
+    let send = entry.send_seed.as_ref().map(SecretBytes::expose_secret);
+    assert_eq!(send, Some(record.inv_send_seed.expose_secret()));
+    assert_eq!(entry.period_s, record.inv_period_s);
+}
+
 /// Killers (rounds, the cap of a round, retained cells, routes and queues of the contact): the retained cells are the
 /// cells that were fetched, byte for byte; more than 152 distinct cells in a round are refused; the contact's routes
 /// and queues hold what the accept wrote; the owner status of a consumed invitation changes nothing.
@@ -1277,6 +1289,7 @@ fn killers_rounds_and_contact() -> R {
             record.record.invq_recv_seed.expose_secret()
         );
         assert_eq!(first.retire_at_ms, None);
+        assert_queue_entry_is_the_records(first, &record);
         let routes = s.contact_routes(1)?.ok_or("routes")?;
         assert_stored_route(&routes, &reply_route)?;
     }

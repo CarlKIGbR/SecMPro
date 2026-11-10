@@ -7,10 +7,10 @@
 use secmp_client_core::api::{Event, Request, Response};
 use secmp_proto::wire::cell::Cell;
 use secmp_proto::wire::frame::RequestCmd;
-use secmp_testkit::harness::{CONTROL_SLOT_BASE, VirtualDriver};
+use secmp_testkit::harness::{CONTROL_SLOT_BASE, Inspect, START_UNIX, VirtualDriver};
 
 use super::m6_common::evidence;
-use super::m7_world::{driver, hub, start};
+use super::m7_world::{add_party, driver, hub, rid_of, start};
 
 /// How many contacts `i` has.
 fn contacts(d: &mut VirtualDriver, i: usize) -> usize {
@@ -122,4 +122,72 @@ fn accept_commits_before_the_real_ack() {
         }
     }
     assert!(reached.is_some(), "the scheduler acknowledged the group");
+}
+
+/// C1-8 b (Q208, Q194, IN-11) end to end through the scheduler: an invitation that is never used is retired when it expires —
+/// its `QUEUE_DEL` is not requested before the first empty `FETCH` of its queue after the expiry, and is requested exactly
+/// once on a control slot `U[1 min, 60 min]` after that `FETCH`; afterwards the queue is not fetched, the stub row is gone
+/// and nothing was reported.
+#[test]
+fn expired_invitation_queue_del_end_to_end() {
+    let mut d = driver();
+    let p = add_party(&mut d, "q208e2e", 2, 13);
+    d.client(p.idx).opts.inspect = Inspect::Requests;
+    let issued = hub(&mut d, p.idx).invite(START_UNIX + 3_600).unwrap();
+    let queue = hub(&mut d, p.idx)
+        .invitation_queue(&issued.invitation.ld_id)
+        .unwrap();
+    let rid = rid_of(
+        hub(&mut d, p.idx)
+            .queue_material(queue)
+            .unwrap()
+            .0
+            .expose_secret(),
+    );
+    let expiry = 3_600_000_u64;
+    d.run_until(3 * 3_600_000);
+
+    let client = d.client_ref(p.idx);
+    let fetches_of_queue = || {
+        client
+            .requests
+            .iter()
+            .filter(|(_, slot, r)| {
+                *slot < CONTROL_SLOT_BASE
+                    && matches!(&r.cmd, RequestCmd::Fetch { rid: f, .. } if *f == rid)
+            })
+            .map(|(at, _, _)| *at)
+    };
+    let first_empty_fetch = fetches_of_queue()
+        .find(|at| *at >= expiry)
+        .expect("a FETCH of the queue after the expiry");
+    let dels: Vec<u64> = client
+        .control_requests
+        .iter()
+        .filter(|(_, _, rs)| {
+            rs.iter()
+                .any(|r| matches!(&r.cmd, RequestCmd::QueueDel { rid: f, .. } if *f == rid))
+        })
+        .map(|(at, _, _)| *at)
+        .collect();
+    assert_eq!(dels.len(), 1, "exactly one QUEUE_DEL: {dels:?}");
+    let del = *dels.first().unwrap();
+    assert!(
+        (first_empty_fetch + 60_000..=first_empty_fetch + 3_600_000 + 1_000).contains(&del),
+        "QUEUE_DEL {} ms after the first empty FETCH",
+        del.saturating_sub(first_empty_fetch)
+    );
+    assert!(
+        fetches_of_queue().all(|at| at <= del + 10_000),
+        "no FETCH of the queue after its QUEUE_DEL (one period of slack for a frame in flight)"
+    );
+    assert_eq!(client.hub_errors, Vec::<String>::new());
+    let rows = hub(&mut d, p.idx)
+        .profile_store()
+        .lock()
+        .unwrap()
+        .invitations()
+        .unwrap()
+        .len();
+    assert_eq!(rows, 0, "the stub row is gone");
 }

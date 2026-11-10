@@ -999,12 +999,27 @@ fn attributes_of(src: &str, name: &str) -> Option<String> {
         })
     };
     let at = lines.iter().position(|l| declares(l))?;
-    let mut attrs = Vec::new();
+    let mut attrs: Vec<String> = Vec::new();
+    // a multi-line attribute is read from its last line up to the `#[` that opens it
+    let mut open: Option<Vec<&str>> = None;
     for l in lines.get(..at).unwrap_or_default().iter().rev() {
         let t = l.trim();
-        if t.starts_with("#[") {
-            attrs.push(t);
-        } else if !t.starts_with("///") {
+        if let Some(mut parts) = open.take() {
+            if t.ends_with(';') || t.ends_with('{') || t.ends_with('}') || t.is_empty() {
+                break;
+            }
+            parts.push(t);
+            if t.starts_with("#[") {
+                parts.reverse();
+                attrs.push(parts.join(" "));
+            } else {
+                open = Some(parts);
+            }
+        } else if t.starts_with("#[") {
+            attrs.push(t.to_owned());
+        } else if t.ends_with(']') {
+            open = Some(vec![t]);
+        } else if !t.starts_with("//") {
             break;
         }
     }
@@ -1041,10 +1056,12 @@ fn no_derive_debug_on_secret_carriers() -> Result<()> {
         ("scheduler/outbox.rs", "CommitParts"),
         ("scheduler/outbox.rs", "MemPersist"),
     ];
+    // `derive(…Debug…)` anywhere in an attribute, so also inside `cfg_attr(…, derive(…))`
     fn derives_debug(attrs: &str) -> bool {
-        attrs
-            .split("#[")
-            .any(|a| a.trim_start().starts_with("derive(") && has_word(a, "Debug"))
+        attrs.match_indices("derive(").any(|(at, _)| {
+            let list = attrs.get(at..).unwrap_or_default();
+            has_word(list.split(')').next().unwrap_or_default(), "Debug")
+        })
     }
     let root =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-client-core/src");
@@ -1068,6 +1085,12 @@ fn no_derive_debug_on_secret_carriers() -> Result<()> {
     let other = "#[derive(Clone)]\npub(crate) struct Stored {\n    seed: [u8; 32],\n}\n";
     assert!(attributes_of(other, "Stored").is_some_and(|a| !derives_debug(&a)));
     assert!(attributes_of(other, "Store").is_none());
+    let multi = "#[derive(\n    Clone,\n    Debug,\n)]\npub struct QueueEntry {\n}\n";
+    assert!(attributes_of(multi, "QueueEntry").is_some_and(|a| derives_debug(&a)));
+    let gated = "#[cfg_attr(feature = \"kat\", derive(Debug))]\npub enum Request {\n}\n";
+    assert!(attributes_of(gated, "Request").is_some_and(|a| derives_debug(&a)));
+    let gated_other = "#[cfg_attr(feature = \"kat\", derive(Clone))]\npub enum Request {\n}\n";
+    assert!(attributes_of(gated_other, "Request").is_some_and(|a| !derives_debug(&a)));
     Ok(())
 }
 
@@ -1075,18 +1098,52 @@ fn no_derive_debug_on_secret_carriers() -> Result<()> {
 /// its `{` or `;`, as `(line, text)`; an item right after `#[cfg(feature = "kat")]` (doc comments between) is left out.
 #[cfg(test)]
 fn public_signatures(src: &str) -> Vec<(usize, String)> {
+    const FNS: &[&str] = &[
+        "fn ",
+        "const fn ",
+        "async fn ",
+        "unsafe fn ",
+        "const unsafe fn ",
+        "const async fn ",
+        "async unsafe fn ",
+    ];
     let text = product(src);
     let lines: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
+    let indent = |l: &str| l.len().saturating_sub(l.trim_start().len());
     let mut gated = false;
+    // the indent of the `impl … for …` block the walk is in: its methods are signatures without a `pub`
+    let mut trait_impl: Option<usize> = None;
     let mut i = 0_usize;
     while let Some(line) = lines.get(i) {
         let t = line.trim();
+        if let Some(at) = trait_impl
+            && indent(line) == at
+            && t.starts_with('}')
+        {
+            trait_impl = None;
+        }
+        if t.starts_with("impl") && trait_impl.is_none() {
+            let mut header = String::new();
+            for l in lines.iter().skip(i) {
+                header.push_str(l.trim());
+                header.push(' ');
+                if l.contains('{') || l.trim_end().ends_with(';') {
+                    break;
+                }
+            }
+            if header.contains(" for ") && header.contains('{') {
+                trait_impl = Some(indent(line));
+            }
+        }
+        let in_trait_impl = trait_impl.is_some_and(|at| indent(line) == at.saturating_add(4));
         if t == r#"#[cfg(feature = "kat")]"# {
             gated = true;
-        } else if ["pub fn ", "pub const fn ", "pub type "]
-            .iter()
-            .any(|k| t.starts_with(k))
+        } else if t.starts_with("pub type ")
+            || FNS
+                .iter()
+                .any(|k| t.strip_prefix("pub ").unwrap_or(t).starts_with(k))
+                && (t.starts_with("pub ") || in_trait_impl)
         {
             let mut sig = String::new();
             let mut k = i;
@@ -1113,14 +1170,15 @@ fn public_signatures(src: &str) -> Vec<(usize, String)> {
 
 /// The public functions of `src` (outside `kat`-gated items and the test module, [`public_signatures`]) that hand out
 /// queue seeds as plain bytes: a name or the file's path holds one of the needles (`seed`, `material`) and the return type
-/// holds `[u8; 32]` or a public type alias of `src` that does — plus every such alias whose name holds a needle.
+/// holds `[u8; 32]` or a type alias that does (`aliases`: the public ones of the whole crate, [`plain_aliases`]) — plus
+/// every such alias of `src` whose name holds a needle. Methods of `impl … for …` blocks count like public functions.
 #[cfg(test)]
-fn plain_seed_returns(path: &str, src: &str) -> Vec<(usize, String)> {
+fn plain_seed_returns(path: &str, src: &str, crate_aliases: &[String]) -> Vec<(usize, String)> {
     const NEEDLES: &[&str] = &["seed", "material"];
     const PLAIN: &str = "[u8; 32]";
     let items = public_signatures(src);
     let named = |text: &str| NEEDLES.iter().any(|n| text.to_lowercase().contains(n));
-    let mut aliases = Vec::new();
+    let mut aliases: Vec<String> = crate_aliases.to_vec();
     let mut out = Vec::new();
     for (line, text) in &items {
         if let Some(rest) = text.strip_prefix("pub type ")
@@ -1135,10 +1193,7 @@ fn plain_seed_returns(path: &str, src: &str) -> Vec<(usize, String)> {
         }
     }
     for (line, text) in &items {
-        let Some(signature) = text
-            .strip_prefix("pub fn ")
-            .or_else(|| text.strip_prefix("pub const fn "))
-        else {
+        let Some(signature) = signature_of_fn(text) else {
             continue;
         };
         let name: String = signature
@@ -1155,6 +1210,33 @@ fn plain_seed_returns(path: &str, src: &str) -> Vec<(usize, String)> {
     }
     out
 }
+
+/// The text of a signature from `public_signatures` after its `pub` and qualifiers, starting at the function name; `None`
+/// for a `pub type`.
+#[cfg(test)]
+fn signature_of_fn(text: &str) -> Option<&str> {
+    let mut rest = text.strip_prefix("pub ").unwrap_or(text);
+    while let Some(next) = ["const ", "async ", "unsafe "]
+        .iter()
+        .find_map(|q| rest.strip_prefix(q))
+    {
+        rest = next;
+    }
+    rest.strip_prefix("fn ")
+}
+
+/// The names of the type aliases of `src` that hold a plain `[u8; 32]`, to be passed on to [`plain_seed_returns`] for the
+/// other files of the crate.
+#[cfg(test)]
+fn plain_aliases(src: &str) -> Vec<String> {
+    public_signatures(src)
+        .iter()
+        .filter_map(|(_, t)| t.strip_prefix("pub type ")?.split_once('='))
+        .filter(|(_, def)| def.contains("[u8; 32]"))
+        .map(|(name, _)| name.trim().to_owned())
+        .collect()
+}
+
 /// Q211 (VERIFY-B4 P1 M-5 = P2 M-4; CLAUDE.md §1.6): no public function of `secmp-client-core/src` outside `kat`/test
 /// items returns queue seeds as plain `[u8; 32]` (or through a type alias that holds one) — they are `SecretBytes<32>`,
 /// an absent sender seed is `None`. The needles are pinned here; the scan finds a fixture's plain return and alias.
@@ -1165,8 +1247,8 @@ fn no_plain_seed_returns() -> Result<()> {
     let src = root.join("crates/secmp-client-core/src");
     let mut found = Vec::new();
     let mut fns = 0_usize;
+    let mut files = Vec::new();
     for file in crate::util::walk_files(&src, &|p| p.extension().is_some_and(|x| x == "rs"))? {
-        let rel = crate::util::rel(&root, &file);
         let name = file
             .file_name()
             .and_then(|n| n.to_str())
@@ -1174,15 +1256,22 @@ fn no_plain_seed_returns() -> Result<()> {
         if name == "testutil.rs" || name == "kani_proofs.rs" || name.ends_with("tests.rs") {
             continue;
         }
-        let text = std::fs::read_to_string(&file)?;
+        files.push((
+            crate::util::rel(&root, &file),
+            std::fs::read_to_string(&file)?,
+        ));
+    }
+    // first pass: the plain-bytes aliases of the whole crate; second pass: the functions
+    let aliases: Vec<String> = files.iter().flat_map(|(_, t)| plain_aliases(t)).collect();
+    for (rel, text) in &files {
         fns = fns.saturating_add(
-            public_signatures(&text)
+            public_signatures(text)
                 .iter()
                 .filter(|(_, t)| t.starts_with("pub fn "))
                 .count(),
         );
         found.extend(
-            plain_seed_returns(&rel, &text)
+            plain_seed_returns(rel, text, &aliases)
                 .into_iter()
                 .map(|(n, t)| format!("{rel}:{n}: {t}")),
         );
@@ -1196,12 +1285,47 @@ fn no_plain_seed_returns() -> Result<()> {
                    pub fn typed_seed(&self) -> SecretBytes<32> {\n    todo()\n}\n\
                    #[cfg(feature = \"kat\")]\n\
                    pub fn seed_kat(&self) -> [u8; 32] {\n    [0; 32]\n}\n";
-    let hits = plain_seed_returns("crates/x/src/a.rs", fixture);
+    let hits = plain_seed_returns("crates/x/src/a.rs", fixture, &[]);
     assert_eq!(hits.len(), 3, "{hits:?}");
     let by_path = "pub fn fingerprint(&self) -> [u8; 32] {\n    [0; 32]\n}\n";
-    assert!(plain_seed_returns("crates/x/src/a.rs", by_path).is_empty());
+    assert!(plain_seed_returns("crates/x/src/a.rs", by_path, &[]).is_empty());
     assert_eq!(
-        plain_seed_returns("crates/x/src/seeds.rs", by_path).len(),
+        plain_seed_returns("crates/x/src/seeds.rs", by_path, &[]).len(),
+        1
+    );
+    // C2-2: the other function qualifiers, trait-impl methods and aliases of another file
+    for (what, text) in [
+        (
+            "async",
+            "pub async fn queue_material(&self) -> [u8; 32] {\n    [0; 32]\n}\n",
+        ),
+        (
+            "unsafe",
+            "pub unsafe fn seed_raw(&self) -> [u8; 32] {\n    [0; 32]\n}\n",
+        ),
+        (
+            "const unsafe",
+            "pub const unsafe fn seed_raw(&self) -> [u8; 32] {\n    [0; 32]\n}\n",
+        ),
+        (
+            "trait method",
+            "impl SeedSource for Hub {\n    fn send_seed(&self) -> [u8; 32] {\n        [0; 32]\n    }\n}\n",
+        ),
+    ] {
+        let hits = plain_seed_returns("crates/x/src/a.rs", text, &[]);
+        assert_eq!(hits.len(), 1, "{what}: {hits:?}");
+    }
+    let typed_trait = "impl SeedSource for Hub {\n    fn send_seed(&self) -> SecretBytes<32> {\n        todo()\n    }\n}\n";
+    assert!(plain_seed_returns("crates/x/src/a.rs", typed_trait, &[]).is_empty());
+    let (file_a, file_b) = (
+        "pub type RawSeed = [u8; 32];\n",
+        "pub fn material(&self) -> RawSeed {\n    [0; 32]\n}\n",
+    );
+    assert!(plain_seed_returns("crates/x/src/b.rs", file_b, &[]).is_empty());
+    let crate_aliases = plain_aliases(file_a);
+    assert_eq!(crate_aliases, ["RawSeed"]);
+    assert_eq!(
+        plain_seed_returns("crates/x/src/b.rs", file_b, &crate_aliases).len(),
         1
     );
     Ok(())

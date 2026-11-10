@@ -1,0 +1,8 @@
+head 8f4bcbdecee5e7926749aac0ccc1e5f156f40682
+
+## step 1 EXTB2-2 SE-22 sessions::tests::extb2_reset_with_argument_is_ignored (unfixed tree: test + helper only)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(extb2_reset_with_argument_is_ignored)'
+    thread '<unnamed>' (2163977) panicked at crates/secmp-client-core/src/sessions/tests.rs:543:9:
+    assertion `left == right` failed: a reset with an argument
+      left: Err(Reset)
+     right: Ok(())

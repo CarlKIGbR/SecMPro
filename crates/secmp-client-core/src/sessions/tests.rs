@@ -525,6 +525,45 @@ fn session_reset_request() -> R {
     })
 }
 
+/// SE-22 (EXTB2-2; ADR-054 item 4): `Control{SessionResetRequest}` with an argument is ignored — committed and
+/// acknowledged, no event, no block, also not after a reopen; without an argument it blocks with `Reset`.
+#[cfg(feature = "kat")]
+#[test]
+fn extb2_reset_with_argument_is_ignored() -> R {
+    use secmp_proto::wire::cell::{ContentBody, ControlBody, ControlCode};
+
+    big(|| {
+        let mut w = established("extb2-reset", 621)?;
+        assert_eq!(w.h.may_send_real(), Ok(()));
+        w.g.queue_raw_content_test(ContentBody::Control(ControlBody {
+            code: ControlCode::SessionResetRequest,
+            arg: Zeroizing::new(vec![0x42]),
+        }));
+        deliver(&mut w.h, &next(&mut w.g, ms(5))?)?;
+        assert_eq!(w.h.may_send_real(), Ok(()), "a reset with an argument");
+        assert!(w.h.take_events().is_empty(), "no event");
+        let World { host, guest, h, g } = w;
+        drop((h, g, guest));
+        let host = host.reopen()?;
+        assert_eq!(
+            open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(622)), T0)?
+                .may_send_real(),
+            Ok(()),
+            "no durable block"
+        );
+        // the control: without an argument the reset blocks
+        let mut w = established("extb2-reset2", 623)?;
+        w.g.queue_control(ControlCode::SessionResetRequest);
+        deliver(&mut w.h, &next(&mut w.g, ms(5))?)?;
+        assert_eq!(w.h.may_send_real(), Err(Refusal::Reset));
+        assert!(matches!(
+            w.h.take_events().as_slice(),
+            [SessionEvent::ResetRequested]
+        ));
+        Ok(())
+    })
+}
+
 /// The key change of `host` to a new identity, signed by the old `IK_sig` (or by `signer` instead), as fragments.
 #[cfg(feature = "kat")]
 fn key_change(w: &mut World, other_signer: bool) -> Result<secmp_proto::wire::inv::IksPublic, E> {

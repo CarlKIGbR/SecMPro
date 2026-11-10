@@ -257,7 +257,7 @@ pub enum SessionEvent {
     KeyChangeInvalid,
     /// `Control{ContactRemoved}` without an argument (ADR-054 item 4).
     ContactRemoved,
-    /// `Control{SessionResetRequest}` (spec §7.6 code 2).
+    /// `Control{SessionResetRequest}` without an argument (spec §7.6 code 2; ADR-054 item 4, EXTB2-2).
     ResetRequested,
     /// A message was relayed and no receipt came within `T_RS` (spec §10.4; OPEN-M7-07 A): not re-sent.
     NotConfirmed(MsgId),
@@ -999,6 +999,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.on_relayed(token, cell_id);
     }
 
+    /// Plan `body` as session content without a durable row (tests only: a content the product never plans).
+    #[cfg(test)]
+    pub(crate) fn queue_raw_content_test(&mut self, body: ContentBody) {
+        self.plan_control(body, None);
+    }
+
     /// A dummy for a queue in send overlap: sealed by the same path as every cell, never real content and never a handshake
     /// cell (spec §10.6 (4): "only dummies on the old queue").
     fn prepare_overlap(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
@@ -1303,11 +1309,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     self.block = Some(Refusal::Removed);
                     self.events.push(SessionEvent::ContactRemoved);
                 }
-                ControlCode::SessionResetRequest => {
+                // EXTB2-2: a reset request carries no argument (ADR-054 item 4); one with an argument is ignored
+                ControlCode::SessionResetRequest if body.arg.is_empty() => {
                     self.block = Some(Refusal::Reset);
                     self.events.push(SessionEvent::ResetRequested);
                 }
-                ControlCode::ContactRemoved => {}
+                _ => {}
             },
             _ => {}
         }
@@ -1360,7 +1367,7 @@ type NewIdentity = (Zeroizing<Vec<u8>>, [u8; 32]);
 /// What a received cell's delivery makes durable besides the ratchet, the reassembly state and the trust (the receive
 /// commit, persist-before-ack).
 struct Effects {
-    /// A `Control{1}` (no argument) or `Control{2}`: real sends are blocked durably (Q210 b).
+    /// A `Control{1}` or `Control{2}`, each without an argument: real sends are blocked durably (Q210 b; EXTB2-2).
     block: Option<u8>,
     /// The messages a `Receipt{delivered}` confirms: `Delivered` (SE-21, F9b).
     receipted: Vec<MsgId>,
@@ -1402,8 +1409,8 @@ fn effects(delivery: &Delivery) -> Effects {
     let block = match delivery {
         Delivery::Control(body) => match body.code {
             ControlCode::ContactRemoved if body.arg.is_empty() => block_code(Refusal::Removed),
-            ControlCode::SessionResetRequest => block_code(Refusal::Reset),
-            ControlCode::ContactRemoved => None,
+            ControlCode::SessionResetRequest if body.arg.is_empty() => block_code(Refusal::Reset),
+            _ => None,
         },
         _ => None,
     };

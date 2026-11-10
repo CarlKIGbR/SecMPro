@@ -1464,3 +1464,27 @@ Anchors re-found (old @ab72776 → new at `d614546`): `hub.rs` stub re-arm loop 
 ### §B-4d.5 Blocked
 
 None.
+
+## §B-4e — Debug and seed scans close their blind spots (WEISUNG M7-B-4e2; C1-5, C2-2; `modell=claude-sonnet-5-5`)
+
+### §B-4e.0 Guard
+`<B4E-START>` = `aac2242`, subject `docs(m7): B-4d @ dcd4a93 (Q213–Q215; VERIFY-DELTA-B4b, B4c 1–2)`; clean tree, branch `m07-client-core`; highest D entry before: `D-B47`. `target/fable/material/M7-B-4e/` did not exist in the container; the fixtures are those dictated in the Weisung. No dependency, lockfile, `secmp-proto`, `vectors/`, `docs/03`/`docs/02` change; no product code change.
+
+### §B-4e.1 Findings
+Commit `eeaa895` `test(xtask): Debug and seed scans close their blind spots (C1-5, C2-2)` — `xtask/src/testscan.rs`. Red lines verbatim in `docs/reviews/M07-evidence/b4e-red-first.txt` (head `aac2242`).
+
+| Finding | Change | Fixtures (all red against the old scanner) |
+|---|---|---|
+| C1-5 | `attributes_of` joins a multi-line attribute (read upward from its closing `]` to its `#[`) and walks across attribute and `//` lines; `derives_debug` finds `derive(…Debug…)` anywhere in an attribute, so also in `cfg_attr(…, derive(…))` | `#[derive(\n Clone,\n Debug,\n)]` on `QueueEntry` caught (red: `attributes_of(multi, "QueueEntry").is_some_and(|a| derives_debug(&a))`); `#[cfg_attr(feature = "kat", derive(Debug))]` on `Request` caught (red); `cfg_attr(…, derive(Clone))` not caught (green both) |
+| C2-2 | `public_signatures` takes `pub async fn`, `pub unsafe fn`, `pub const unsafe fn` (and `const async`, `async unsafe`) and every `fn` one indent level inside an `impl … for …` block; `plain_aliases` collects the plain-`[u8; 32]` aliases of every file in a first pass, `plain_seed_returns` takes them as a parameter; `no_plain_seed_returns` walks twice | `pub async fn queue_material`, `pub unsafe fn seed_raw`, `pub const unsafe fn seed_raw`, trait method `fn send_seed` in `impl SeedSource for Hub` (each red: expected 1 hit, got `[]`); two-file alias `RawSeed` / `material() -> RawSeed` (red: `left: 0 right: 1`); negative: trait method returning `SecretBytes<32>` gives no hit |
+
+Product hits of the widened scans: none (`no_derive_debug_on_secret_carriers` and `no_plain_seed_returns` are green on `secmp-client-core/src`), so no product code changed and no `SecretBytes<32>` retyping was needed.
+
+### §B-4e.2 Gates
+`cargo xtask ci-fast` at `eeaa895`: PASS (first run on the uncommitted tree failed in clippy `items_after_statements` for a `const` in `public_signatures`; moved it above the first statement, fmt/clippy clean, rerun PASS) → `docs/reviews/M07-evidence/ci-fast-b4e-1-eeaa895.txt`. ci-full: not run (no product change).
+
+### §B-4e.3 Deviations (new: D-B48)
+- **D-B48 (red-first form).** The old `plain_seed_returns` has a two-argument signature, so the seed fixtures could not be compiled unchanged against it; the old scanner body was kept behind the new signature (the `crate_aliases` parameter ignored) for the red run. The four single-file fixtures of the loop were reported by a temporary `eprintln!` (the committed loop asserts and would stop at the first failure). Scope kept: hand-written `impl Debug` bodies and raw-seed struct fields stay deferred to M8.
+
+### §B-4e.4 Blocked
+None.

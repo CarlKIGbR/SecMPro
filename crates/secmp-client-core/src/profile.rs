@@ -766,7 +766,9 @@ mod tests {
             let mut all = Vec::new();
             for path in names {
                 all.extend_from_slice(path.file_name().map_or(&[][..], |n| n.as_encoded_bytes()));
-                if path.is_file() {
+                // `profile.db-shm` is SQLite's transient WAL index; its byte-range locks make a read fail on Windows while a connection is open; it is
+                // not persistent state, so excluding it keeps the 'nothing written' proof for `profile.db` and `profile.db-wal`.
+                if path.is_file() && !path.as_os_str().as_encoded_bytes().ends_with(b"-shm") {
                     all.extend_from_slice(&std::fs::read(&path)?);
                 }
             }

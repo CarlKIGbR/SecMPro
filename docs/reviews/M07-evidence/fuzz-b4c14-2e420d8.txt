@@ -1,0 +1,23 @@
+fuzz step on HEAD 2e420d86c2c0ee28c17084fb7d36b487b3ad60e6 (Q219: the tree with the fuzz-model fix; code commit 2e420d8)
+# cargo xtask step --strict fuzz   (Q219; tracked scheduler_event_sequence seeds: 6 = 4 + regress-b4c13-00c9f834 + regress-b4c13-in15)
+# exit 0
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   6 fuzz            PASS       4413s  fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: backup_import, caead_open, client_pipeline_responses, ed25519_verify, hx_accept_raw, hx_accept_structured, hx_cell_plaintext, hx_inner, hx_outer, hybrid_sign_verify, inv_linkdata, inv_uri, invitation_queue_retention, link_client_handshake, link_frame_open, link_records, link_relay_handshake, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, q_request_decode, q_response_decode, relay_executor, relay_link_session, relayref_onion_to_hsid, scheduler_event_sequence, store_record_open, tls_pin_verifier, tr_decrypt, tr_state, x25519_dh (expected set matches); vector seeds: backup_import 0, caead_open 25, client_pipeline_responses 0, ed25519_verify 25, hx_accept_raw 24, hx_accept_structured 39, hx_cell_plaintext 45, hx_inner 9, hx_outer 15, hybrid_sign_verify 42, inv_linkdata 13, inv_uri 4, invitation_queue_retention 0, link_client_handshake 9, link_frame_open 66, link_records 28, link_relay_handshake 13, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, q_request_decode 53, q_response_decode 96, relay_executor 0, relay_link_session 0, relayref_onion_to_hsid 0, scheduler_event_sequence 0, store_record_open 0, tls_pin_verifier 0, tr_decrypt 53, tr_state 1, x25519_dh 54; executor fuzzers with -len_control=0: relay_executor: 1369 runs, lim 4322 (= max_len); relay_link_session: 16584 runs, lim 69426 (= max_len)
+step: PASS
+### gate `fuzz`
+| status | PASS (4413 s) |
+| line 1 | fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: backup_import, caead_open, client_pipeline_responses, ed25519_verify, hx_accept_raw, hx_accept_structured, hx_cell_plaintext, hx_inner, hx_outer, hybrid_sign_verify, inv_linkdata, inv_uri, invitation_queue_retention, link_client_handshake, link_frame_open, link_records, link_relay_handshake, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, q_request_decode, q_response_decode, relay_executor, relay_link_session, relayref_onion_to_hsid, scheduler_event_sequence, store_record_open, tls_pin_verifier, tr_decrypt, tr_state, x25519_dh (expected set matches) |
+| line 2 | vector seeds: backup_import 0, caead_open 25, client_pipeline_responses 0, ed25519_verify 25, hx_accept_raw 24, hx_accept_structured 39, hx_cell_plaintext 45, hx_inner 9, hx_outer 15, hybrid_sign_verify 42, inv_linkdata 13, inv_uri 4, invitation_queue_retention 0, link_client_handshake 9, link_frame_open 66, link_records 28, link_relay_handshake 13, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, q_request_decode 53, q_response_decode 96, relay_executor 0, relay_link_session 0, relayref_onion_to_hsid 0, scheduler_event_sequence 0, store_record_open 0, tls_pin_verifier 0, tr_decrypt 53, tr_state 1, x25519_dh 54 |
+| line 3 | executor fuzzers with -len_control=0: relay_executor: 1369 runs, lim 4322 (= max_len) |
+| line 4 | relay_link_session: 16584 runs, lim 69426 (= max_len) |
+INFO:        0 files found in target/fuzz-corpus/scheduler_event_sequence
+INFO:        6 files found in fuzz/corpus/scheduler_event_sequence
+# excerpt map (raw log target/fable/ci-full-raw/fuzz-b4c14-2e420d8.txt, 2598770 B, above the ADR-052 2 MiB gate; digest in ci-full-b4c-raw-digests.txt; verbatim copies, libFuzzer progress omitted):
+#   raw 1 head
+#   raw 2
+#   raw 21962
+#   raw 21959-21961 step summary
+#   raw 21951,21952,21953,21954,21955 gate fuzz rows
+#   raw 18211
+#   raw 18212

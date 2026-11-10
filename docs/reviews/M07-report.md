@@ -1401,3 +1401,17 @@ $
 ```
 (empty; `HEAD` = `e80e11c`.)
 - **D-CI3:** `secmp-client-core/src/testutil.rs` was mutated in PR run 41293668505 because `lib.rs` declared it under `cfg(all(test, feature = "kat"))` (cargo-mutants skips only a plain `cfg(test)`; Q20 rule, `5e1a136`). Fixed by splitting into `#[cfg(test)]` + `#[cfg(feature = "kat")]` at three sites (`client-core/src/lib.rs` `mod testutil`, `proto/src/prekeys.rs` `mod tests`, `proto/src/tr/state.rs` `mod tr_digest`; the two proto edits permitted by the reviewer, CI2c ruling); no `mutants-accepted` row. Proto list unchanged at 268: the proto test modules were already outside the list.
+
+## §B-4d — fix-ups after Phase B (WEISUNG M7-B-4d)
+
+modell=claude-sonnet-5-5 · HEAD `331723c` · branch `m07-client-core`
+
+### Blocked — STOP: precondition (step 0 guard)
+
+1. `git log --oneline ab72776..HEAD` lists commits touching `crates/*/src` beyond the sanctioned CI2 `cfg(all(test, feature = "kat"))` sites:
+   - `2e420d8` adds the test `sends_stamped_at_tick_are_period_apart_under_late_polls` in `crates/secmp-client-core/src/scheduler/core/mod.rs` (Q219, +52 lines).
+   - `331723c` rewrites test-only `cfg` forms in `crates/secmp-client-core/src/lib.rs`, `crates/secmp-proto/src/prekeys.rs` and `crates/secmp-proto/src/tr/state.rs` (`cfg(all(test, feature = "kat"))` → `cfg(test)` + `cfg(feature = "kat")`). Both are test-only, but they are not the sanctioned CI2 sites and the guard names this case a mismatch.
+2. The material directory `target/fable/material/M7-B-4d/` does not exist. `target/fable/material/` holds M6, M7, M7-A3c, M7-B-4b, M7-B-4c, M7-B-SC, M7-B-SC2 and M7-B3b2. `VERIFY-DELTA-B4b.md`, `VERIFY-DELTA-B4c-part1.md` and `VERIFY-DELTA-B4c-part2.md` are not present, so the findings B4b-n, C1-n and C2-n cannot be read.
+3. Minor, not blocking: `OPEN-M7-decided.md` is at `docs/reviews/M07-planning/`. Rows Q213–Q215 are present. The highest D entry is `D-B42`, not `D-B41`, so new entries would start at `D-B43`.
+
+No code was changed.

@@ -1053,4 +1053,29 @@ mod tests {
         assert_eq!(bad, Err(Error::Unavailable));
         Ok(())
     }
+
+    /// Q228 (CI4): the profile lock. `File::try_lock` is `LockFileEx` on Windows (mandatory: while a store is open, a read
+    /// of `lock` through another handle is `ERROR_LOCK_VIOLATION`, 33) and `flock` elsewhere (advisory: the read
+    /// succeeds); `profile.db` and `profile.db-wal` stay readable while it is open (PR-03 hashes them); `lock` is empty
+    /// after the store closed.
+    #[test]
+    fn held_profile_lock_refuses_reads_on_windows() -> R {
+        let dir = TempDir::new("lock-held")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        let held = std::fs::read(dir.path().join(LOCK_FILE));
+        if cfg!(windows) {
+            assert_eq!(
+                held.as_ref().err().and_then(std::io::Error::raw_os_error),
+                Some(33),
+                "read of the held lock: {held:?}"
+            );
+        } else {
+            assert!(held.is_ok(), "flock is advisory: {held:?}");
+        }
+        assert!(std::fs::read(dir.path().join(DB_FILE)).is_ok());
+        assert!(std::fs::read(dir.path().join(format!("{DB_FILE}-wal"))).is_ok());
+        drop(store);
+        assert_eq!(std::fs::read(dir.path().join(LOCK_FILE))?.len(), 0);
+        Ok(())
+    }
 }

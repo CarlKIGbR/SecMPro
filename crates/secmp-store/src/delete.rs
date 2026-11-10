@@ -59,7 +59,7 @@ mod tests {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                 })?;
         let mut raw = std::fs::read(plain_dir.path().join("profile.db"))?;
-        raw.extend(std::fs::read(plain_dir.path().join("profile.db-wal")).unwrap_or_default());
+        raw.extend(std::fs::read(plain_dir.path().join("profile.db-wal"))?);
         assert_eq!(
             contains(&raw, canary),
             !secure,
@@ -147,7 +147,7 @@ mod tests {
         assert!(image.chunks(page).all(|p| !contains(p, canary)));
         assert!(!contains(&image, canary));
         for f in ["profile.db", "profile.db-wal"] {
-            let bytes = std::fs::read(dir.path().join(f)).unwrap_or_default();
+            let bytes = std::fs::read(dir.path().join(f))?;
             assert!(!contains(&bytes, canary), "{f}");
         }
         // Q-A15: the same on plaintext profiles (every setting of `open_connection`, no key), where the raw files are the

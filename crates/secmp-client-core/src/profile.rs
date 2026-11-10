@@ -758,23 +758,6 @@ mod tests {
         use crate::clock::ManualClock;
         use crate::testutil::Fixed;
 
-        fn tree_hash(dir: &std::path::Path) -> Result<[u8; 32], E> {
-            let mut names: Vec<_> = std::fs::read_dir(dir)?
-                .map(|e| e.map(|e| e.path()))
-                .collect::<Result<_, _>>()?;
-            names.sort();
-            let mut all = Vec::new();
-            for path in names {
-                all.extend_from_slice(path.file_name().map_or(&[][..], |n| n.as_encoded_bytes()));
-                // `profile.db-shm` is SQLite's transient WAL index; its byte-range locks make a read fail on Windows while a connection is open; it is
-                // not persistent state, so excluding it keeps the 'nothing written' proof for `profile.db` and `profile.db-wal`.
-                if path.is_file() && !path.as_os_str().as_encoded_bytes().ends_with(b"-shm") {
-                    all.extend_from_slice(&std::fs::read(&path)?);
-                }
-            }
-            Ok(sha256(&[&all]))
-        }
-
         let mut e = crate::testutil::entropy(3);
         let fx = Fixture::new("pr03", &mut e)?;
         let open = |dir: &std::path::Path, pass: &[u8]| {
@@ -883,6 +866,92 @@ mod tests {
         let spks = p.spk_ids()?;
         let again = fx.reopen()?;
         assert_eq!(again.profile.spk_ids()?, spks);
+        Ok(())
+    }
+
+    /// PR-03: the profile directory as one hash — the names of all entries; `lock` by its length, which must be 0 (the
+    /// open store holds it through `File::try_lock`, a mandatory `LockFileEx` on Windows: no read through another
+    /// handle; it is never written, so its length is its content); `*-shm` (SQLite's transient WAL index) by name;
+    /// every other file by its bytes. Every file-system error names its path.
+    #[cfg(feature = "kat")]
+    fn tree_hash(dir: &std::path::Path) -> Result<[u8; 32], E> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .map_err(|e| format!("{}: {e}", dir.display()))?
+            .map(|e| e.map(|e| e.path()))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        names.sort();
+        let mut all = Vec::new();
+        for path in names {
+            let name = path.file_name().map_or(&[][..], |n| n.as_encoded_bytes());
+            all.extend_from_slice(name);
+            if !path.is_file() || name.ends_with(b"-shm") {
+                continue;
+            }
+            if name == secmp_store::store::LOCK_FILE.as_bytes() {
+                let len = std::fs::metadata(&path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?
+                    .len();
+                if len != 0 {
+                    return Err(format!(
+                        "{}: the lock file was written ({len} bytes)",
+                        path.display()
+                    )
+                    .into());
+                }
+                all.extend_from_slice(&len.to_be_bytes());
+            } else {
+                all.extend_from_slice(
+                    &std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+                );
+            }
+        }
+        Ok(sha256(&[&all]))
+    }
+
+    #[cfg(feature = "kat")]
+    fn write_tree(dir: &std::path::Path, files: &[(&str, &[u8])]) -> R {
+        for (name, bytes) in files {
+            std::fs::write(dir.join(name), bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Q228 (CI4): `tree_hash` hashes every byte of `profile.db`, `profile.db-wal` and `wrap`, the name of
+    /// `profile.db-shm` only, and refuses a `lock` file that holds bytes.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn tree_hash_covers_persistent_bytes() -> R {
+        let dir = secmp_store::kat::TempDir::new("tree-hash")?;
+        let files: [(&str, &[u8]); 5] = [
+            ("wrap", b"w"),
+            ("profile.db", b"d"),
+            ("profile.db-wal", b"wal0"),
+            ("profile.db-shm", b"shm0"),
+            ("lock", b""),
+        ];
+        write_tree(dir.path(), &files)?;
+        let h0 = tree_hash(dir.path())?;
+        assert_eq!(tree_hash(dir.path())?, h0, "deterministic");
+        write_tree(dir.path(), &[("profile.db-wal", &b"wal1"[..])])?;
+        assert_ne!(
+            tree_hash(dir.path())?,
+            h0,
+            "a changed -wal byte changes the hash"
+        );
+        write_tree(
+            dir.path(),
+            &[
+                ("profile.db-wal", &b"wal0"[..]),
+                ("profile.db-shm", &b"shm1"[..]),
+            ],
+        )?;
+        assert_eq!(tree_hash(dir.path())?, h0, "the -shm content is not hashed");
+        write_tree(dir.path(), &[("lock", &b"x"[..])])?;
+        assert!(
+            tree_hash(dir.path()).is_err(),
+            "a write to `lock` is caught"
+        );
         Ok(())
     }
 }

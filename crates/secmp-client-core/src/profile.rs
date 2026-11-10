@@ -364,6 +364,7 @@ impl Profile {
             if row.expires_ms <= now_ms || (all_open && row.status == INVITATION_OPEN) {
                 let consumed = row.status != INVITATION_OPEN;
                 let (lo, hi) = crate::sessions::rotation::OVERLAP_MS;
+                // informational upper bound, not an arming deadline (Q213): the `QUEUE_DEL` waits for an empty `FETCH`
                 let retire_at_ms = if consumed {
                     0
                 } else {

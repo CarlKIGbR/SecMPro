@@ -819,7 +819,8 @@ impl Invitations {
                 continue;
             }
             let ld_id = ld_id_of(&row.ld_id)?;
-            let (r, q) = if row.status == INVITATION_RETIRING {
+            let retiring = row.status == INVITATION_RETIRING;
+            let (r, q) = if retiring {
                 let plain = store.invitation_record(&ld_id)?.ok_or(Error::Unavailable)?;
                 let entry = QueueEntry::decode_one(&plain)?;
                 (entry.relay, entry.queue)
@@ -828,7 +829,7 @@ impl Invitations {
                 (loaded.stored.relay.0, loaded.stored.queue.0)
             };
             if q == queue.0 && r == relay.0 {
-                gone = Some(ld_id);
+                gone = Some((ld_id, retiring));
                 break;
             }
         }
@@ -846,6 +847,9 @@ impl Invitations {
                 sets.push((c.id, set.encode()?));
             }
         }
+        // a consumed row goes only with a retiring entry of its queue that left a contact in this transaction (C1-3)
+        let gone =
+            gone.and_then(|(ld_id, retiring)| (retiring || !sets.is_empty()).then_some(ld_id));
         store.txn(|tx| {
             for (contact, encoded) in &sets {
                 secmp_store::contacts::put_contact_queues(tx, *contact, encoded)?;

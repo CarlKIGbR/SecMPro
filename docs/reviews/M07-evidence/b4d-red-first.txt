@@ -1,0 +1,15 @@
+head 331723c
+
+## Q213 hub::tests::retiring_invitation_queue_is_rearmed_after_a_restart
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(retiring_invitation_queue_is_rearmed_after_a_restart)'
+    thread '<unnamed>' (1473880) panicked at crates/secmp-client-core/src/hub.rs:1287:13:
+    assertion `left == right` failed
+      left: [AfterEmptyFetchFrom(QueueId(1), 544165666)]
+     right: [AfterEmptyFetch(QueueId(1))]
+
+## C1-3 invitations::tests::queue_deleted_keeps_consumed_row_without_retiring_entry
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(queue_deleted_keeps_consumed)'
+    thread 'invitations::tests::queue_deleted_keeps_consumed_row_without_retiring_entry' (1474486) panicked at crates/secmp-client-core/src/invitations_tests.rs:2165:5:
+    assertion failed: !invitations.queue_deleted(record.relay, record.queue)?
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+

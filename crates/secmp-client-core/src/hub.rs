@@ -149,7 +149,6 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         }
         // the queues of invitations retired unconsumed whose `QUEUE_DEL` did not run yet: fetched again until the empty
         // `FETCH`, then deleted (Q201); their cells are acknowledged and dropped
-        let base = hub.unix_base();
         for (ld_id, entry) in hub.invitations.retiring()? {
             let queue = QueueId(entry.queue);
             let period = u64::from(entry.period_s).saturating_mul(1_000);
@@ -158,12 +157,12 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             if fresh.contains(&queue) {
                 continue;
             }
-            let from = entry.retire_at_ms.unwrap_or(0).saturating_sub(base);
+            // the same form as the live retirement (Q213); the stub's `retire_at_ms` is an informational upper bound
             hub.actions.push(Action::Control(OpSpec {
                 kind: ControlKind::QueueDel(queue),
                 relay: RelayId(entry.relay),
                 related: u64::from(queue.0),
-                when: When::AfterEmptyFetchFrom(queue, from),
+                when: When::AfterEmptyFetch(queue),
             }));
         }
         let contacts: Vec<ContactId> = hub.core.index.keys().map(|c| ContactId(*c)).collect();
@@ -1272,18 +1271,20 @@ mod tests {
                 a,
                 Action::AddRecv { queue: q, period_ms: 40_000, .. } if *q == queue
             )));
-            let rearmed: Vec<u64> = actions
+            let rearmed_whens: Vec<When> = actions
                 .iter()
                 .filter_map(|a| match a {
                     Action::Control(OpSpec {
                         kind: ControlKind::QueueDel(q),
-                        when: When::AfterEmptyFetchFrom(w, from),
+                        when,
                         ..
-                    }) if *q == queue && *w == queue => Some(*from),
+                    }) if *q == queue => Some(*when),
                     _ => None,
                 })
                 .collect();
-            assert_eq!(rearmed.len(), 1, "{} actions", actions.len());
+            // Q213: one form live and after a restart
+            assert_eq!(rearmed_whens, vec![When::AfterEmptyFetch(queue)]);
+            assert_eq!(rearmed_whens.first(), retired.ops.first().map(|o| &o.when));
             assert_eq!(exposed(again.queue_material(queue)), Some(material));
             again.queue_deleted(queue)?;
             assert!(matches!(

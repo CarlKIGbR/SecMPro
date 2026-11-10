@@ -2137,3 +2137,36 @@ mod extb1_review {
         Ok(())
     }
 }
+
+/// C1-3: a consumed invitation's row goes with its queue's `QUEUE_DEL` only if a retiring entry of that queue left a
+/// contact's `contacts.queues` in the same transaction; the queue of a consumed invitation that is current in the contact
+/// (no deadline) keeps its row and the contact's queue set stays byte for byte.
+#[cfg(feature = "kat")]
+#[test]
+fn queue_deleted_keeps_consumed_row_without_retiring_entry() -> R {
+    let (fx, mut e) = inviter("c13", 51, 1)?;
+    let (peer, mut pe) = invitee("c13-peer", 53, 2)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let on = crate::testutil::round_on(&invitations, &ld_id)?;
+    let cells = handshake(&peer, &mut pe, &issued)?;
+    let fetched: Vec<(u64, Cell)> = (1000..).zip(cells).collect();
+    let out = invitations.process_round(&ld_id, on, &fetched, &fx.clock, &mut e)?;
+    assert_eq!(out.accepted, Some(ContactId(1)));
+    let record = record_of(&fx, &ld_id)?;
+    let queues_of = || -> Result<Option<Vec<u8>>, E> {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        Ok(s.contact_queues(1)?.map(|z| z.to_vec()))
+    };
+    let before = queues_of()?;
+    assert!(before.is_some());
+    assert!(!invitations.queue_deleted(record.relay, record.queue)?);
+    assert_eq!(queues_of()?, before);
+    assert!(
+        record_of(&fx, &ld_id).is_ok(),
+        "the consumed row is still present"
+    );
+    Ok(())
+}

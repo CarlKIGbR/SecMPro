@@ -1,0 +1,16 @@
+cargo xtask ci-fast @ e1682f6 (host x86_64-unknown-linux-gnu, strict: false) — summary block of the run (the build/warning output above it is omitted)
+
+   1 fmt             PASS          1s
+   2 clippy          PASS          2s  (12 crates)
+   2 policy          PASS          1s
+   3 deny            PASS          0s
+   3 vet             PASS          1s
+   3 audit           PASS          2s
+   3 cooldown        PASS         27s
+   4 nextest         PASS         24s
+   4 doctest         PASS          1s
+   4 hello           PASS          0s
+   5 kat             PASS        110s
+   5 harness         PASS        921s
+   6 fuzz-check      PASS          0s
+ci-fast: PASS

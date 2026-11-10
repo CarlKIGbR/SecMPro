@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 B-4d (Q213–Q215; VERIFY-DELTA-B4b, B4c 1–2): one `QUEUE_DEL` re-arm form for retiring invitation queues, a stored `Frozen` kept by every `contacts.verified` writer, an unloadable new `IK_sig` freezes the session, `Stored::encode` reserves its exact length, the test driver fails closed on a missing sender seed and surfaces hub errors; evidence `docs/reviews/M07-evidence/b4d-red-first.txt`, `ci-full-b4d-d614546.txt`.
 - M7 B-4 / B-4c: the 57th Kani harness `kani_prepare_link_send_before_fetch` (OPEN-M7-B-2; in B-4c its liveness check on the pre-update state, Q212 (5)); ci-fast's last step `fuzz-check` (`cargo check --locked` of the fuzz package on the pinned stable, ADR-045 Amendment 14, Q204).
 - M7 A-3b: `kani_q_frame_plaintext_exact_fit` split into `…_request`, `…_response_fetch`, `…_response_fetch_multi` and `tr_header_selection` into `…_k0_2`, `…_k3`, `…_k4` (OPEN-M7-26 B, Q135), one cover per q_frame harness; evidence `docs/reviews/M07-evidence/kani-m7-a3b-split-150d997.txt`. M7 A-3e: their bounds unwind 5 / 5 / 6 (Q138), `…_k4` the documented exception; evidence `kani-m7-a3e-tr-8ce73d9.txt`.
 - M7 A-2: ADR-055 effective — `rusqlite` (bundled SQLCipher/OpenSSL) in `secmp-store`, `argon2` in `secmp-crypto`; supply-chain records (provisional, Q129), ADR-051 Amendment 7; gates G7-01…G7-04.

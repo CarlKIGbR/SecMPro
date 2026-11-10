@@ -225,7 +225,7 @@ fn add_sender(
     sim.client(bob)
         .material
         .queues
-        .insert(b_recv.0, (recv_seed, send_seed));
+        .insert(b_recv.0, (recv_seed, Some(send_seed)));
     let (state_a, state_b) = sim.ratchet_states(alice, bob);
     let key_a = sim.peer_key(alice);
     let key_b = sim.peer_key(bob);

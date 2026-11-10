@@ -129,8 +129,9 @@ struct Conn {
 /// The key material the host holds for a queue the scheduler knows by id.
 #[derive(Default)]
 pub struct Material {
-    /// `(recv seed, send seed)` by queue.
-    pub queues: BTreeMap<u32, ([u8; 32], [u8; 32])>,
+    /// `(recv seed, send seed)` by queue; the sender seed is `None` where the store's entry has none (Q214: a `QUEUE_NEW`
+    /// for such a queue fails closed).
+    pub queues: BTreeMap<u32, ([u8; 32], Option<[u8; 32]>)>,
 }
 
 /// The link data the host holds for a `LinkPut` / `LinkGet` control operation.
@@ -1275,15 +1276,23 @@ impl VirtualDriver {
             ControlKind::QueueNew(queue) => {
                 let client = self.clients.get_mut(idx).unwrap();
                 let known = client.material.queues.get(&queue.0).copied();
-                let (recv, send) = if let Some(m) = known {
-                    m
-                } else {
-                    let m: ([u8; 32], [u8; 32]) = (
-                        client.entropy.bytes(32).try_into().unwrap(),
-                        client.entropy.bytes(32).try_into().unwrap(),
-                    );
-                    client.material.queues.insert(queue.0, m);
-                    m
+                let (recv, send) = match known {
+                    Some((recv, Some(send))) => (recv, send),
+                    Some((_, None)) => {
+                        // Q214: no sender seed in the stored entry: nothing is signed with a made-up one
+                        client
+                            .hub_errors
+                            .push(format!("QUEUE_NEW {}: no sender seed", queue.0));
+                        return Err(TransportError::Invalid);
+                    }
+                    None => {
+                        let m: ([u8; 32], [u8; 32]) = (
+                            client.entropy.bytes(32).try_into().unwrap(),
+                            client.entropy.bytes(32).try_into().unwrap(),
+                        );
+                        client.material.queues.insert(queue.0, (m.0, Some(m.1)));
+                        m
+                    }
                 };
                 let (rc, _sc) = transport.create_queue(
                     &SecretBytes::from_slice(&recv).unwrap(),
@@ -1370,10 +1379,10 @@ impl VirtualDriver {
         };
         match kind {
             ControlKind::QueueNew(queue) | ControlKind::QueueDel(queue) => {
-                // the driver's own copy of the material (Q211: the hub hands it out typed, an absent sender seed as
-                // `None`; the driver's map keeps zero bytes for it, as before — only a `QUEUE_DEL` uses such an entry)
+                // the driver's own copy of the material (Q211/Q214: the hub hands it out typed, an absent sender seed as
+                // `None`, kept as `None`; only a `QUEUE_DEL` can use such an entry)
                 if let Some((recv, send)) = hub.queue_material(queue) {
-                    let send = send.map_or([0; 32], |s| *s.expose_secret());
+                    let send = send.map(|s| *s.expose_secret());
                     client
                         .material
                         .queues

@@ -202,3 +202,60 @@ fn recreated_once(
         );
     }
 }
+
+/// Q214 (VERIFY-DELTA-B4b 2, C1-10): a queue whose stored entry has no sender seed is not re-created with a made-up one.
+/// The host's current entry is rewritten with `send_seed = None` (a valid encoding), the host restarts from the store and
+/// the relay loses its queues: no `QUEUE_NEW` for the queue is sent, the op fails, `hub_errors` names it.
+#[test]
+fn queue_new_without_sender_seed_fails_closed() {
+    let mut d = driver();
+    let s = establish(&mut d, "q214", 3);
+    let host = s.host.idx;
+    let t = d.now() + 60_000;
+    d.run_until(t);
+    let bytes = queues_of(&mut d, host);
+    let mut set = secmp_client_core::sessions::rotation::QueueSet::decode(&bytes).unwrap();
+    let entry = set
+        .entries
+        .iter_mut()
+        .find(|e| e.retire_at_ms.is_none())
+        .unwrap();
+    entry.send_seed = None;
+    let queue = QueueId(entry.queue);
+    let encoded = set.encode().unwrap();
+    hub(&mut d, host)
+        .profile_store()
+        .lock()
+        .unwrap()
+        .txn(|tx| secmp_store::contacts::put_contact_queues(tx, 1, encoded.as_slice()))
+        .unwrap();
+
+    let t_restart = d.now();
+    d.restart_relay();
+    restart_party(&mut d, &s.host, 1);
+    d.run_until(t_restart + 30 * 60_000);
+    let client = d.client_ref(host);
+    assert!(
+        !client
+            .controls_done
+            .iter()
+            .any(|(_, k)| *k == ControlKind::QueueNew(queue)),
+        "no QUEUE_NEW without a sender seed"
+    );
+    assert!(
+        !client
+            .control_requests
+            .iter()
+            .any(|(t, _, rs)| *t >= t_restart
+                && rs
+                    .iter()
+                    .any(|r| matches!(r.cmd, RequestCmd::QueueNew { .. }))),
+        "no QUEUE_NEW request"
+    );
+    let want = format!("QUEUE_NEW {}: no sender seed", queue.0);
+    assert!(
+        client.hub_errors.contains(&want),
+        "hub_errors: {:?}",
+        client.hub_errors
+    );
+}

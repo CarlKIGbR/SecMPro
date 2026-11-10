@@ -105,11 +105,14 @@ pub fn contact_on(
         .sched
         .add_send_queue(now, relay, sc_alice, period_ba)
         .unwrap();
-    sim.client(bob).material.queues.insert(bob_recv.0, (rb, sb));
+    sim.client(bob)
+        .material
+        .queues
+        .insert(bob_recv.0, (rb, Some(sb)));
     sim.client(alice)
         .material
         .queues
-        .insert(alice_recv.0, (ra, sa));
+        .insert(alice_recv.0, (ra, Some(sa)));
     let (state_alice, state_bob) = sim.ratchet_states(alice, bob);
     let peer_alice = sim.peer_key(alice);
     let peer_bob = sim.peer_key(bob);
@@ -204,7 +207,7 @@ pub fn half_contact(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u
     sim.client(alice)
         .material
         .queues
-        .insert(a_recv.0, (recv_seed, send_seed));
+        .insert(a_recv.0, (recv_seed, Some(send_seed)));
     let (state_bob, state_alice) = sim.ratchet_states(bob, alice);
     let peer_alice = sim.peer_key(alice);
     let peer_bob = sim.peer_key(bob);

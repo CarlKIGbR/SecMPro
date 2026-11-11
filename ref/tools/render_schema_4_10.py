@@ -14,7 +14,7 @@ EXTRA_POS = [e for e in EXTRA if not isinstance(e, hx_cases.ResponderNeg)]
 EXTRA_NEG = [e for e in EXTRA if isinstance(e, hx_cases.ResponderNeg)]
 ALL_RESPONDER_NEGATIVES = [*RESPONDER_NEGATIVES, *EXTRA_NEG]
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "SCHEMA-4.10-hx.md"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.10-hx.md"
 
 
 def _fields(layout):

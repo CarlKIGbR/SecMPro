@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Write SCHEMA-4.12-store.md (SCHEMA §4.12, the `store` case table) from the table that generates
-store.json, so that the two cannot drift apart. The file is placed under vectors/ by the reviewer.
+store.json, so that the two cannot drift apart. It lives in vectors/.
 
     .venv/bin/python -m tools.render_schema_4_12          (from ref/)
 """
@@ -10,7 +10,7 @@ import pathlib
 
 from secmp_ref import store, store_cases, vectorfile
 
-OUT = pathlib.Path(__file__).resolve().parent.parent / "SCHEMA-4.12-store.md"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.12-store.md"
 
 HEAD = """\
 ### 4.12 `store` — local-store constructions (ADR-053 items 1–6, Amendment 1; spec rev 2.7)

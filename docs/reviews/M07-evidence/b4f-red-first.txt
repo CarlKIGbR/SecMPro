@@ -214,3 +214,34 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(undecodable_
 cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(previous_identity_read_error)'
     thread '<unnamed>' (2493892) panicked at crates/secmp-client-core/src/sessions/tests.rs:2071:9:
     ADR-058: a previous identity that does not open fails the open
+
+## step 5 (B-4f + B-4f2 §4.4) unfixed tree = 717b4b0 (F4) + the step-5 tests and `lost_direct`; no on_lost/switch/hub hunk
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(queue_lost_replans) | test(switch_replans_unsettled) | test(replanning_control_seals) | test(repeated_route_update_registers)'
+### SE-28 sessions::tests::queue_lost_replans_unsealed_and_sealed_control_content (re-dictated, Q223)
+    thread '<unnamed>' (2518797) panicked at crates/secmp-client-core/src/sessions/tests.rs:2205:9:
+    assertion `left == right` failed: Q222 (3), §10.6 (5): A re-written, C kept, B superseded
+      left: [Some(1)]
+     right: [Some(1), Some(2)]
+### SE-35 sessions::actor::tests::switch_replans_unsettled_control_content
+    thread 'sessions::actor::tests::switch_replans_unsettled_control_content' (2518795) panicked at crates/secmp-client-core/src/sessions/actor.rs:2764:9:
+    Q-5: unsettled control content is planned again for the new queue
+### SE-38 hub::tests::repeated_route_update_registers_one_send_queue
+    thread '<unnamed>' (2518800) panicked at crates/secmp-client-core/src/hub.rs:1363:13:
+    assertion `left == right` failed: AddSend per register_route
+      left: [1, 1, 1]
+     right: [1, 0, 1]
+(SE-32 replanning_control_seals_nothing_outside_a_slot: PASS on this tree; its red is the mutation below.)
+### step-5 mutation reds (fixed tree; reverted)
+#### SE-35 — `switch_send_queue` filter `!e.done` → `e.done`; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(switch_replans_unsettled)'
+    thread 'sessions::actor::tests::switch_replans_unsettled_control_content' (2520657) panicked at crates/secmp-client-core/src/sessions/actor.rs:2794:9:
+    Q-5: unsettled control content is planned again for the new queue
+#### SE-32 — `let _ = self.seal(&dummy());` as the last line of `replan_control`; cmd: … -E 'test(replanning_control_seals)'
+    thread 'sessions::actor::tests::replanning_control_seals_nothing_outside_a_slot' (2521220) panicked at crates/secmp-client-core/src/sessions/actor.rs:2835:9:
+    assertion `left == right` failed: after on_failed
+      left: 2
+     right: 1
+#### SE-28 — `retire_routes()` call in `add_control` deleted (with the on_lost hunk); cmd: … -E 'test(queue_lost_replans)'
+    thread '<unnamed>' (2521783) panicked at crates/secmp-client-core/src/sessions/tests.rs:2205:9:
+    assertion `left == right` failed: Q222 (3), §10.6 (5): A re-written, C kept, B superseded
+      left: [Some(1), Some(1), Some(2)]
+     right: [Some(1), Some(2)]

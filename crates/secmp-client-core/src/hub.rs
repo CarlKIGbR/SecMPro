@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use secmp_crypto::SecretBytes;
+use secmp_crypto::{ConstantTimeEq as _, SecretBytes, Zeroizing};
 use secmp_proto::Decode as _;
 use secmp_proto::wire::cell::{Cell, RouteDescriptor, RouteUpdateBody};
 use secmp_proto::wire::inv::Profile as WireProfile;
@@ -101,6 +101,9 @@ pub struct Hub<C: Clock, S: EntropySource> {
     waiting: BTreeMap<u32, String>,
     registered: BTreeSet<QueueId>,
     send_ids: BTreeMap<i64, QueueId>,
+    /// The encoded `RouteDescriptor` each contact's current send queue was registered from: a re-sent `RouteUpdate`
+    /// registers no second queue (Q222). It holds a send seed: compared in constant time.
+    send_routes: BTreeMap<i64, Zeroizing<Vec<u8>>>,
     retiring_sends: Vec<(u64, QueueId)>,
     /// The queue each contact sent to before its latest route update.
     previous_sends: BTreeMap<i64, QueueId>,
@@ -131,6 +134,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             waiting: BTreeMap::new(),
             registered: BTreeSet::new(),
             send_ids: BTreeMap::new(),
+            send_routes: BTreeMap::new(),
             retiring_sends: Vec::new(),
             previous_sends: BTreeMap::new(),
             next_send: 0,
@@ -304,15 +308,24 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         Ok(())
     }
 
-    /// The send queue of the first route of a kind this version knows.
+    /// The send queue of the first route of a kind this version knows; a route byte-equal to the one the current send
+    /// queue was registered from is a re-sent `RouteUpdate` and registers nothing (Q222).
     fn register_route(&mut self, contact: ContactId, at: usize, bytes: &[u8]) -> Result<(), Error> {
         let body = RouteUpdateBody::decode(bytes)?;
-        let Some(route) = body.routes.iter().find_map(|r| match r {
-            RouteDescriptor::RelayQueue(q) => Some(q),
+        let Some((descriptor, route)) = body.routes.iter().find_map(|r| match r {
+            RouteDescriptor::RelayQueue(q) => Some((r, q)),
             RouteDescriptor::Unknown { .. } => None,
         }) else {
             return Ok(());
         };
+        let encoded = Zeroizing::new(secmp_proto::Encode::encode(descriptor)?.to_vec());
+        if self
+            .send_routes
+            .get(&contact.0)
+            .is_some_and(|stored| bool::from(stored.as_slice().ct_eq(encoded.as_slice())))
+        {
+            return Ok(());
+        }
         let queue = self.alloc_send();
         self.actions.push(Action::AddSend {
             queue,
@@ -323,6 +336,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         });
         self.registered.insert(queue);
         let previous = self.send_ids.insert(contact.0, queue);
+        self.send_routes.insert(contact.0, encoded);
         if let Some(conversation) = self.core.convs.get_mut(at) {
             // `T_RS` follows the queue it is sent to (SE-13b, Q210 d)
             conversation.set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(
@@ -1314,6 +1328,53 @@ mod tests {
             ));
             assert!(again.invitations.retiring()?.is_empty());
             assert!(again.queue_material(queue).is_none());
+            Ok(())
+        })
+    }
+
+    /// SE-38 (Q222): a re-sent `RouteUpdate` (the byte-equal descriptor) registers no second send queue; a descriptor that
+    /// differs is a new route.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn repeated_route_update_registers_one_send_queue() -> R {
+        use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
+
+        big(|| {
+            let (host, guest) = (party("hub-rr-h", 81)?, party("hub-rr-g", 83)?);
+            let mut sc = scene(host, &guest)?;
+            step_invite(&mut sc)?;
+            step_accept(&mut sc)?;
+            step_handshake(&mut sc)?;
+            step_reply(&mut sc)?;
+            let (contact, hub) = (sc.contact, &mut sc.invitee);
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            hub.take_actions();
+            let update = |n: u8| -> Result<Vec<u8>, crate::testutil::E> {
+                Ok(RouteUpdateBody {
+                    routes: vec![RouteDescriptor::RelayQueue(RelayQueue {
+                        relay: crate::testutil::relay_ref(),
+                        sid: [n; 16],
+                        send_seed: secmp_crypto::SecretBytes::from_slice(&[n; 32])?,
+                        period_s: Period::S80,
+                    })],
+                }
+                .encode()?
+                .to_vec())
+            };
+            let add_sends = |hub: &mut Hub<ManualClock, Fixed>| {
+                hub.take_actions()
+                    .iter()
+                    .filter(|a| matches!(a, Action::AddSend { .. }))
+                    .count()
+            };
+            let mut counts = Vec::new();
+            hub.register_route(contact, at, &update(9)?)?;
+            counts.push(add_sends(hub));
+            hub.register_route(contact, at, &update(9)?)?;
+            counts.push(add_sends(hub));
+            hub.register_route(contact, at, &update(4)?)?;
+            counts.push(add_sends(hub));
+            assert_eq!(counts, [1, 0, 1], "AddSend per register_route");
             Ok(())
         })
     }

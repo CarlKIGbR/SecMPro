@@ -875,8 +875,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
 
     /// The peer's `RouteUpdate` moved us to the queue `new` (spec §10.6 (4)): the old queue carries dummies only from now on
     /// ([`Conversations`] prepares those), and every real message among the last `QUEUE_CAPACITY` cells sent on it goes
-    /// back to the outbox, to be sent again on the new queue — the receiver deduplicates by `msg_id`. Returns how many
-    /// messages were requeued.
+    /// back to the outbox, to be sent again on the new queue — the receiver deduplicates by `msg_id` — and every control
+    /// content whose current attempt has a cell without `OK_SEND` is planned again for the new queue (Q222 (3), Q-5).
+    /// Returns how many messages were requeued.
     pub fn switch_send_queue(&mut self, new: QueueId) -> usize {
         if let Some(old) = self.send_queue.replace(new)
             && old != new
@@ -898,6 +899,20 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             .collect();
         for id in &ids {
             self.outbox.requeue(id);
+        }
+        // a cell still in flight on the old queue only drops its token (overlap branch): without this re-plan an
+        // unsettled control content would never settle (§10.6 (4), Q222 (3))
+        let open: Vec<ControlRef> = self
+            .controls
+            .iter()
+            .filter(|(_, e)| !e.done)
+            .map(|(id, e)| ControlRef {
+                id: *id,
+                attempt: e.attempt,
+            })
+            .collect();
+        for r in open {
+            self.replan_control(r);
         }
         // the new queue numbers its cells from 1
         self.by_cell.clear();
@@ -1229,6 +1244,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.on_evicted(cell_id);
     }
 
+    /// The queue we send to was lost (what the scheduler's `queue_lost` does; tests only).
+    #[cfg(test)]
+    pub(crate) fn lost_direct(&mut self) {
+        self.on_lost();
+    }
+
     /// How many control contents are kept (tests only).
     #[cfg(test)]
     pub(crate) fn live_controls_test(&self) -> usize {
@@ -1414,9 +1435,24 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.outbox.requeue_unreceipted();
         let planned: Vec<Planned> = self.plan.drain(..).collect();
         for p in planned {
-            self.restore(&p.owner);
+            if !matches!(p.owner, Owner::Control(_)) {
+                self.restore(&p.owner);
+            }
         }
         self.relayed_cells.clear();
+        // every control content again, sealed or not, in id order (spec §10.4, Q222 (3)); a retired `RouteUpdate` stays
+        // retired (Q224)
+        let all: Vec<ControlRef> = self
+            .controls
+            .iter()
+            .map(|(id, e)| ControlRef {
+                id: *id,
+                attempt: e.attempt,
+            })
+            .collect();
+        for r in all {
+            self.replan_control(r);
+        }
     }
 
     fn on_deliver(&mut self, cell: &Cell) -> Result<(), SourceError> {
@@ -2734,6 +2770,105 @@ mod tests {
             resets(b),
             1,
             "Q225: a durability that keeps no rows holds nothing"
+        );
+        Ok(())
+    }
+
+    /// SE-35 (spec §10.6 (4), Q-5): a send-queue switch plans control content whose current attempt has a cell without
+    /// `OK_SEND` again for the new queue; the old queue's outcome only drops its token; the content settles on the new
+    /// queue and reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_replans_unsettled_control_content() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        assert_eq!(a.switch_send_queue(QueueId(9)), 0);
+        assert!(
+            a.has_pending_real(),
+            "Q-5: unsettled control content is planned again for the new queue"
+        );
+        let mut mine = super::Conversations::new();
+        let i = mine.add(a);
+        // the old queue's OK_SEND: its token is dropped
+        mine.relayed(QueueId(1), p0.token, 1);
+        let a = mine.get_mut(i).ok_or("conversation")?;
+        let p1 = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        a.relayed_direct(p1.token, 1);
+        let p2 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        a.relayed_direct(p2.token, 300);
+        a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(a.live_controls_test(), 0, "settled and collected");
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p1.cell).map_err(|_| "delivery")?;
+        assert!(matches!(
+            b.take_events().as_slice(),
+            [super::SessionEvent::ResetRequested]
+        ));
+        Ok(())
+    }
+
+    /// SE-32 (spec §10.1, CLAUDE.md §1.4): planning control content again — after a failed `SEND`, an eviction, a lost
+    /// queue — seals nothing outside a slot: every seal is one preparation's.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn replanning_control_seals_nothing_outside_a_slot() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let e = super::counters::tr_encrypt_calls();
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 1);
+        a.on_failed(p0.token);
+        assert_eq!(
+            super::counters::tr_encrypt_calls() - e,
+            1,
+            "after on_failed"
+        );
+        let p1 = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 2);
+        a.relayed_direct(p1.token, 1);
+        a.on_evicted(1);
+        assert_eq!(
+            super::counters::tr_encrypt_calls() - e,
+            2,
+            "after on_evicted"
+        );
+        let p2 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 3);
+        a.on_lost();
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 3, "after on_lost");
+        let mut cells = vec![p1.cell, p2.cell];
+        for k in 3..=6_u64 {
+            cells.push(a.prepare_direct(k * 1_000).map_err(|_| "seal")?.cell);
+            assert_eq!(
+                super::counters::tr_encrypt_calls() - e,
+                k + 1,
+                "prepare {k}"
+            );
+        }
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        for cell in &cells {
+            b.deliver_direct(cell).map_err(|_| "delivery")?;
+        }
+        let events = b.take_events();
+        assert!(!events.is_empty());
+        assert!(
+            events
+                .iter()
+                .all(|e| matches!(e, super::SessionEvent::ResetRequested)),
+            "no other event"
         );
         Ok(())
     }

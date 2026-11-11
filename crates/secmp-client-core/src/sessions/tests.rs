@@ -2180,6 +2180,71 @@ fn two_route_rows_read_back_send_only_the_newer() -> R {
     })
 }
 
+/// SE-28 (spec §10.4, Q222 (3), Q223): a lost queue plans every control content again — the settled reset (its row
+/// written again), the sealed and unrelayed `RouteUpdate` B and the planned `RouteUpdate` C; B is superseded by C
+/// (Q224), so the rows are {reset, C}, and the peer gets one `ResetRequested` and one `RouteUpdate`, the newest.
+#[cfg(feature = "kat")]
+#[test]
+fn queue_lost_replans_unsealed_and_sealed_control_content() -> R {
+    use secmp_proto::wire::cell::RouteDescriptor;
+    big(|| {
+        let mut w = established("q222-lost", 657)?;
+        let store = w.host.profile.store();
+        block_session(&store, &mut w.h, ContactId(1), Refusal::Reset)?;
+        let (ord, content) = pend(&store, &routes_of(3)?)?;
+        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
+        let p = w.h.prepare_direct(ms(10)).map_err(|_| "prepare")?;
+        w.h.relayed_direct(p.token, 1);
+        let q = w.h.prepare_direct(ms(11)).map_err(|_| "prepare")?;
+        let (ord, content) = pend(&store, &routes_of(4)?)?;
+        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
+        w.h.lost_direct();
+        let rows = store.lock().map_err(|_| "lock")?.pending_controls(1)?;
+        let mut tags: Vec<Option<u8>> = rows.iter().map(|(_, r)| r.first().copied()).collect();
+        tags.sort();
+        assert_eq!(
+            tags,
+            [Some(1), Some(2)],
+            "Q222 (3), §10.6 (5): A re-written, C kept, B superseded"
+        );
+        let row = rows
+            .iter()
+            .find(|(_, r)| r.first() == Some(&1))
+            .ok_or("routes row")?;
+        let actor::PendingControl::Routes(body) =
+            actor::PendingControl::decode(&row.1).map_err(|_| "decode")?
+        else {
+            return Err("not a RouteUpdate".into());
+        };
+        let [RouteDescriptor::RelayQueue(kept)] = body.routes.as_slice() else {
+            return Err("one relay queue".into());
+        };
+        assert_eq!(kept.sid, [4; 16], "the newest RouteUpdate is kept");
+        let mut resets = 0_u32;
+        let mut sids = Vec::new();
+        for i in 0..8_u64 {
+            deliver(&mut w.g, &next(&mut w.h, ms(12 + i))?)?;
+            for e in w.g.take_events() {
+                match e {
+                    SessionEvent::ResetRequested => resets = resets.saturating_add(1),
+                    SessionEvent::Routes(r) => {
+                        for d in &r {
+                            if let RouteDescriptor::RelayQueue(q) = d {
+                                sids.push(q.sid);
+                            }
+                        }
+                    }
+                    _ => return Err("unexpected event".into()),
+                }
+            }
+        }
+        drop(q);
+        assert_eq!(resets, 1);
+        assert_eq!(sids, [[4; 16]], "one RouteUpdate, the newest");
+        Ok(())
+    })
+}
+
 /// SE-25 (EXTB2-1; spec §9.5, Q222 (2)): the process dies after the seal commit of the `KeyChange`'s last fragment and
 /// before its write — the row outlives that seal, and after the restart the whole `KeyChange` is sent again and reaches
 /// the peer.

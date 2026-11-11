@@ -280,7 +280,8 @@ pub enum Request {
         /// The relay whose pool provides the new queue.
         relay: u32,
     },
-    /// Rotate the user's identity (spec §7.7).
+    /// Rotate the user's identity (spec §7.7); [`Error::Unavailable`] while a `KeyChange` of an earlier rotation is live
+    /// in any conversation (OPEN-M7-B-12).
     RotateIdentity,
     /// Ask a contact for a new session (spec §7.8).
     ResetSession {

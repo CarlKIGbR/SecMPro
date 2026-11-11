@@ -318,7 +318,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         }) else {
             return Ok(());
         };
-        let encoded = Zeroizing::new(secmp_proto::Encode::encode(descriptor)?.to_vec());
+        let encoded = secmp_proto::Encode::encode(descriptor)?;
         if self
             .send_routes
             .get(&contact.0)

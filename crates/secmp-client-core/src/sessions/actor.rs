@@ -665,8 +665,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// could not be written again writes it now; the row of a content whose cells all have their `OK_SEND` goes (a
     /// failed delete is tried again at the next preparation); a settled content is dropped once no cell of its current
     /// attempt is in the eviction window; the row of a retired `RouteUpdate` (Q224) goes the same way, and the entry is
-    /// dropped once its row is gone.
+    /// dropped once its row is gone; the row of a newer `RouteUpdate` stays while a retired one still holds its row
+    /// (Q230: a crash in between must not leave the older row alone).
     fn settle_controls(&mut self) {
+        let retired_row = self.controls.values().any(|e| e.retired && e.ord.is_some());
         for e in self.controls.values_mut() {
             if !e.done && e.durable && e.ord.is_none() {
                 match self.persist.control_requeued(&e.row) {
@@ -677,7 +679,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     Err(_) => {}
                 }
             }
-            if (e.done || e.retired)
+            if (e.retired || (e.done && !(retired_row && e.row.first() == Some(&1))))
                 && let Some(o) = e.ord
                 && self.persist.control_relayed(o).is_ok()
             {
@@ -1020,7 +1022,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.receipts_due.len()
     }
 
-    /// Whether something real waits for a slot: a planned cell, a queued message, a receipt.
+    /// Whether something real waits for a slot: a planned cell, a queued message, a receipt (a control cell held for its
+    /// durable row, Q225, counts as waiting).
     #[must_use]
     pub fn has_pending_real(&self) -> bool {
         !self.plan.is_empty()
@@ -1829,8 +1832,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversations<O, P, S> {
     }
 
     /// Whether the conversation that sends on `queue` has something real waiting for a slot (a planned cell, a queued
-    /// message, a receipt): the next cell it prepares for `queue` is then a real one, not a dummy. For the cost models
-    /// of the test drivers; the scheduler never asks.
+    /// message, a receipt): the next cell it prepares for `queue` is then a real one, not a dummy (a control cell held
+    /// for its durable row, Q225, counts as waiting). For the cost models of the test drivers; the scheduler never asks.
     pub fn pending_real(&mut self, queue: QueueId) -> bool {
         self.by_send(queue).is_some_and(|c| c.has_pending_real())
     }
@@ -2870,6 +2873,44 @@ mod tests {
                 .all(|e| matches!(e, super::SessionEvent::ResetRequested)),
             "no other event"
         );
+        Ok(())
+    }
+
+    /// SE-53 (Q230, Q224): the row of a done newer `RouteUpdate` stays while a retired older one still holds its row
+    /// (its deletes failed) — a crash in between cannot leave the older row alone; it goes once the older row is gone.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn newer_routes_row_outlives_a_retired_one() -> Result<(), Fail> {
+        let (mut a, _convs) = pair(script(3, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(4, routes(3)?).map_err(|_| "queue")?;
+        a.queue_pending(5, routes(4)?).map_err(|_| "queue")?;
+        let p = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4); 3],
+            "Q230: the newer row stays while the retired older row is kept"
+        );
+        a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4); 4],
+            "the older row goes first"
+        );
+        a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [
+                ("relayed", 4),
+                ("relayed", 4),
+                ("relayed", 4),
+                ("relayed", 4),
+                ("relayed", 5)
+            ],
+            "then the newer row goes"
+        );
+        assert_eq!(a.live_controls_test(), 1, "the newer entry, settled");
         Ok(())
     }
 

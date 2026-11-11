@@ -274,3 +274,8 @@ cmd: cargo nextest run -p xtask -E 'test(no_plain_seed_returns)'
     thread 'testscan::no_plain_seed_returns' (2575595) panicked at xtask/src/testscan.rs:1321:5:
     a one-line trait impl opens no block (L1)
     (the message is the assert's; the hit it found is the `fn seed(&self) -> [u8; 32]` of the inherent `impl E`)
+
+## step 10 (B-4f2) xtask docs::adr_018_status — the two new needles; red: line 109 of docs/08-decisions.md (holds both needles) deleted in the working tree, restored after (`git diff docs/08-decisions.md` empty)
+cmd: cargo nextest run -p xtask -E 'test(/^docs::/)'
+    thread 'docs::adr_018_status' (2600342) panicked at xtask/src/docs.rs:299:5:
+    assertion failed: adr018.contains("**ADR-018 Amendment 1 — acceptance after M6. Status: Accepted (Owner, 2026-11-09")

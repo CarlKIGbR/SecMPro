@@ -296,6 +296,10 @@ fn adr_018_status() -> Result<()> {
         "**Status.** Accepted (Owner, 2026-11-09): provisional values of spec §4.2 are final"
     ));
     assert!(adr018.contains("RR-note"));
+    assert!(adr018.contains(
+        "**ADR-018 Amendment 1 — acceptance after M6. Status: Accepted (Owner, 2026-11-09"
+    ));
+    assert!(adr018.contains("Die Frage des Standardmodus (OQ-4) ist damit nicht entschieden."));
     assert!(!adr018.contains("**Status.** Proposed"));
     Ok(())
 }

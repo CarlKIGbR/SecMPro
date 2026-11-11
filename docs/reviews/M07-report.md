@@ -615,7 +615,7 @@ re-dictated: rows 2, one `ResetRequested`, one `Routes` with `sid == [4; 16]`), 
 (then `replan_control` needs a "no supersession" path for `on_lost`, and SE-37 stays as it is)? Steps 5 (rest)–10 not done; see §B-4f. **Resolved (WEISUNG M7-B-4f2, 2026-11-11): Q223 = (A), Q224
 Option R; steps 5–10 done in the continuation (§B-4f).**
 
-**Blocked — STOP (WEISUNG M7-B-4f §5 "any gate red that the step did not expect"; step 10 ci-fast, RUSTSEC-2026-0486).** See §B-4f.5: `ci-fast-b4f-10-4b95e6a.txt` red in `deny`/`audit` only (rustix 1.1.5 via tempfile ← arti-client); (A) lock bump in both lock files or (B) ADR-051 amendment. **Resolved by ADV1 (WEISUNG M7-ADV1, Q229, ADR-051 Am. 9): rustix 1.1.6 in both lockfiles (version + checksum only), delta audit, `deny`/`audit` green.**
+**Blocked — STOP (WEISUNG M7-B-4f §5 "any gate red that the step did not expect"; step 10 ci-fast, RUSTSEC-2026-0486).** See §B-4f.5: `ci-fast-b4f-10-4b95e6a.txt` red in `deny`/`audit` only (rustix 1.1.5 via tempfile ← arti-client); (A) lock bump in both lock files or (B) ADR-051 amendment. **Resolved by ADV1 @ `598a948` (WEISUNG M7-ADV1, Q229, ADR-051 Am. 9): rustix 1.1.6 in both lockfiles (version + checksum only), delta audit, `deny`/`audit` green.**
 
 **Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).
 
@@ -1616,7 +1616,7 @@ Anchors re-found (old @aac2242 → `4251a0b`): `sessions/actor.rs` `Owner` `:134
 
 ### §B-4f.5 Blocked
 
-The STOP at step 5 (SE-28) is resolved by WEISUNG M7-B-4f2 (Q223 = (A), Q224 Option R). The RUSTSEC-2026-0486 STOP below is resolved by ADV1 (WEISUNG M7-ADV1, Q229, ADR-051 Am. 9).
+The STOP at step 5 (SE-28) is resolved by WEISUNG M7-B-4f2 (Q223 = (A), Q224 Option R). The RUSTSEC-2026-0486 STOP below is resolved by ADV1 @ `598a948` (WEISUNG M7-ADV1, Q229, ADR-051 Am. 9).
 **STOP (WEISUNG M7-B-4f §5 "any gate red that the step did not expect"; CLAUDE.md §6 "an open RustSec advisory").** The ci-fast of the
 docs commit `4b95e6a` (`ci-fast-b4f-10-4b95e6a.txt`) is red in `deny` and `audit` only: RUSTSEC-2026-0486 "xattr functions mark
 unwritten bytes as initialized when given a zero-length buffer" (unsound), `rustix 1.1.5` (`Cargo.lock:3406`; also `fuzz/Cargo.lock:3359`), solution "Upgrade to

@@ -307,7 +307,10 @@ fn queue_deleted_failure_reaches_hub_errors() {
         "the QUEUE_DEL ran on the relay"
     );
     assert!(
-        !client.hub_errors.is_empty(),
+        client
+            .hub_errors
+            .iter()
+            .any(|e| e.starts_with("queue_deleted:")),
         "the refused write of queue_deleted is reported"
     );
 }

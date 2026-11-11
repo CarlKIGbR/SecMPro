@@ -263,3 +263,14 @@ cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'te
     assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
       left: None
      right: Some(Unavailable)
+
+## step 7 fix-ups
+### VD-2 harness::m7_restart::queue_deleted_failure_reaches_hub_errors (prefix assert) — mutation `driver.rs` `"queue_deleted: {err}"` → `"step: {err}"` (reverted)
+cmd: cargo nextest run -p secmp-testkit --features harness -E 'test(queue_deleted_failure_reaches_hub_errors)'
+    thread 'm7_restart::queue_deleted_failure_reaches_hub_errors' (2575187) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:309:5:
+    the refused write of queue_deleted is reported
+### L1 testscan::no_plain_seed_returns (one-line trait impl fixture) against the scanner unchanged since START (8f4bcbd…dd345f3 did not touch testscan.rs)
+cmd: cargo nextest run -p xtask -E 'test(no_plain_seed_returns)'
+    thread 'testscan::no_plain_seed_returns' (2575595) panicked at xtask/src/testscan.rs:1321:5:
+    a one-line trait impl opens no block (L1)
+    (the message is the assert's; the hit it found is the `fn seed(&self) -> [u8; 32]` of the inherent `impl E`)

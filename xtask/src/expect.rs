@@ -829,7 +829,12 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     // M7 B-4d (WEISUNG M7-B-4d Q214; Q121)
     (
         "queue_new_without_sender_seed_fails_closed",
-        "a QUEUE_NEW without a stored sender seed, an established pair, a relay restart, 30 min virtual: 13 s",
+        "a QUEUE_NEW without a stored sender seed, an established pair, a relay restart, 30 min virtual: 29 s",
+    ),
+    // M7 B-4f (VERIFY-DELTA-B4d 1; Q121)
+    (
+        "hub_step_error_reaches_hub_errors",
+        "hub errors: Hub::pump fails on a TEMP-trigger store fault (the guest removes the contact), the error reaches hub_errors: 17 s",
     ),
 ];
 

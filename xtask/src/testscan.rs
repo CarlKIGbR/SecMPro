@@ -1094,8 +1094,10 @@ fn no_derive_debug_on_secret_carriers() -> Result<()> {
     Ok(())
 }
 
-/// The public signatures of the product part of `src` (`pub fn`, `pub const fn`, `pub type`), each joined to one line up to
-/// its `{` or `;`, as `(line, text)`; an item right after `#[cfg(feature = "kat")]` (doc comments between) is left out.
+/// The public signatures of the product part of `src` (`pub` `fn`/`const fn`/`async fn`/`unsafe fn`/`const unsafe fn`/
+/// `const async fn`/`async unsafe fn`, `pub type`, and the `fn`s one level inside an `impl … for …` block), each joined to
+/// one line up to its `{` or `;`, as `(line, text)`; an item right after `#[cfg(feature = "kat")]` (doc comments between)
+/// is left out.
 #[cfg(test)]
 fn public_signatures(src: &str) -> Vec<(usize, String)> {
     const FNS: &[&str] = &[
@@ -1132,7 +1134,11 @@ fn public_signatures(src: &str) -> Vec<(usize, String)> {
                     break;
                 }
             }
-            if header.contains(" for ") && header.contains('{') {
+            // a header whose braces balance (`impl … for … {}`) opens no block (L1)
+            if header.contains(" for ")
+                && header.contains('{')
+                && header.matches('{').count() > header.matches('}').count()
+            {
                 trait_impl = Some(indent(line));
             }
         }
@@ -1317,6 +1323,11 @@ fn no_plain_seed_returns() -> Result<()> {
     }
     let typed_trait = "impl SeedSource for Hub {\n    fn send_seed(&self) -> SecretBytes<32> {\n        todo()\n    }\n}\n";
     assert!(plain_seed_returns("crates/x/src/a.rs", typed_trait, &[]).is_empty());
+    let one_line = "impl std::error::Error for E {}\nimpl E {\n    fn seed(&self) -> [u8; 32] {\n        [0; 32]\n    }\n}\n";
+    assert!(
+        plain_seed_returns("crates/x/src/seeds.rs", one_line, &[]).is_empty(),
+        "a one-line trait impl opens no block (L1)"
+    );
     let (file_a, file_b) = (
         "pub type RawSeed = [u8; 32];\n",
         "pub fn material(&self) -> RawSeed {\n    [0; 32]\n}\n",

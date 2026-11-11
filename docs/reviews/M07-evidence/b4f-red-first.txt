@@ -139,3 +139,49 @@ its red is the mutation below.)
     assertion `left == right` failed: failed once, tried again
       left: [4]
      right: [4, 4]
+
+## B-4f2
+### F2 (Q224) unfixed tree = e161e4d (F1) + the F2 tests and helpers (pair, Script, routes, sids, resets, live_controls_test); no fix
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(superseded_route_row_delete) | test(superseded_routes_row_is_not) | test(two_route_rows_read_back)'
+#### SE-46 sessions::actor::tests::superseded_route_row_delete_is_retried
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2433680) panicked at crates/secmp-client-core/src/sessions/actor.rs:2638:9:
+    assertion `left == right` failed: Q224: the older row goes when the newer is added
+      left: []
+     right: [("relayed", 4)]
+#### SE-47 sessions::actor::tests::superseded_routes_row_is_not_rewritten
+    thread 'sessions::actor::tests::superseded_routes_row_is_not_rewritten' (2433683) panicked at crates/secmp-client-core/src/sessions/actor.rs:2674:9:
+    assertion `left == right` failed: Q224: a retired entry's row is never written again
+      left: 2
+     right: 1
+#### SE-48 sessions::tests::two_route_rows_read_back_send_only_the_newer
+    thread '<unnamed>' (2433682) panicked at crates/secmp-client-core/src/sessions/tests.rs:2092:9:
+    assertion `left == right` failed: Q224: the older RouteUpdate row goes at open
+      left: 2
+     right: 1
+### F2 mutation reds (fixed tree; applied, run, reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E '<filter>'
+#### SE-37 superseded_route_update_is_not_resent — `retire_routes()` call in `add_control` deleted (material §1.6: `:2279:9`; the line moved by SE-48 inserted above it)
+    thread '<unnamed>' (2436200) panicked at crates/secmp-client-core/src/sessions/tests.rs:2319:9:
+    assertion `left == right` failed: the newer RouteUpdate only
+      left: 2
+     right: 1
+#### SE-46 — `entry.retired ||` deleted in `replan_control`
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2436763) panicked at crates/secmp-client-core/src/sessions/actor.rs:2663:9:
+    assertion `left == right` failed: only the newer RouteUpdate
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]
+#### SE-46 — settle (ii) `(e.done || e.retired)` → `(e.done)`
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2437333) panicked at crates/secmp-client-core/src/sessions/actor.rs:2652:9:
+    assertion `left == right` failed: a failed delete is retried at the next settle
+      left: [("relayed", 4)]
+     right: [("relayed", 4), ("relayed", 4)]
+#### SE-46 — retain `if e.retired { e.ord.is_some() }` → `if e.retired { true }`
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2437896) panicked at crates/secmp-client-core/src/sessions/actor.rs:2658:9:
+    assertion `left == right` failed: deleted: not tried again
+      left: 4
+     right: 2
+#### SE-47 — `self.controls.remove(&id)` in `retire_routes` deleted
+    thread 'sessions::actor::tests::superseded_routes_row_is_not_rewritten' (2438459) panicked at crates/secmp-client-core/src/sessions/actor.rs:2679:9:
+    assertion `left == right` failed: Q224: a retired entry's row is never written again
+      left: 2
+     right: 1

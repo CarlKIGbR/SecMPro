@@ -2076,6 +2076,46 @@ fn rotated_host(
     Ok((host, h, g))
 }
 
+/// SE-48 (Q224): two `RouteUpdate` rows read back at open — the older row goes at open, only the newer one is sent.
+#[cfg(feature = "kat")]
+#[test]
+fn two_route_rows_read_back_send_only_the_newer() -> R {
+    use secmp_proto::wire::cell::RouteDescriptor;
+    big(|| {
+        let World { host, h, mut g, .. } = established("q224-restart", 661)?;
+        drop(h);
+        let store = host.profile.store();
+        pend(&store, &routes_of(3)?)?;
+        pend(&store, &routes_of(4)?)?;
+        assert_eq!(control_rows(&store)?, 2);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(662)), T0)?;
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "Q224: the older RouteUpdate row goes at open"
+        );
+        let mut sids = Vec::new();
+        for i in 0..3_u64 {
+            deliver(&mut g, &next(&mut h, ms(10 + i))?)?;
+            for e in g.take_events() {
+                if let SessionEvent::Routes(r) = e {
+                    for d in &r {
+                        if let RouteDescriptor::RelayQueue(q) = d {
+                            sids.push(q.sid);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            sids,
+            [[4; 16]],
+            "only the newer RouteUpdate after a restart"
+        );
+        Ok(())
+    })
+}
+
 /// SE-25 (EXTB2-1; spec §9.5, Q222 (2)): the process dies after the seal commit of the `KeyChange`'s last fragment and
 /// before its write — the row outlives that seal, and after the restart the whole `KeyChange` is sent again and reaches
 /// the peer.

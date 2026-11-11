@@ -173,6 +173,9 @@ struct ControlEntry {
     relayed: u16,
     /// Every cell of `attempt` has its `OK_SEND`: the row goes at the next preparation.
     done: bool,
+    /// Q224: superseded by a newer `RouteUpdate`: never planned again, its row is never written again; kept only until its
+    /// row delete succeeded. A retired entry always has `ord.is_some()`; an entry whose row is gone is removed.
+    retired: bool,
 }
 
 /// A control content that is durable from the commit that makes its effect durable until the last cell's `OK_SEND`
@@ -536,6 +539,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         ord: Option<i64>,
     ) -> Result<(), SourceError> {
         let row = content.encode()?;
+        if matches!(content, PendingControl::Routes(_)) {
+            self.retire_routes();
+        }
         let id = self.next_control;
         self.next_control = self.next_control.saturating_add(1);
         self.controls.insert(
@@ -548,6 +554,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 total: 0,
                 relayed: 0,
                 done: false,
+                retired: false,
             },
         );
         match self.plan_content(ControlRef { id, attempt: 0 }, content) {
@@ -561,6 +568,33 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 // a content that cannot be planned is not kept (its row, if any, is read again at the next open)
                 self.controls.remove(&id);
                 Err(e)
+            }
+        }
+    }
+
+    /// Q224 (spec §7.6 docs/03:502, §10.6 (5)): a `RouteUpdate` replaces the routes by which the peer reaches us — every
+    /// Routes entry already kept is retired before the newer one is planned.
+    fn retire_routes(&mut self) {
+        let ids: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|(_, e)| e.row.first() == Some(&1))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.plan
+                .retain(|p| !matches!(p.owner, Owner::Control(c) if c.id == id));
+            let Some(e) = self.controls.get_mut(&id) else {
+                continue;
+            };
+            e.retired = true;
+            if let Some(o) = e.ord
+                && self.persist.control_relayed(o).is_ok()
+            {
+                e.ord = None;
+            }
+            if e.ord.is_none() {
+                self.controls.remove(&id);
             }
         }
     }
@@ -587,32 +621,15 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// Plan the attempt `r` of a control content once more (Q222 (3), spec §9.5, §10.6): an outcome of a superseded attempt
-    /// plans nothing; a `RouteUpdate` for which a newer one is kept is not sent again — its row goes (§10.6 (5)); else
-    /// every cell of the content is sealed anew under a new attempt, and a durable content whose row went writes it again.
+    /// or of a retired `RouteUpdate` (Q224) plans nothing; else every cell of the content is sealed anew under a new
+    /// attempt, and a durable content whose row went writes it again (its cells wait until it is written, Q225).
     fn replan_control(&mut self, r: ControlRef) {
-        let Some(entry) = self.controls.get(&r.id) else {
-            return;
-        };
-        if entry.attempt != r.attempt {
-            return;
-        }
-        let superseded = entry.row.first() == Some(&1)
-            && self
-                .controls
-                .iter()
-                .any(|(id, e)| *id > r.id && e.row.first() == Some(&1));
-        if superseded {
-            if let Some(o) = entry.ord {
-                let _ = self.persist.control_relayed(o);
-            }
-            self.plan
-                .retain(|p| !matches!(p.owner, Owner::Control(c) if c.id == r.id));
-            self.controls.remove(&r.id);
-            return;
-        }
         let Some(entry) = self.controls.get_mut(&r.id) else {
             return;
         };
+        if entry.retired || entry.attempt != r.attempt {
+            return;
+        }
         entry.attempt = entry.attempt.saturating_add(1);
         entry.relayed = 0;
         entry.done = false;
@@ -636,13 +653,14 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// the evictions it names, so a row goes only at the next preparation): a durable content planned again whose row
     /// could not be written again writes it now; the row of a content whose cells all have their `OK_SEND` goes (a
     /// failed delete is tried again at the next preparation); a settled content is dropped once no cell of its current
-    /// attempt is in the eviction window.
+    /// attempt is in the eviction window; the row of a retired `RouteUpdate` (Q224) goes the same way, and the entry is
+    /// dropped once its row is gone.
     fn settle_controls(&mut self) {
         for e in self.controls.values_mut() {
             if !e.done && e.durable && e.ord.is_none() {
                 e.ord = self.persist.control_requeued(&e.row).unwrap_or(None);
             }
-            if e.done
+            if (e.done || e.retired)
                 && let Some(o) = e.ord
                 && self.persist.control_relayed(o).is_ok()
             {
@@ -651,11 +669,15 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
         let by_cell = &self.by_cell;
         self.controls.retain(|id, e| {
-            !e.done
-                || e.ord.is_some()
-                || by_cell.values().any(|s| {
-                    matches!(s.owner, Owner::Control(c) if c.id == *id && c.attempt == e.attempt)
-                })
+            if e.retired {
+                e.ord.is_some()
+            } else {
+                !e.done
+                    || e.ord.is_some()
+                    || by_cell.values().any(|s| {
+                        matches!(s.owner, Owner::Control(c) if c.id == *id && c.attempt == e.attempt)
+                    })
+            }
         });
     }
 
@@ -1188,6 +1210,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     #[cfg(test)]
     pub(crate) fn evicted_direct(&mut self, cell_id: u64) {
         self.on_evicted(cell_id);
+    }
+
+    /// How many control contents are kept (tests only).
+    #[cfg(test)]
+    pub(crate) fn live_controls_test(&self) -> usize {
+        self.controls.len()
     }
 
     /// The `SEND` of the cell of `token` failed or was discarded (what the scheduler's `send_failed` and `discard` do;
@@ -2141,9 +2169,25 @@ mod tests {
         super::Conversations<crate::scheduler::outbox::MemOutbox, P, Fixed>,
     );
 
+    /// Two conversations of one session with their own durabilities: the initiator (`pa`) and the responder (`pb`), its
+    /// receive queue bound to 1, inside a `Conversations`.
+    #[cfg(feature = "kat")]
+    type Pair<PA, PB> = (
+        super::Conversation<crate::scheduler::outbox::MemOutbox, PA, Fixed>,
+        super::Conversations<crate::scheduler::outbox::MemOutbox, PB, Fixed>,
+    );
+
     #[cfg(feature = "kat")]
     fn session<P: crate::scheduler::outbox::Persist>(persist: P) -> Result<Session<P>, Fail> {
-        use crate::scheduler::outbox::{MemOutbox, MemPersist};
+        pair(crate::scheduler::outbox::MemPersist::new(), persist)
+    }
+
+    #[cfg(feature = "kat")]
+    fn pair<PA: crate::scheduler::outbox::Persist, PB: crate::scheduler::outbox::Persist>(
+        pa: PA,
+        pb: PB,
+    ) -> Result<Pair<PA, PB>, Fail> {
+        use crate::scheduler::outbox::MemOutbox;
         use crate::scheduler::types::QueueId;
         use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
         let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
@@ -2167,7 +2211,7 @@ mod tests {
         let a = super::Conversation::new(
             a_state,
             MemOutbox::new(),
-            MemPersist::new(),
+            pa,
             Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
             peer.clone(),
             0,
@@ -2175,7 +2219,7 @@ mod tests {
         let mut b = super::Conversation::new(
             b_state,
             MemOutbox::new(),
-            persist,
+            pb,
             Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
             peer,
             0,
@@ -2479,6 +2523,174 @@ mod tests {
         assert_eq!(a.persist().deletes, [4, 4], "failed once, tried again");
         a.prepare_direct(3_000).map_err(|_| "seal")?;
         assert_eq!(a.persist().deletes, [4, 4], "deleted: not tried again");
+        Ok(())
+    }
+
+    /// A durability that logs its control row calls and fails the first `fail_relayed` deletes and the first
+    /// `fail_requeued` re-writes (Q224, Q225).
+    #[cfg(feature = "kat")]
+    struct Script {
+        inner: crate::scheduler::outbox::MemPersist,
+        log: Vec<(&'static str, i64)>,
+        fail_relayed: u32,
+        fail_requeued: u32,
+        next_ord: i64,
+    }
+
+    #[cfg(feature = "kat")]
+    fn script(fail_relayed: u32, fail_requeued: u32) -> Script {
+        Script {
+            inner: crate::scheduler::outbox::MemPersist::new(),
+            log: Vec::new(),
+            fail_relayed,
+            fail_requeued,
+            next_ord: 100,
+        }
+    }
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Script {
+        fn commit(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.inner.commit(kind, state)
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.inner.commit_parts(kind, parts)
+        }
+
+        fn control_relayed(
+            &mut self,
+            ord: i64,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.log.push(("relayed", ord));
+            if self.fail_relayed > 0 {
+                self.fail_relayed = self.fail_relayed.saturating_sub(1);
+                Err(crate::scheduler::outbox::PersistError)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn control_requeued(
+            &mut self,
+            _row: &[u8],
+        ) -> Result<Option<i64>, crate::scheduler::outbox::PersistError> {
+            self.log.push(("requeued", self.next_ord));
+            if self.fail_requeued > 0 {
+                self.fail_requeued = self.fail_requeued.saturating_sub(1);
+                Err(crate::scheduler::outbox::PersistError)
+            } else {
+                let o = self.next_ord;
+                self.next_ord = self.next_ord.saturating_add(1);
+                Ok(Some(o))
+            }
+        }
+    }
+
+    /// A `RouteUpdate` of the relay queue `n` as pending control content.
+    #[cfg(feature = "kat")]
+    fn routes(n: u8) -> Result<super::PendingControl, Fail> {
+        use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
+        Ok(super::PendingControl::Routes(RouteUpdateBody {
+            routes: vec![RouteDescriptor::RelayQueue(RelayQueue {
+                relay: crate::testutil::relay_ref(),
+                sid: [n; 16],
+                send_seed: secmp_crypto::SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?,
+                period_s: secmp_proto::wire::Period::S20,
+            })],
+        }))
+    }
+
+    /// The `sid`s of the relay-queue routes of the `Routes` events `b` raised since the last call.
+    #[cfg(feature = "kat")]
+    fn sids<
+        O: crate::scheduler::outbox::Outbox,
+        P: crate::scheduler::outbox::Persist,
+        S: super::EntropySource,
+    >(
+        b: &mut super::Conversation<O, P, S>,
+    ) -> Vec<[u8; 16]> {
+        use secmp_proto::wire::cell::RouteDescriptor;
+        let mut out = Vec::new();
+        for e in b.take_events() {
+            if let super::SessionEvent::Routes(r) = e {
+                for d in &r {
+                    if let RouteDescriptor::RelayQueue(q) = d {
+                        out.push(q.sid);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// SE-46 (Q224, Option R): adding a newer `RouteUpdate` deletes the older one's row at once; a failed delete is
+    /// retried at the next preparation and only until it succeeds; the outcomes of the older one's cells plan nothing,
+    /// and only the newer one reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn superseded_route_row_delete_is_retried() -> Result<(), Fail> {
+        let (mut a, mut convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(4, routes(3)?).map_err(|_| "queue")?;
+        let p1 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.queue_pending(5, routes(4)?).map_err(|_| "queue")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4)],
+            "Q224: the older row goes when the newer is added"
+        );
+        a.on_failed(p1.token);
+        let p2 = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4), ("relayed", 4)],
+            "a failed delete is retried at the next settle"
+        );
+        let p3 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(a.persist().log.len(), 2, "deleted: not tried again");
+        assert_eq!(a.live_controls_test(), 1, "only the newer entry");
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        b.deliver_direct(&p3.cell).map_err(|_| "delivery")?;
+        assert_eq!(sids(b), [[4; 16]], "only the newer RouteUpdate");
+        Ok(())
+    }
+
+    /// SE-47 (Q224): an evicted older `RouteUpdate` whose row is being re-written is retired by a newer one: its row is
+    /// never written again, and only the newer one reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn superseded_routes_row_is_not_rewritten() -> Result<(), Fail> {
+        let (mut a, mut convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(4, routes(3)?).map_err(|_| "queue")?;
+        let p1 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p1.token, 1);
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        a.queue_pending(6, routes(4)?).map_err(|_| "queue")?;
+        let p2 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        let p3 = a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist()
+                .log
+                .iter()
+                .filter(|(k, _)| *k == "requeued")
+                .count(),
+            1,
+            "Q224: a retired entry's row is never written again"
+        );
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        b.deliver_direct(&p3.cell).map_err(|_| "delivery")?;
+        assert_eq!(sids(b), [[4; 16]], "only the newer RouteUpdate");
         Ok(())
     }
 

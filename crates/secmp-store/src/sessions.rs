@@ -154,7 +154,8 @@ pub fn insert_pending_control(tx: &mut Tx<'_>, session: i64, content: &[u8]) -> 
     Ok(ord)
 }
 
-/// Delete the pending control content at `ord` of `session` (its last cell was sealed and persisted).
+/// Delete the pending control content at `ord` of `session` (every cell of its current attempt has its `OK_SEND`,
+/// Q222; or a newer `RouteUpdate` retired it, Q224).
 ///
 /// # Errors
 /// [`Error::Unavailable`] if the statement fails or there is no such row.

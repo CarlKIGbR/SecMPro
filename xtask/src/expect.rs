@@ -1384,7 +1384,7 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
 ];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
-/// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 add suites.
+/// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 and M7 (`store`, ADR-053 item 8) add suites.
 pub(crate) const VECTOR_SUITES: &[&str] = &[
     "caead",
     "encodings",
@@ -1397,6 +1397,7 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
     "link",
     "msgencrypt",
     "sas",
+    "store",
     "tr",
 ];
 
@@ -1406,7 +1407,7 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
 /// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10;
 /// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6; M4: `hx`, committed
 /// with the M4 plan commit and frozen in `docs/reviews/M04-report.md` plan step 5; M5: `link`, committed with the
-/// M5 plan commit, frozen by Phase B, TEST-SPEC-M5 V-22 and X-01). Pending: none.
+/// M5 plan commit, frozen by Phase B, TEST-SPEC-M5 V-22 and X-01). M7: `store`, registered and frozen in one commit (WEISUNG M7-VEC1). Pending: none.
 pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 
 /// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07

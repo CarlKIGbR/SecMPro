@@ -35,6 +35,10 @@ pub mod wrap;
 #[cfg(any(test, feature = "kat"))]
 pub mod kat;
 
+#[cfg(test)]
+#[cfg(feature = "kat")]
+mod vector_gen;
+
 pub use error::{Error, Result};
 pub use store::{DbKey, SQLCIPHER_MIN, Store, Tx, check_cipher_version};
 

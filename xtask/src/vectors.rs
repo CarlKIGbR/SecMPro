@@ -5,7 +5,7 @@
 //!    (feature `kat`) the M1 suites, the `secmp-proto` example `gen-encodings` the positive rows of `encodings`, the
 //!    `secmp-proto` example `gen-tr` (feature `kat`) the complete `tr` suite (M3), the example `gen-hx` (feature
 //!    `kat`) the complete `hx` suite (M4), the `secmp-relay` example `gen-link` (feature `kat`) the complete `link`
-//!    suite (M5).
+//!    suite (M5). The `secmp-store` test `vector_gen::rust_store_vectors_equal_the_reference_file` (feature `kat`) writes the complete `store` suite (M7).
 //! 2. Each file is compared **structurally** with the committed reference file `vectors/ref/<suite>.json`
 //!    (written by the independent `ref/` session): both are parsed, `generator` is removed, the values must be
 //!    equal — no case folding. Every byte-string field must match `^([0-9a-f]{2})*$`. For the suites of
@@ -29,7 +29,7 @@ use crate::expect;
 use crate::util::{Cmd, Error, Result, bail, say};
 
 /// Fields whose JSON strings are not byte strings (SCHEMA §1: labels, digit strings, `mode`, `op`, ids; schema 3:
-/// the `encodings` inputs `structure` and `context`; schema 5: the `hx` invitation `uri`, an ASCII string).
+/// the `encodings` inputs `structure` and `context`; schema 5: the `hx` invitation `uri`, an ASCII string; schema 8: the `store` `column`, an ASCII string).
 const TEXT_FIELDS: &[&str] = &[
     "id",
     "op",
@@ -45,6 +45,7 @@ const TEXT_FIELDS: &[&str] = &[
     "structure",
     "context",
     "uri",
+    "column",
 ];
 
 fn parse(path: &Path) -> Result<Value> {
@@ -161,6 +162,25 @@ pub(crate) fn hex_violations(doc: &Value) -> Vec<String> {
     out
 }
 
+/// The `store` suite: the `secmp-store` test writes `vectors/rust/store.json` (feature `kat`).
+fn generate_store() -> Result<()> {
+    Cmd::cargo()
+        .args([
+            "nextest",
+            "run",
+            "--locked",
+            "--package",
+            "secmp-store",
+            "--features",
+            "kat",
+            "--lib",
+            "-E",
+            "test(=vector_gen::rust_store_vectors_equal_the_reference_file)",
+        ])
+        .run()?;
+    Ok(())
+}
+
 /// Step 1: the Rust generators write `rust_dir`; the decoders must reject every negative row of the
 /// positive-only suites.
 fn generate(rust_dir: &Path) -> Result<()> {
@@ -242,6 +262,8 @@ fn generate(rust_dir: &Path) -> Result<()> {
         ])
         .arg(rust_dir.to_string_lossy())
         .run()?;
+    // the store suite (M7, ADR-053 item 8): a secmp-store test writes vectors/rust/store.json (no serde_json there)
+    generate_store()?;
     // the negative rows of the positive-only suites: every one rejected by the decoders
     Cmd::cargo()
         .args([
@@ -502,6 +524,15 @@ mod tests {
         assert_eq!(hex_violations(&bad).len(), 2);
     }
 
+    /// The `store` suite's `column` is an ASCII string, not a byte string (schema 8).
+    #[test]
+    fn hex_validator_accepts_the_store_column() {
+        let ok = doc(
+            r#"{"cases":[{"id":"store-0008","op":"seal","inputs":{"column":"routes","label":"SecMP-STORE/1 contacts","k_t":"00"},"outputs":{"rec":"0a"}}]}"#,
+        );
+        assert!(hex_violations(&ok).is_empty(), "{:?}", hex_violations(&ok));
+    }
+
     #[test]
     fn positive_view_keeps_the_header_and_the_positive_rows() {
         let reference = doc(
@@ -596,12 +627,13 @@ mod tests {
 
     /// X-01 `vectors_step_12a_covers_twelve_suites` (TEST-SPEC-M5): step 12a compares the 12 frozen suites, `link`
     /// among them, nothing is pending freeze, and `link`'s frozen file is checked against its reference file (86
-    /// cases, structurally and byte for byte) as part of the step's count.
+    /// cases, structurally and byte for byte) as part of the step's count. M7 VEC1: 13 suites with `store` (the name
+    /// stays, TEST-SPEC-M5 X-01).
     #[test]
     fn vectors_step_12a_covers_twelve_suites() -> Result<()> {
         assert_eq!(
             expect::VECTOR_SUITES.len(),
-            12,
+            13,
             "{:?}",
             expect::VECTOR_SUITES
         );
@@ -630,13 +662,28 @@ mod tests {
         }
         let summary = check_frozen_against_ref(&root)?;
         assert!(
-            summary.starts_with(&format!("12 frozen suites ({total} cases)")),
+            summary.starts_with(&format!("13 frozen suites ({total} cases)")),
             "{summary}"
         );
         assert!(
             summary.ends_with("pending freeze (shape only): none"),
             "{summary}"
         );
+        Ok(())
+    }
+
+    /// M7 VEC1: `store` is a registered, frozen suite of 26 cases.
+    #[test]
+    fn vectors_step_12a_covers_the_store_suite() -> Result<()> {
+        assert!(expect::VECTOR_SUITES.contains(&"store"));
+        let vectors = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("vectors");
+        let (frozen, reference) = (
+            std::fs::read(vectors.join("store.json"))?,
+            std::fs::read(vectors.join("ref").join("store.json"))?,
+        );
+        assert_eq!(check_frozen_suite("store", &frozen, &reference)?, 26);
         Ok(())
     }
 

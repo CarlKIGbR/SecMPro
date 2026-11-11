@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from secmp_ref import caead, labels, primitives, store, store_cases, vectorfile
+from secmp_ref import caead, identity, labels, primitives, store, store_cases, vectorfile
 from secmp_ref.errors import Reject
 
 DOC = json.loads(vectorfile.canonical_json(vectorfile.suite_document("store", store_cases.store_cases())))
@@ -145,3 +145,46 @@ def test_new_labels_are_prefix_free_against_labels_py():
 def test_schema_4_12_is_rendered_from_this_table():
     from tools import render_schema_4_12
     assert render_schema_4_12.OUT.read_text(encoding="utf-8") == render_schema_4_12.render()
+# ---- L7 (WEISUNG REF-M7-store3): the four backup sections are decoded (ADR-053 Appendix, Amendments 2 and 3)
+B16 = CASES["store-0016"]["inputs"]
+IDENT = H(B16["identity"])
+IKS = identity.iks_public_from_seeds(bytes([1]) * 32, bytes([2]) * 32, bytes([3]) * 32)
+ONE = (1).to_bytes(4, "big")
+SETTINGS_OK = b"\x00\x01\x0eretention_days\x00\x04" + (30).to_bytes(4, "big")
+def _contact(verified=b"\x01", local=b"\x03Bob", profile=b"\x04peer\x00", iks=IKS):
+    return iks + verified + profile + local
+def _message(direction=b"\x01", kind=b"\x01", index=0):
+    return index.to_bytes(4, "big") + direction + (1_800_000_000_000).to_bytes(8, "big") + bytes([7]) * 16 + kind + bytes(4) + b"\x00\x02hi"
+RET = b"\x0eretention_days\x00\x04" + (30).to_bytes(4, "big")
+def _l7_file(contacts, settings, messages):
+    salt, n1, mk, n = (H(B16[k]) for k in ("salt", "n_prime", "mk_bk", "n"))
+    sections = (IDENT, contacts, settings, messages)
+    bwrap = store.backup_bwrap(H(B16["passphrase"]), salt, n1, mk)
+    header = store.backup_header(salt, bwrap, [len(s) for s in sections])
+    return b"".join(sections), store.backup_file(header, n, store.backup_key(mk), b"".join(sections))
+def test_l7_full_body_is_accepted():
+    body, f = _l7_file(ONE + _contact(), SETTINGS_OK, ONE + _message())
+    assert store.open_backup(H(B16["passphrase"]), f) == body
+L7_REJECTS = {
+    "settings-key=mode": (ONE + _contact(), b"\x00\x01\x04mode\x00\x04\x00\x00\x00\x01", ONE + _message()),
+    "retention_days-len=3": (ONE + _contact(), b"\x00\x01\x0eretention_days\x00\x03\x00\x00\x1e", ONE + _message()),
+    "settings-trailing-byte": (ONE + _contact(), SETTINGS_OK + b"\x00", ONE + _message()),
+    "view-once": (ONE + _contact(), b"\x00\x00", ONE + _message(kind=b"\x03")),
+    "kind=7": (ONE + _contact(), b"\x00\x00", ONE + _message(kind=b"\x07")),
+    "direction=2": (ONE + _contact(), b"\x00\x00", ONE + _message(direction=b"\x02")),
+    "contacts-truncated": (ONE + _contact()[:-1], b"\x00\x00", bytes(4)),
+    "verified=2": (ONE + _contact(verified=b"\x02"), b"\x00\x00", bytes(4)),
+    "local-name-65": (ONE + _contact(local=b"\x41" + b"a" * 65), b"\x00\x00", bytes(4)),
+    "local-name-invalid-utf8": (ONE + _contact(local=b"\x02\xff\xfe"), b"\x00\x00", bytes(4)),
+    "am3-settings-key-twice": (bytes(4), b"\x00\x02" + RET + RET, bytes(4)),
+    "am3-contact_index=1": (ONE + _contact(), b"\x00\x00", ONE + _message(index=1)),
+    "am3-contact_index-without-contacts": (bytes(4), b"\x00\x00", ONE + _message()),
+    "am3-iks-ver=02": (ONE + _contact(iks=b"\x02" + IKS[1:]), b"\x00\x00", bytes(4)),
+    "am3-profile-avatar-flag=2": (ONE + _contact(profile=b"\x04peer\x02"), b"\x00\x00", bytes(4)),
+}
+@pytest.mark.parametrize("name", sorted(L7_REJECTS))
+def test_l7_malformed_body_rejects(name):
+    _, f = _l7_file(*L7_REJECTS[name])
+    with pytest.raises(Reject) as e:
+        store.open_backup(H(B16["passphrase"]), f)
+    assert type(e.value) is Reject and str(e.value) == "reject"

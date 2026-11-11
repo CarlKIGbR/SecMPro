@@ -12,7 +12,7 @@ Every failure on untrusted input raises the uniform Reject. Written from the ADR
 
 import functools
 
-from . import caead, labels, primitives
+from . import caead, encodings, labels, primitives, sizes
 from .errors import Reject
 
 VER = 1
@@ -154,16 +154,49 @@ HEADER_LEN = 1 + SALT + 12 + BWRAP_LEN + 1 + 5 * 4   # 154
 
 
 def _check_sections(body: bytes, lengths) -> None:
-    """Structural check of the four sections (Appendix). Only what this generator can produce is parsed
-    fully: identity (ver 0x01 ‖ three 32-B secrets) and empty contacts/settings/messages lists."""
+    """The four sections of the Appendix, each consuming exactly its length, every field checked; settings per
+    Amendment 2 (key `retention_days` only, `val` 4 bytes); Amendment 3 (a key at most once, contact_index < n,
+    D.3/D.5/IKSPublic decoders, no view-once). Every failure is the uniform Reject."""
     if len(body) != sum(lengths):
         raise Reject()
     identity, contacts, settings, messages = (body[sum(lengths[:i]):sum(lengths[:i + 1])] for i in range(4))
     if len(identity) != 97 or identity[0] != VER:
         raise Reject()
-    for section, width in ((contacts, 4), (settings, 2), (messages, 4)):
-        if section != bytes(width):
-            raise ValueError("generator parses only empty sections")
+    r = encodings._Reader(contacts)
+    n_contacts = r.uint(4)
+    for _ in range(n_contacts):
+        iks = r.sub(sizes.IKS_PUBLIC)
+        encodings._d_iks(iks)
+        iks.done()
+        if r.uint(1) not in (0, 1):                        # verified
+            raise Reject()
+        encodings._d_profile(r)                            # Profile (D.3)
+        name_len = r.uint(1)
+        if name_len > encodings.NAME_MAX:                  # local_name ≤ 64
+            raise Reject()
+        encodings._utf8(r.take(name_len))
+    r.done()
+    r = encodings._Reader(settings)
+    seen = set()
+    for _ in range(r.uint(2)):
+        key = r.take(r.uint(1))
+        val = r.take(r.uint(2))
+        if key != b"retention_days" or len(val) != 4:      # ADR-053 Amendment 2
+            raise Reject()
+        if key in seen:                                    # Amendment 3 (1)
+            raise Reject()
+        seen.add(key)
+    r.done()
+    r = encodings._Reader(messages)
+    for _ in range(r.uint(4)):
+        if r.uint(4) >= n_contacts:                        # contact_index, Amendment 3 (2)
+            raise Reject()
+        if r.uint(1) not in (0, 1):                        # direction
+            raise Reject()
+        r.uint(8)                                          # ts
+        if encodings._d_appmessage(r)["kind"] == 3:        # view-once-text (docs/03:507), Amendment 3 (4)
+            raise Reject()
+    r.done()
 
 
 def open_backup(passphrase: bytes, file: bytes) -> bytes:

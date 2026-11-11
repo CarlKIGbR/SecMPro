@@ -1202,10 +1202,11 @@ mod tests {
         Ok(())
     }
 
-    /// BK-04 [REF] (ADR-053 item 6, Appendix): with fixed salt, `MK_bk`, `N'` and `N` (kat entropy, `kat_small`) the
+    /// BK-04 (ADR-053 item 6, Appendix): with fixed salt, `MK_bk`, `N'` and `N` (kat entropy, `kat_small`) the
     /// file has the magic, header, `bwrap`, section table and body seal at their offsets and lengths, and `bwrap` and
     /// the body seal equal the item-6 compositions recomputed from the `secmp-crypto` primitives; a wrong passphrase is
-    /// `Err(Unlock)`. The byte-exact clause against `vectors/store.json` is open [REF] (OPEN-M7-38), as ST-10.
+    /// `Err(Unlock)`. Byte-exact (`PROFILE` parameters): `store-0016`…`-0019`, `-0021`…`-0026` occur verbatim in
+    /// `vectors/store.json`; the file imports.
     #[test]
     fn wrapping_and_header_kat() -> R {
         let dir = TempDir::new("bk04")?;
@@ -1247,6 +1248,15 @@ mod tests {
             open_export_kat(&file, b"backup passphrasf").err(),
             Some(Error::Unlock)
         );
+        let frozen = crate::vector_gen::repo_file("vectors/store.json")?;
+        for case in crate::vector_gen::backup_cases(true)? {
+            let line = crate::vector_gen::canonical(&case)?;
+            assert!(
+                frozen.contains(&line),
+                "{} is not in vectors/store.json",
+                crate::vector_gen::id_of(&case)
+            );
+        }
         Ok(())
     }
 

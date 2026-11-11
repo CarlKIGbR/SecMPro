@@ -683,7 +683,7 @@ pub(crate) fn backup_cases(verify: bool) -> Res<Vec<J>> {
     Ok(out)
 }
 
-fn id_of(j: &J) -> String {
+pub(crate) fn id_of(j: &J) -> String {
     match j {
         J::Obj(m) => match m.get("id") {
             Some(J::Str(s)) => s.clone(),

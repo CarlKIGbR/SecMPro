@@ -120,18 +120,25 @@ impl TableKeys {
     }
 }
 
+#[cfg(feature = "kat")]
 #[cfg(test)]
 mod tests {
     use super::*;
 
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
 
-    /// ST-10 (CS-3.3; ADR-053 items 3, 4) [REF]: for a fixed `MK` (32 × 0x4d) the nine `K_t` are pairwise distinct,
+    /// ST-10 (CS-3.3; ADR-053 items 3, 4): for a fixed `MK` (32 × 0x4d) the nine `K_t` are pairwise distinct,
     /// `K_db` differs from each, and each equals the generic `secmp_crypto::hkdf` with salt 0^32 and its App. A label (the
-    /// existing HKDF vectors are the oracle). The byte-exact clause against `vectors/store.json` stays open [REF]
-    /// (OPEN-M7-38): no vector file exists, none is read.
+    /// existing HKDF vectors are the oracle). Byte-exact: the case `store-0001` built from the frozen mk's stream occurs
+    /// verbatim in `vectors/store.json` (OPEN-M7-38 closed by M7-VEC1).
     #[test]
     fn table_keys_match_vectors() -> R {
+        let frozen = crate::vector_gen::repo_file("vectors/store.json")?;
+        let case = crate::vector_gen::canonical(&crate::vector_gen::keys_case()?)?;
+        assert!(
+            frozen.contains(&case),
+            "store-0001 is not in vectors/store.json: {case}"
+        );
         let mk = LockedSecret::<32>::from_slice(&[0x4d; 32])?;
         let tables = TableKeys::derive(&mk)?;
         let db = derive(&mk, Label::StoreDb)?;

@@ -487,8 +487,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         });
     }
 
-    /// Announce `routes` to the peer (`RouteUpdate`, spec §9.8, §10.6 (5)), in memory only (the product's announcements
-    /// are durable: [`Conversation::queue_pending`]). A body that does not encode is not planned.
+    /// Announce `routes` to the peer (`RouteUpdate`, spec §9.8, §10.6 (5)), in memory only — test kit (Q226); the
+    /// product's `RouteUpdate`s are durable ([`Conversation::queue_pending`]). A body that does not encode is not planned.
+    #[cfg(any(test, feature = "kat"))]
     pub fn queue_route_update(&mut self, routes: Vec<RouteDescriptor>) {
         self.add_control(PendingControl::Routes(RouteUpdateBody { routes }), None)
             .ok();
@@ -509,7 +510,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.add_control(PendingControl::KeyChange(body), None)
     }
 
-    /// Plan the pending control content stored at `ord` (Q210 c, Q222): planned as [`Conversation::queue_route_update`],
+    /// Plan the pending control content stored at `ord` (Q210 c, Q222): planned as a `RouteUpdate`,
     /// [`Conversation::queue_control`] or [`Conversation::queue_key_change`] plan it; its row lives until the last cell's
     /// `OK_SEND` and goes at the next preparation. The host calls this after the commit that wrote the row, and on open
     /// for every row.

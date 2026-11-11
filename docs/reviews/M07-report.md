@@ -1609,6 +1609,7 @@ Anchors re-found (old @aac2242 → `4251a0b`): `sessions/actor.rs` `Owner` `:134
 - **D-B65 (material §4.5 list).** F2 Option R with the branch removal and the test-kit retirement (D-B59); F3 hold and `Ok(None)` rule (D-B60); F1 with the no-kat check (D-B61); F-05 (D-B63); F-04 (D-B64).
 - **D-B66 (implementer, B-4f2).** (1) SE-37's re-proved red is at `sessions/tests.rs:2319:9` (the material's `:2279:9` before SE-48 was inserted above it). (2) The `resets` helper moved from F2 to F3 (unused in F2: `dead_code`). (3) Two killer tests for the two missed core mutants (`f51d603`). (4) `docs::adr_018_status` red-first restored the line by copying the saved file, not by `git checkout` (`git diff` empty either way). (5) ci-full was started detached (own session, raw log `target/fable/ci-full-raw/ci-full-b4f-2225414.txt`) so that the tool's 4-h background limit cannot stop it; a first background start was stopped by me after a few seconds for that reason (no step had finished). (6) The store mutants run ended by its dictated `timeout 900` after all 12 outcomes. (7) `Core::rotate_identity`'s guard uses `crate::sessions::actor::Conversation::key_change_in_flight` as a path (clippy `redundant_closure_for_method_calls`).
 - **D-B67 (L2–L4 placement).** L3/L4 are `D-CI6`/`D-CI7`: `D-CI5` was taken by CI4. L2: §B-4e states no count of 8 red (its table says "all red against the old scanner"); nothing to correct beyond the erratum.
+- **D-B69 (m-1).** `mutants-b4f-7ed551c.txt`'s core section omits the two `MISSED` lines that cargo-mutants printed; from `target/m7-b4f-mutants-core/mutants.out/missed.txt`: `crates/secmp-client-core/src/sessions/actor.rs:1314:27: delete ! in Conversation<O, P, S>::prepare` and `crates/secmp-client-core/src/sessions/actor.rs:1438:16: delete ! in Conversation<O, P, S>::on_lost`.
 
 ### §B-4f.4 Risks
 
@@ -1662,3 +1663,11 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 | sbom | PASS | 12 CycloneDX SBOMs; `cargo audit bin` on relay, cli, ui |
 
 - **D-ADV1 (lock edit).** The lockfiles were edited with the dictated `sed` (rustix version + checksum) instead of `cargo update -p rustix --precise 1.1.6`, which also re-points seven `windows-sys` edges (Q229); `cargo metadata/tree --locked` and `cargo check --workspace --locked --all-targets` accept the edit without rewriting it; `cargo vet certify` ran with `--locked` (without it, cargo-vet refreshes `imports.lock`).
+
+## B-4f3 (WEISUNG M7-B-4f3; Q230, Q231; modell=claude-sonnet-5-5)
+
+* START `432f43a`; commits: `c9ac6a5` fix(core) (Q230, SE-53, V-04/V-05/V-02 docs), docs commit, ci-fast evidence commit; VEC1 (`da9bd6d`, `ed453c2`, `9777151`) and ADV1 (`598a948`, `432f43a`) were present, `sessions/`, `hub.rs`, `api.rs` unchanged since `f51d603`.
+* Q230: `settle_controls` keeps the row of a done newer `RouteUpdate` while a retired one holds its row; SE-53 `newer_routes_row_outlives_a_retired_one` red first at `actor.rs:2887:9` (left `[4, 4, 4, 5]`, right `[4, 4, 4]`; `b4f3-red-first.txt`). Q231/OPEN-M7-B-17: guard bound documented (V-02 doc, OPEN-M7-B-12); V-04 two doc additions; V-05 extra `Zeroizing` copy removed in `register_route`; m-1 = D-B69.
+* Tests: `cargo test -p secmp-client-core --features kat --lib --test-threads=1` 217/217; with the default thread count 35–38 tests fail, also on `432f43a` without this change (not caused by B-4f3; the nextest-based `ci-fast` is green). The six-test nextest filter: 8/8.
+* Mutants (`mutants-b4f3-c9ac6a5.txt`): 8 found, 8 caught / 0 missed / 0 unviable / 0 timeout; `missed.txt` empty. cargo-mutants makes 8 mutants on the changed lines, the 11 hand mutants of the WEISUNG were not re-run by hand.
+* ci-fast: `ci-fast-b4f3-1-c9ac6a5.txt` (exit 0), `ci-fast-b4f3-2-<sha7>.txt` (commit 2). modell=claude-sonnet-5-5

@@ -246,6 +246,7 @@ corpus, `KANI_HARNESSES`, `NORMAL_DEPENDENCY_ALLOW` edge) lands in the same comm
 | SE-50 | `sessions::actor::tests::durability_without_rows_holds_nothing` | Q225 | a re-planned `Control{2}` over `MemPersist` without mirror (`Ok(None)`) | not held: the peer gets `ResetRequested` | unit | B | 0.2 s |
 | SE-51 | `sessions::tests::undecodable_previous_identity_freezes_a_repeat` | ADR-058 (1) | a stored previous identity that does not decode; reopen; the accepted `KeyChange` repeated | treated as absent: `Frozen`, `KeyChangeInvalid` | unit | B | 2 s |
 | SE-52 | `sessions::tests::previous_identity_read_error_fails_open` | ADR-058 | a previous-identity row that does not open (AEAD) | `open_conversation` is `Err(Unavailable)` | unit | B | 2 s |
+| SE-53 | `sessions::actor::tests::newer_routes_row_outlives_a_retired_one` | Q230, Q224 | a done newer `RouteUpdate` while the retired older row's delete fails three times | the newer row stays until the older row is deleted, then goes (control-row log `[4 ×4, 5]`) | unit | B | 0.1 s |
 
 ## (h) `Api`, relay view, transport boundary (`docs/02` §4.1, §4.5, §6; review focus `docs/07:147`) — Phase B
 

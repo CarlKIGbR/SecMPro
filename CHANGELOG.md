@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 B-4f3 (Q230, Q231): a newer RouteUpdate keeps its row while a retired older row is still kept, so a crash cannot leave the older one alone; the unbounded KeyChange guard of an identity rotation is documented (OPEN-M7-B-17).
 - M7 ADV1 (Q229, ADR-051 Am. 9): `rustix` 1.1.5 → 1.1.6 (lockfile only; RUSTSEC-2026-0486, unsound xattr functions, not reachable; vet delta certified, no cooldown exception).
 - M7 VEC1 (OPEN-M7-38, ADR-053 item 8): suite `store` (26 cases) frozen after the Rust/`ref/` cross-check; ST-10 and BK-04 byte-exact; ADR-053 Amendment 3 (canonical backup decode); `ref/` L6/L7 (REF-M7-store3); evidence `docs/reviews/M07-evidence/vec1-red-first.txt`, `ci-fast-vec1-ed453c2.txt`.
 - M7 B-4f (Q222, Q223–Q226, ADR-058, EXTB2-2, EXTB2-3): control content keeps its owner until its last OK_SEND and is re-planned after a failure, eviction, lost queue, send-queue switch or restart; a newer RouteUpdate retires the older ones (also after a lost queue and at open); a control cell waits for its durable row; in-memory RouteUpdates are test-kit only; an authenticated repeat of the accepted KeyChange is a no-op (previous identity kept per contact); ADR-054 payload rules at the Api and at delivery; a reset request with an argument is ignored.

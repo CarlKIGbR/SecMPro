@@ -260,6 +260,11 @@ pub(crate) fn app_payload_ok(kind: AppKind, payload: &[u8]) -> bool {
         && core::str::from_utf8(payload).is_ok()
 }
 
+/// Q225 (CLAUDE.md §1.7): a cell of a durable control content whose row is not in the store waits.
+fn row_missing(controls: &BTreeMap<u64, ControlEntry>, owner: &Owner) -> bool {
+    matches!(owner, Owner::Control(c) if controls.get(&c.id).is_some_and(|e| e.durable && e.ord.is_none()))
+}
+
 /// The largest number of ids in one receipt: `2 + 16·n ≤ 1689` (spec §7.6).
 const RECEIPT_IDS_MAX: usize = 100;
 
@@ -634,7 +639,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         entry.relayed = 0;
         entry.done = false;
         if entry.ord.is_none() && entry.durable {
-            entry.ord = self.persist.control_requeued(&entry.row).unwrap_or(None);
+            match self.persist.control_requeued(&entry.row) {
+                Ok(Some(o)) => entry.ord = Some(o),
+                // this durability keeps no rows (MemPersist without mirror)
+                Ok(None) => entry.durable = false,
+                // retried at the next prepare; its cells wait (Q225)
+                Err(_) => {}
+            }
         }
         let attempt = entry.attempt;
         let content = PendingControl::decode(&entry.row);
@@ -658,7 +669,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     fn settle_controls(&mut self) {
         for e in self.controls.values_mut() {
             if !e.done && e.durable && e.ord.is_none() {
-                e.ord = self.persist.control_requeued(&e.row).unwrap_or(None);
+                match self.persist.control_requeued(&e.row) {
+                    Ok(Some(o)) => e.ord = Some(o),
+                    // this durability keeps no rows (MemPersist without mirror)
+                    Ok(None) => e.durable = false,
+                    // retried at the next prepare; its cells wait (Q225)
+                    Err(_) => {}
+                }
             }
             if (e.done || e.retired)
                 && let Some(o) = e.ord
@@ -1270,7 +1287,11 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         ) {
             self.hold_planned_real();
         }
-        if self.plan.is_empty() && self.may_send_real().is_ok() {
+        let sendable = self
+            .plan
+            .iter()
+            .position(|p| !row_missing(&self.controls, &p.owner));
+        if sendable.is_none() && self.may_send_real().is_ok() {
             if self.send_receipts && !self.receipts_due.is_empty() {
                 self.plan_receipt(now_ms);
             } else if let Some(message) = self.outbox.take_next() {
@@ -1281,7 +1302,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let next = if self.awaiting_first_reply {
             None
         } else {
-            self.plan.pop_front()
+            self.plan
+                .iter()
+                .position(|p| !row_missing(&self.controls, &p.owner))
+                .and_then(|i| self.plan.remove(i))
         };
         let from_plan = next.is_some();
         let planned = next.unwrap_or(Planned {
@@ -2630,6 +2654,88 @@ mod tests {
             }
         }
         out
+    }
+
+    /// How many `ResetRequested` events `b` raised since the last call.
+    #[cfg(feature = "kat")]
+    fn resets<
+        O: crate::scheduler::outbox::Outbox,
+        P: crate::scheduler::outbox::Persist,
+        S: super::EntropySource,
+    >(
+        b: &mut super::Conversation<O, P, S>,
+    ) -> usize {
+        b.take_events()
+            .iter()
+            .filter(|e| matches!(e, super::SessionEvent::ResetRequested))
+            .count()
+    }
+
+    /// SE-49 (Q225, CLAUDE.md §1.7): a control content planned again after an eviction whose row could not be written
+    /// again waits — its cell is not sealed — until the row is back; then it is sent once.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn control_cell_waits_for_its_row() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = pair(script(0, 2), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        let p2 = a.prepare(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        assert_eq!(
+            resets(b),
+            0,
+            "Q225: a control cell waits for its durable row"
+        );
+        let p3 = a.prepare(3_000).map_err(|_| "seal")?;
+        b.deliver_direct(&p3.cell).map_err(|_| "delivery")?;
+        assert_eq!(resets(b), 1, "sent once the row is back");
+        let p4 = a.prepare(4_000).map_err(|_| "seal")?;
+        b.deliver_direct(&p4.cell).map_err(|_| "delivery")?;
+        assert_eq!(resets(b), 0, "sent once");
+        assert_eq!(
+            a.persist()
+                .log
+                .iter()
+                .filter(|(k, _)| *k == "requeued")
+                .count(),
+            3
+        );
+        Ok(())
+    }
+
+    /// SE-50 (Q225): a durability that keeps no rows (`control_requeued` is `Ok(None)`) holds no control cell.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn durability_without_rows_holds_nothing() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        let p2 = a.prepare(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        assert_eq!(
+            resets(b),
+            1,
+            "Q225: a durability that keeps no rows holds nothing"
+        );
+        Ok(())
     }
 
     /// SE-46 (Q224, Option R): adding a newer `RouteUpdate` deletes the older one's row at once; a failed delete is

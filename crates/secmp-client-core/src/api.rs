@@ -907,6 +907,15 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     }
 
     fn rotate_identity(&mut self) -> Result<Response, Error> {
+        // no second succession while a `KeyChange` is in flight (Q222, OPEN-M7-B-12): a re-sent older one would freeze the
+        // peer (ADR-058 covers only the repeat of the last accepted one)
+        if self.index.values().any(|at| {
+            self.convs
+                .get(*at)
+                .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight)
+        }) {
+            return Err(Error::Unavailable);
+        }
         let mut source = (self.make_source)();
         let ready: Vec<(i64, usize)> = self.index.iter().map(|(c, i)| (*c, *i)).collect();
         let sessions: Vec<i64> = ready.iter().map(|(c, _)| *c).collect();
@@ -1815,6 +1824,53 @@ mod tests {
                 ops.len()
             );
             assert!(core.take_ops().is_empty(), "handed over once");
+            Ok(())
+        })
+    }
+
+    /// SE-34 (Q222, OPEN-M7-B-12): a second identity rotation is refused (`Unavailable`, nothing changes) while the
+    /// `KeyChange` of the first is in flight — planned, on the way, or relayed and in the eviction window of its cells;
+    /// once it has left that window, a rotation is taken again.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn second_rotation_refused_while_key_change_in_flight() -> R {
+        big(|| {
+            let w = world("api-kc-guard", 941)?;
+            let host = w.host;
+            drop((w.h, w.g, w.guest));
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(941))?;
+            let Response::IdentityRotated(fp1) = core.handle(Request::RotateIdentity)? else {
+                return Err("rotated".into());
+            };
+            assert_eq!(
+                core.handle(Request::RotateIdentity).err(),
+                Some(Error::Unavailable),
+                "OPEN-M7-B-12: no second succession while a KeyChange is in flight"
+            );
+            assert_eq!(host.profile.fingerprint()?, fp1);
+            let rows = |host: &crate::testutil::Fixture| -> Result<usize, E> {
+                Ok(host
+                    .profile
+                    .store()
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .pending_controls(1)?
+                    .len())
+            };
+            assert_eq!(rows(&host)?, 1);
+            let conv = core.convs.get_mut(0).ok_or("conversation")?;
+            for i in 0..4_u64 {
+                let p = conv.prepare_direct(ms(10 + i)).map_err(|_| "prepare")?;
+                conv.relayed_direct(p.token, 1 + i);
+            }
+            let dummy = conv.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+            conv.relayed_direct(dummy.token, 300);
+            conv.prepare_direct(ms(21)).map_err(|_| "prepare")?;
+            assert!(matches!(
+                core.handle(Request::RotateIdentity)?,
+                Response::IdentityRotated(_)
+            ));
             Ok(())
         })
     }

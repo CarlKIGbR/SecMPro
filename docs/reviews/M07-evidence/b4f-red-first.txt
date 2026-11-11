@@ -245,3 +245,21 @@ cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'te
     assertion `left == right` failed: Q222 (3), §10.6 (5): A re-written, C kept, B superseded
       left: [Some(1), Some(1), Some(2)]
      right: [Some(1), Some(2)]
+
+## step 6 KC guard — SE-34 api::tests::second_rotation_refused_while_key_change_in_flight
+### unfixed tree = 307b033 + the test; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(second_rotation_refused)'
+    thread '<unnamed>' (2546960) panicked at crates/secmp-client-core/src/api.rs:1837:13:
+    assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
+      left: None
+     right: Some(Unavailable)
+    (`left: None` = the second `RotateIdentity` was `Ok(IdentityRotated(..))`)
+### F-05 mutation (a): `key_change_in_flight` body → `false` (reverted)
+    thread '<unnamed>' (2548742) panicked at crates/secmp-client-core/src/api.rs:1846:13:
+    assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
+      left: None
+     right: Some(Unavailable)
+### F-05 mutation (b): `Some(&3)` → `Some(&1)` in `key_change_in_flight` (reverted)
+    thread '<unnamed>' (2549312) panicked at crates/secmp-client-core/src/api.rs:1846:13:
+    assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
+      left: None
+     right: Some(Unavailable)

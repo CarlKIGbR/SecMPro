@@ -205,3 +205,12 @@ cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(durability_w
       left: 0
      right: 1
 (one-site mutation of the `replan_control` arm only: PASS — settle (i) repeats the rule at the next prepare, as the material says.)
+### F4 (F-03) — both tests green on the tree; reds by the named mutations of `open_conversation` (reverted)
+#### SE-51 sessions::tests::undecodable_previous_identity_freezes_a_repeat — `.and_then(|row| IksPublic::decode(&row).ok())` → `.map(|row| IksPublic::decode(&row)).transpose()?`
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(undecodable_previous_identity)'
+    (the open fails; the runner's line:)
+    Error: "unavailable"
+#### SE-52 sessions::tests::previous_identity_read_error_fails_open — `.previous_identity(contact.0)?` → `.previous_identity(contact.0).ok().flatten()`
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(previous_identity_read_error)'
+    thread '<unnamed>' (2493892) panicked at crates/secmp-client-core/src/sessions/tests.rs:2071:9:
+    ADR-058: a previous identity that does not open fails the open

@@ -2015,6 +2015,70 @@ fn old_key_cannot_announce_another_identity() -> R {
     })
 }
 
+/// SE-51 (ADR-058 (1), F-03): a stored previous identity that does not decode is treated as absent (fail closed): a
+/// repeat of the accepted `KeyChange` after a reopen freezes.
+#[cfg(feature = "kat")]
+#[test]
+fn undecodable_previous_identity_freezes_a_repeat() -> R {
+    use secmp_proto::tr::content::Trust;
+    big(|| {
+        let (w, body, _) = accepted_key_change("prev-junk", 921)?;
+        let World {
+            host,
+            guest,
+            h,
+            mut g,
+        } = w;
+        drop(h);
+        host.profile
+            .store()
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| secmp_store::sessions::put_previous_identity(tx, 1, b"junk"))?;
+        let host = host.reopen()?;
+        let mut h =
+            open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(922)), T0)?;
+        g.queue_key_change(body).map_err(|_| "queue")?;
+        flush(&mut g, &mut h, 4)?;
+        assert_eq!(
+            h.trust(),
+            Trust::Frozen,
+            "ADR-058: an undecodable previous identity is absent (fail closed)"
+        );
+        assert!(matches!(
+            h.take_events().as_slice(),
+            [SessionEvent::KeyChangeInvalid]
+        ));
+        drop(guest);
+        Ok(())
+    })
+}
+
+/// SE-52 (ADR-058, F-03): a stored previous identity that does not open (AEAD) fails the open like every other
+/// `sessions` part.
+#[cfg(feature = "kat")]
+#[test]
+fn previous_identity_read_error_fails_open() -> R {
+    big(|| {
+        let (w, _, _) = accepted_key_change("prev-aead", 925)?;
+        let World { host, h, .. } = w;
+        drop(h);
+        host.profile.store().lock().map_err(|_| "lock")?.connection_kat().execute(
+            "UPDATE sessions SET data = (SELECT data FROM sessions WHERE session_id = 1 AND part = 3 AND ord = 0) WHERE session_id = 1 AND part = 6 AND ord = 0",
+            [],
+        )?;
+        let host = host.reopen()?;
+        assert!(
+            matches!(
+                open_conversation(&host.profile.store(), ContactId(1), Fixed(entropy(923)), T0),
+                Err(Error::Unavailable)
+            ),
+            "ADR-058: a previous identity that does not open fails the open"
+        );
+        Ok(())
+    })
+}
+
 /// Write `content` as a pending control row of session 1 in one transaction: its `ord` and the row decoded again.
 #[cfg(feature = "kat")]
 fn pend(

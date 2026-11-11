@@ -1,0 +1,184 @@
+head 7ed551c640d4424e26d2db31d698e6c8758dd80b
+mutants on HEAD 7ed551c (step 7 of B-4f; B-4f2 continuation), WEISUNG M7-B-4f §3 step 8 with WEISUNG M7-B-4f2 Do 3
+# cargo-mutants 27.1.0; diffs (base 8f4bcbd, foreign hunks kept out):
+#   git diff 8f4bcbd..HEAD -- crates/secmp-client-core/src ':(exclude)crates/secmp-client-core/src/profile.rs' > target/m7-b4f-mutants.diff
+#   git diff 8f4bcbd..HEAD -- crates/secmp-store/src/sessions.rs crates/secmp-store/src/schema.rs > target/m7-b4f-mutants-store.diff
+#   git diff 8f4bcbd..HEAD -- crates/secmp-proto/src > target/m7-b4f-mutants-proto.diff
+# commands: the forms of mutants-a3b-core-proto-store-cdc3c0a.txt:11 (core), :15 (proto), :19 (store) verbatim except
+#   --output, --in-diff, --file (core: the six product files B-4f changed; proto: tr/content.rs), the --skip tail (every
+#   name of expect::MUTANT_SKIP_TESTS and expect::MUTANT_HARNESS_SKIP_TESTS at 7ed551c, 49 names) and proto timeout 1800.
+# No mutant is on a line only a foreign commit changed (profile.rs excluded; the store diff names only B-4f files).
+
+== run core
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/m7-b4f-mutants-core --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \\w+Error>::fmt' --file crates/secmp-client-core/src/sessions/actor.rs --file crates/secmp-client-core/src/sessions/mod.rs --file crates/secmp-client-core/src/persist.rs --file crates/secmp-client-core/src/scheduler/outbox.rs --file crates/secmp-client-core/src/hub.rs --file crates/secmp-client-core/src/api.rs --in-diff target/m7-b4f-mutants.diff --test-tool nextest --timeout 900 -- --max-fail=1:immediate --profile mutants-harness -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step --skip activity_independence_balanced_virtual --skip activity_independence_strict_virtual --skip activity_independence_lowbw_virtual --skip bandwidth_model_matches_capture --skip pool_queue_never_idles_out --skip activity_independence_both_directions --skip activity_independence_when_receiving --skip drain_after_offline_virtual --skip ai_asymmetric_prepare_cost_does_not_move_emission --skip prop_schedule_independent_of_activity --skip ai01_strict_tokio --skip ai02_balanced_tokio --skip ai03_lowbw_tokio --skip ai04_when_receiving_tokio --skip ai05_timing_draws_tokio --skip ai06_both_directions_tokio --skip two_clients_loopback_tcp --skip two_clients_direct_tls_loopback --skip sim_replay_deterministic --skip sim_latency_does_not_move_emission --skip sim_slow_link_in_flight_teardown --skip sim_partition_heals --skip sim_both_clients_restart --skip sim_crash_between_persist_and_write --skip sim_hello_flood_backoff_recovery --skip sim_relay_restart_recovery --skip sim_balanced_relay_restart --skip two_clients_exchange_script_mem --skip active_hour_enqueues_ten_bursts_of_twenty --skip cpu_per_slot_measured --skip two_clients_profiles_are_in_memory --skip timing_draws_independent_of_activity --skip relay_idle_and_age_bounds_from_schedule --skip crash_between_persist_and_send_no_key_reuse --skip write_amplification_measured --skip lifetime_end_reconnects_fresh --skip link_lifetime_uniform_6h_24h --skip sender_resends_last_real_on_new_queue --skip recipient_retires_old_queue --skip retirement_survives_restart --skip recipient_retires_old_queue_balanced --skip relay_restart_with_store --skip rotation_deferred_at_the_rate_bound --skip no_identifiers_in_request_plaintexts --skip store_backed_source_activity_independent --skip queue_new_without_sender_seed_fails_closed --skip hub_step_error_reaches_hub_errors
+Found 121 mutants to test
+unviable crates/secmp-client-core/src/api.rs:912:9: replace Core<C, S>::rotate_identity -> Result<Response, Error> with Ok(Default::default()) in 31s build
+caught   crates/secmp-client-core/src/hub.rs:314:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 19s build + 3s test
+caught   crates/secmp-client-core/src/persist.rs:157:9: replace <impl Persist for StorePersist>::commit -> Result<(), PersistError> with Ok(()) in 11s build + 3s test
+caught   crates/secmp-client-core/src/persist.rs:255:9: replace <impl Persist for StorePersist>::control_relayed -> Result<(), PersistError> with Ok(()) in 8s build + 7s test
+caught   crates/secmp-client-core/src/persist.rs:262:9: replace <impl Persist for StorePersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(None) in 9s build + 7s test
+caught   crates/secmp-client-core/src/persist.rs:262:9: replace <impl Persist for StorePersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(Some(0)) in 5s build + 7s test
+caught   crates/secmp-client-core/src/persist.rs:262:9: replace <impl Persist for StorePersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(Some(1)) in 4s build + 7s test
+caught   crates/secmp-client-core/src/persist.rs:262:9: replace <impl Persist for StorePersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(Some(-1)) in 4s build + 7s test
+caught   crates/secmp-client-core/src/persist.rs:278:5: replace write_parts -> secmp_store::Result<()> with Ok(()) in 10s build + 3s test
+unviable crates/secmp-client-core/src/sessions/mod.rs:52:5: replace peer_key -> Result<HybridVerifyingKey, Error> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:61:5: replace peer_identity -> Result<IksPublic, Error> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/sessions/mod.rs:204:5: replace queue_message -> Result<MsgId, Error> with Ok(Default::default()) in 8s build + 3s test
+caught   crates/secmp-client-core/src/sessions/mod.rs:213:8: delete ! in queue_message in 5s build + 3s test
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::new()) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::from_iter([Default::default()])) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::new(Default::default())) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::from(Default::default())) in 1s build
+caught   crates/secmp-client-core/src/scheduler/outbox.rs:484:9: replace <impl Persist for MemPersist>::control_relayed -> Result<(), PersistError> with Ok(()) in 4s build + 4s test
+caught   crates/secmp-client-core/src/scheduler/outbox.rs:491:9: replace <impl Persist for MemPersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(None) in 4s build + 4s test
+caught   crates/secmp-client-core/src/scheduler/outbox.rs:491:9: replace <impl Persist for MemPersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(Some(0)) in 4s build + 4s test
+caught   crates/secmp-client-core/src/scheduler/outbox.rs:491:9: replace <impl Persist for MemPersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(Some(1)) in 4s build + 4s test
+caught   crates/secmp-client-core/src/scheduler/outbox.rs:491:9: replace <impl Persist for MemPersist>::control_requeued -> Result<Option<i64>, PersistError> with Ok(Some(-1)) in 4s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:257:5: replace app_payload_ok -> bool with true in 10s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:257:5: replace app_payload_ok -> bool with false in 4s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:260:9: replace && with || in app_payload_ok in 10s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:259:9: replace && with || in app_payload_ok in 4s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:258:9: replace && with || in app_payload_ok in 4s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:259:12: delete ! in app_payload_ok in 4s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:265:5: replace row_missing -> bool with true in 9s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:265:5: replace row_missing -> bool with false in 4s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:489:9: replace Conversation<O, P, S>::plan_control with () in 9s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:502:9: replace Conversation<O, P, S>::queue_route_update with () in 8s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:509:9: replace Conversation<O, P, S>::queue_control with () in 8s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:518:9: replace Conversation<O, P, S>::queue_key_change -> Result<(), SourceError> with Ok(()) in 5s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:529:9: replace Conversation<O, P, S>::queue_pending -> Result<(), SourceError> with Ok(()) in 5s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:536:9: replace Conversation<O, P, S>::key_change_in_flight -> bool with true in 5s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:536:9: replace Conversation<O, P, S>::key_change_in_flight -> bool with false in 4s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:536:54: replace == with != in Conversation<O, P, S>::key_change_in_flight in 5s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:546:9: replace Conversation<O, P, S>::add_control -> Result<(), SourceError> with Ok(()) in 9s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:583:9: replace Conversation<O, P, S>::retire_routes with () in 8s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:586:44: replace == with != in Conversation<O, P, S>::retire_routes in 8s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:591:29: delete ! in Conversation<O, P, S>::retire_routes in 5s build + 6s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:597:17: replace && with || in Conversation<O, P, S>::retire_routes in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:609:9: replace Conversation<O, P, S>::plan_content -> Result<u16, SourceError> with Ok(0) in 10s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:609:9: replace Conversation<O, P, S>::plan_content -> Result<u16, SourceError> with Ok(1) in 5s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:632:9: replace Conversation<O, P, S>::replan_control with () in 9s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:635:26: replace || with && in Conversation<O, P, S>::replan_control in 10s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:635:43: replace != with == in Conversation<O, P, S>::replan_control in 5s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:641:32: replace && with || in Conversation<O, P, S>::replan_control in 5s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:653:25: delete ! in Conversation<O, P, S>::replan_control in 6s build + 22s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:657:13: replace && with || in Conversation<O, P, S>::replan_control in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:670:9: replace Conversation<O, P, S>::settle_controls with () in 11s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:671:37: replace && with || in Conversation<O, P, S>::settle_controls in 11s build + 11s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:671:24: replace && with || in Conversation<O, P, S>::settle_controls in 5s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:671:16: delete ! in Conversation<O, P, S>::settle_controls in 5s build + 11s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:682:17: replace && with || in Conversation<O, P, S>::settle_controls in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:681:17: replace && with || in Conversation<O, P, S>::settle_controls in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:680:24: replace || with && in Conversation<O, P, S>::settle_controls in 5s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:694:21: replace || with && in Conversation<O, P, S>::settle_controls in 5s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:693:21: replace || with && in Conversation<O, P, S>::settle_controls in 5s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:692:17: delete ! in Conversation<O, P, S>::settle_controls in 5s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:702:9: replace Conversation<O, P, S>::plan_key_change -> Result<u16, SourceError> with Ok(0) in 10s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:702:9: replace Conversation<O, P, S>::plan_key_change -> Result<u16, SourceError> with Ok(1) in 5s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:762:9: replace Conversation<O, P, S>::raw_app_payloads_kat with () in 10s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:769:9: replace Conversation<O, P, S>::set_peer_identity with () in 8s build + 29s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:824:9: replace Conversation<O, P, S>::restart_from -> Result<Self, SourceError> with Ok(Default::default()) in 2s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:882:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 0 in 9s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:882:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 1 in 5s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:908:30: delete ! in Conversation<O, P, S>::switch_send_queue in 9s build + 15s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1065:9: replace Conversation<O, P, S>::plan_message with () in 9s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1117:9: replace Conversation<O, P, S>::plan_receipt with () in 22s build + 19s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1269:9: replace Conversation<O, P, S>::prepare_overlap -> Result<PreparedCell, SourceError> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1285:9: replace Conversation<O, P, S>::prepare -> Result<PreparedCell, SourceError> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1137:9: replace Conversation<O, P, S>::seal -> Result<Cell, SourceError> with Ok(Default::default()) in 192s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1189:9: replace Conversation<O, P, S>::restore with () in 201s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1328:31: delete ! in Conversation<O, P, S>::prepare in 7s build + 3s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1352:30: replace && with || in Conversation<O, P, S>::prepare in 11s build + 12s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1315:31: replace && with || in Conversation<O, P, S>::prepare in 25s build + 16s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1408:13: replace && with || in Conversation<O, P, S>::on_relayed in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1407:13: replace && with || in Conversation<O, P, S>::on_relayed in 2s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1365:9: replace Conversation<O, P, S>::hold_planned_real with () in 12s build + 18s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1392:9: replace Conversation<O, P, S>::on_relayed with () in 15s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1408:26: replace == with != in Conversation<O, P, S>::on_relayed in 6s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1411:26: replace >= with < in Conversation<O, P, S>::on_relayed in 13s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1434:9: replace Conversation<O, P, S>::on_lost with () in 14s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1459:9: replace Conversation<O, P, S>::on_deliver -> Result<(), SourceError> with Ok(()) in 20s build + 6s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1573:9: replace Conversation<O, P, S>::fresh_messages -> Vec<DeliveredMessage<'d>> with vec![Default::default()] in 3s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1573:9: replace Conversation<O, P, S>::fresh_messages -> Vec<DeliveredMessage<'d>> with vec![] in 16s build + 11s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1576:45: replace || with && in Conversation<O, P, S>::fresh_messages in 12s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1574:13: delete match arm Delivery::Messages(messages) in Conversation<O, P, S>::fresh_messages in 18s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1576:29: delete ! in Conversation<O, P, S>::fresh_messages in 6s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1577:29: delete ! in Conversation<O, P, S>::fresh_messages in 11s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1593:13: delete match arm Delivery::Messages(messages) in Conversation<O, P, S>::apply_delivery in 9s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1592:9: replace Conversation<O, P, S>::apply_delivery with () in 12s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1634:13: delete match arm Delivery::Control(body) in Conversation<O, P, S>::apply_delivery in 12s build + 4s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1624:13: delete match arm Delivery::KeyChange(iks) in Conversation<O, P, S>::apply_delivery in 11s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1596:41: replace || with && in Conversation<O, P, S>::apply_delivery in 7s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1597:25: replace && with || in Conversation<O, P, S>::apply_delivery in 9s build + 15s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1596:25: delete ! in Conversation<O, P, S>::apply_delivery in 12s build + 11s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1640:53: replace match guard body.arg.is_empty() with false in Conversation<O, P, S>::apply_delivery in 7s build + 14s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::new())) in 2s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::from_iter([vec![]]))) in 2s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1640:53: replace match guard body.arg.is_empty() with true in Conversation<O, P, S>::apply_delivery in 7s build + 21s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(None) in 11s build + 23s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::from_iter([vec![0]]))) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::new(vec![]))) in 11s build + 15s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::from(vec![]))) in 11s build + 15s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::from_iter([vec![1]]))) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::new(vec![0]))) in 8s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::from(vec![0]))) in 7s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::new(vec![1]))) in 7s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1698:5: replace replaced_identity -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> with Ok(Some(Zeroizing::from(vec![1]))) in 8s build + 19s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1749:5: replace effects -> Effects with Default::default() in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1750:9: delete match arm Delivery::Control(body) in effects in 10s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1751:44: replace match guard body.arg.is_empty() with true in effects in 10s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1699:9: delete match arm (Delivery::KeyChange(_), Some(cur)) in replaced_identity in 10s build + 27s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1751:44: replace match guard body.arg.is_empty() with false in effects in 10s build + 15s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1752:49: replace match guard body.arg.is_empty() with true in effects in 9s build + 18s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1752:49: replace match guard body.arg.is_empty() with false in effects in 9s build + 10s test
+121 mutants tested in 31m: 2 missed, 96 caught, 23 unviable
+exit status: 2
+
+== run proto
+$ timeout 1800 cargo mutants --no-shuffle -j 3 --output target/m7-b4f-mutants-proto --features kat --caught --unviable --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \\w+Error>::fmt' --file crates/secmp-proto/src/tr/content.rs --in-diff target/m7-b4f-mutants-proto.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+Found 6 mutants to test
+unviable crates/secmp-proto/src/tr/content.rs:202:5: replace key_change -> Delivery with Default::default() in 0s build
+caught   crates/secmp-proto/src/tr/content.rs:206:9: replace && with || in key_change in 3s build + 0s test
+caught   crates/secmp-proto/src/tr/content.rs:205:23: replace == with != in key_change in 3s build + 0s test
+unviable crates/secmp-proto/src/tr/content.rs:249:9: replace Inbox::receive -> Delivery with Default::default() in 0s build
+unviable crates/secmp-proto/src/tr/content.rs:264:9: replace Inbox::receive_known -> Delivery with Default::default() in 0s build
+unviable crates/secmp-proto/src/tr/content.rs:290:9: replace Inbox::fragment -> Delivery with Default::default() in 0s build
+6 mutants tested in 20m: 2 caught, 4 unviable
+exit status: 0
+
+== run store
+$ timeout 900 cargo mutants --no-shuffle -j 3 --output target/m7-b4f-mutants-store --features kat --caught --unviable --package secmp-store --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \\w+Error>::fmt' --in-diff target/m7-b4f-mutants-store.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+Found 12 mutants to test
+caught   crates/secmp-store/src/sessions.rs:137:5: replace put_previous_identity -> Result<()> with Ok(()) in 0s build + 2s test
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(None) in 0s build + 3s test
+unviable crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::new())) in 0s build
+unviable crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::from_iter([vec![]]))) in 0s build
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::new(vec![]))) in 0s build + 17s test
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::from(vec![]))) in 2s build + 10s test
+unviable crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::from_iter([vec![0]]))) in 0s build
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::new(vec![0]))) in 0s build + 11s test
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::from(vec![0]))) in 0s build + 2s test
+unviable crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::from_iter([vec![1]]))) in 0s build
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::new(vec![1]))) in 0s build + 4s test
+caught   crates/secmp-store/src/sessions.rs:403:9: replace Store::previous_identity -> Result<Option<Zeroizing<Vec<u8>>>> with Ok(Some(Zeroizing::from(vec![1]))) in 0s build + 12s test
+ERROR interrupted
+ERROR interrupted
+Error: interrupted
+exit status: 124
+
+summary:
+  core:  121 mutants, 96 caught, 2 missed, 23 unviable, 0 timeouts (31 min)
+  proto:   6 mutants,  2 caught, 0 missed,  4 unviable (20 min, of which the baseline build/test most)
+  store:  12 mutants,  8 caught, 0 missed,  4 unviable; every one of the 12 has its outcome line above; the run was then
+          interrupted by the dictated `timeout 900` (exit 124) before cargo-mutants printed its summary line.
+  rate core: 96 / (96 + 2) = 98 %.
+
+missed -> killers (commit f51d603 `test(core): killers for the B-4f mutants`), each checked by applying the mutant by hand:
+  actor.rs:1314:27 delete ! in prepare (`sendable`): sessions::actor::tests::held_control_cell_lets_a_message_through
+    -> panicked at actor.rs:2898:9 "the held control cell does not take the slot" left: [] right: [[7; 16]]
+  actor.rs:1438:16 delete ! in on_lost: sessions::actor::tests::lost_queue_replans_each_control_content_once
+    -> panicked at actor.rs:2932:9 "one re-plan per content on a lost queue" left: 3 right: 2
+
+new accepted rows: none. re-pinned (cargo mutants --list --features kat --package secmp-client-core -f crates/secmp-client-core/src/hub.rs):
+  docs/mutants-accepted.md hub.rs:483:30 -> hub.rs:497:30 (`replace match guard through >= id with true in Hub<C, S>::deliver_invitation`);
+  no other row of docs/mutants-accepted.md names a file B-4f touched.

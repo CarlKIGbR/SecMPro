@@ -25,6 +25,12 @@ criteria = "safe-to-deploy"
 version = "0.39.0"
 notes = "Read in full every module compiled under the unified features (default/cache, time, bundled, bundled-sqlcipher[-vendored-openssl], modern_sqlite): lib, inner_connection, raw_statement, statement, row, params, bind, column, error, transaction, pragma, config, busy, cache, version, auto_extension, types/{mod,from_sql,to_sql,value,value_ref,time}, util/*. 96 unsafe sites (FFI, SQLite-owned CStr/slices, 1 fn-ptr transmute, Send/Sync impls) judged sound; TRANSIENT binds, drop order and error mapping OK. No build.rs, net, process or fs beyond sqlite3_open_v2. Notes: pragma_update copies values (PRAGMA key) into an un-zeroized pragma::Sql String (secmp-store therefore builds the key statement itself and runs it via execute_batch, A-3b); blob values and SqlInputError put key/SQL text into error strings (secmp-store never passes the key as a blob and never formats rusqlite errors on the key path); time.rs:79 can panic on short TEXT. libsqlite3-sys/SQLCipher C not covered (tracked exemption). Audit: docs/reviews/M07-evidence/vet-rusqlite-0.39.0-audit.md. Reviewed at every release and at every bump."
 
+[[audits.rustix]]
+who = "Claude Sonnet 5.5 (implementer); delta read in full by the reviewer's verifier (Claude Opus 5.5)"
+criteria = "safe-to-deploy"
+delta = "1.1.5 -> 1.1.6"
+notes = "RUSTSEC-2026-0486 fix: getxattr/lgetxattr/fgetxattr/listxattr/llistxattr/flistxattr no longer mark bytes initialized for a zero-length buffer; new *_query size functions. Delta (cargo vet diff, 1807 lines, 28 files, +599/-162) read in full by the reviewer's verifier (DIAG-M7-RUSTSEC-2026-0486, 2026-11-11): also crate-private Padding<T> (MaybeUninit) for reserved struct fields, recvmsg ancillary lengths clamped to the buffer, IPV6_MULTICAST_HOPS on IPPROTO_IPV6, *32 uid/gid syscalls on 32-bit x86/arm/sparc, ST_* values for StatVfsMountFlags, cfg fixes (FreeBSD, Android, Apple); bitflags requirement 2.4.0 -> 2.9.2. build.rs unchanged, no new dependency, no feature added, new unsafe only in the xattr wrappers and the 32-bit syscall branches. Only dependent tempfile 3.27.0 (arti-client) calls no xattr function. Ratified by the reviewer under the owner's delegation of 2026-10-29 (Q136). Diff: docs/reviews/M07-evidence/vet-deltas/rustix-1.1.5-1.1.6.diff."
+
 [[audits.rustls]]
 who = "Christopher Carl (owner), delta audit by reviewer Fable"
 criteria = "safe-to-deploy"

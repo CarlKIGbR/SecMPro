@@ -453,6 +453,8 @@ A-4 (`modell=claude-opus-5-5`): no `Cargo.toml` dependency change other than §6
 dependencies of `secmp-fuzz`); `Cargo.lock` unchanged; `git diff bf55099..HEAD -- vectors/` empty (0 lines). G7-00:
 `COOLDOWN_EXCEPTIONS` empty; the cooldown gate passes (`ctutils` 0.4.4 is 7 days old on 2026-10-30).
 
+ADV1 (Q229): `rustix` 1.1.5 → 1.1.6, `git diff --numstat` 2/2 in `Cargo.lock` and `fuzz/Cargo.lock` (version + checksum only), delta audit `1.1.5 -> 1.1.6` (`vet-deltas/rustix-1.1.5-1.1.6.diff`), published 2026-10-27 (15 days); no other package moved.
+
 ## 7. Open risks and known limitations
 
 **Upstream advisories (ADR-055 item 7).** SQLite 3.50.4 (CVE-2026-11822/-11824, fixed 3.53.2; CVE-2025-70873 zipfile, fixed 3.53.0), SQLCipher 4.10.0 (defensive-mode bypass in `sqlcipher_export`, fixed 4.15.0, Low), OpenSSL 3.6.3 (fixed in 3.6.4 and 3.6.5; CVE-2026-84782 DTLS High) — bundled by `libsqlite3-sys` 0.37.0 / `openssl-src` 300.6.1+3.6.3, which follow Arti's `links = "sqlite3"`; exposure as listed in the ADR (no attacker SQL, FTS5/zipfile unused, OpenSSL only through SQLCipher); mitigation row ST-20 in A-3.
@@ -612,6 +614,8 @@ in-memory `RouteUpdate` of `established`'s reply (id 0) and B are both supersede
 re-dictated: rows 2, one `ResetRequested`, one `Routes` with `sid == [4; 16]`), or (B) a lost queue re-sends every `Routes` entry
 (then `replan_control` needs a "no supersession" path for `on_lost`, and SE-37 stays as it is)? Steps 5 (rest)–10 not done; see §B-4f. **Resolved (WEISUNG M7-B-4f2, 2026-11-11): Q223 = (A), Q224
 Option R; steps 5–10 done in the continuation (§B-4f).**
+
+**Blocked — STOP (WEISUNG M7-B-4f §5 "any gate red that the step did not expect"; step 10 ci-fast, RUSTSEC-2026-0486).** See §B-4f.5: `ci-fast-b4f-10-4b95e6a.txt` red in `deny`/`audit` only (rustix 1.1.5 via tempfile ← arti-client); (A) lock bump in both lock files or (B) ADR-051 amendment. **Resolved by ADV1 (WEISUNG M7-ADV1, Q229, ADR-051 Am. 9): rustix 1.1.6 in both lockfiles (version + checksum only), delta audit, `deny`/`audit` green.**
 
 **Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).
 
@@ -1612,14 +1616,14 @@ Anchors re-found (old @aac2242 → `4251a0b`): `sessions/actor.rs` `Owner` `:134
 
 ### §B-4f.5 Blocked
 
-The STOP at step 5 (SE-28) is resolved by WEISUNG M7-B-4f2 (Q223 = (A), Q224 Option R). 
+The STOP at step 5 (SE-28) is resolved by WEISUNG M7-B-4f2 (Q223 = (A), Q224 Option R). The RUSTSEC-2026-0486 STOP below is resolved by ADV1 (WEISUNG M7-ADV1, Q229, ADR-051 Am. 9).
 **STOP (WEISUNG M7-B-4f §5 "any gate red that the step did not expect"; CLAUDE.md §6 "an open RustSec advisory").** The ci-fast of the
 docs commit `4b95e6a` (`ci-fast-b4f-10-4b95e6a.txt`) is red in `deny` and `audit` only: RUSTSEC-2026-0486 "xattr functions mark
-unwritten bytes as initialized when given a zero-length buffer" (unsound), `rustix 1.1.5` (`Cargo.lock:283`), solution "Upgrade to
+unwritten bytes as initialized when given a zero-length buffer" (unsound), `rustix 1.1.5` (`Cargo.lock:3406`; also `fuzz/Cargo.lock:3359`), solution "Upgrade to
 >=1.1.6"; `cargo tree -i rustix@1.1.5 -e normal`: `rustix` ← `tempfile 3.27.0` ← `arti-client 0.46.0`. The advisory reached the
 local database after the final ci-fast (`2225414`, PASS) and ci-full (`2225414`, PASS, `audit` PASS at 04:20 UTC); no B-4f commit
 touches `Cargo.toml`, `Cargo.lock` or `fuzz/Cargo.lock`. Not fixed here (a lock bump or an ignore needs an ADR; WEISUNG M7-B-4f §0
-forbids lock movement). Every other ci-fast step of `4b95e6a` passed. Question: (A) `cargo update -p rustix --precise 1.1.6` (if ≥ 7
+forbids lock movement). Every other ci-fast step of `4b95e6a` passed. Question: (A) `cargo update -p rustix --precise 1.1.6` in the workspace and in `fuzz/` (if ≥ 7
 days old, `cargo vet` record) or (B) an ADR-051 amendment ignoring RUSTSEC-2026-0486 with a closure check of the xattr functions.
 
 ### Pre-push fix-ups (PP) and B-4e2/CI3 fix-ups (L2–L5)
@@ -1640,3 +1644,21 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 - **Evidence.** `docs/reviews/M07-evidence/vec1-red-first.txt`, `ci-fast-vec1-ed453c2.txt`.
 - **D-B68.** The Rust side of `store` is the test-only module `vector_gen` (feature `kat`), not an example: `secmp-store` has no `serde_json` and its constructions are `pub(crate)`; precedent `secmp-client-core` `testutil`. ST-10 is `kat`-gated (`VectorStream`).
 - **Implementation notes.** `xtask` `generate` kept under 100 lines by `generate_store()`; `document_of` returns `J` (clippy `unnecessary_wraps`), not `Res<J>`.
+
+## ADV1 (WEISUNG M7-ADV1; RUSTSEC-2026-0486; modell=claude-sonnet-5-5)
+
+- **Red-first.** `cargo xtask step --strict audit` FAIL (exit 1, "1 denied warning found"): `Crate: rustix`, `Version: 1.1.5`, `ID: RUSTSEC-2026-0486`, URL `https://rustsec.org/advisories/RUSTSEC-2026-0486`. No second advisory.
+- **Lock (step 2).** `git diff --numstat`: `2 2 Cargo.lock`, `2 2 fuzz/Cargo.lock` (version 1.1.5 → 1.1.6, checksum 891efaba… → e5e76742…, per file). sha256 `Cargo.lock` `19811c71681c48da2c58da179d586c9cb9ec568af850b182d04c0597ffd873ac`, `fuzz/Cargo.lock` `70d624e3823219945c0d2287bd5304816000de1ddf59e26d108e4789c3df45c5` (both as expected). `cargo metadata --locked` (workspace and `fuzz/`), `cargo tree --locked -i rustix@1.1.6` (rustix 1.1.6 ← tempfile 3.27.0 ← arti-client 0.46.0, both lockfiles) and `cargo check --workspace --locked --all-targets` ok; numstat unchanged afterwards.
+- **Vet delta (step 3).** `docs/reviews/M07-evidence/vet-deltas/rustix-1.1.5-1.1.6.diff`: 1807 lines, 28 `diff --git` headers, sha256 `fb1e5e3193cd368f10bb6cbd1954107e28a30962a569165c9ac7e743077cc6f1` (same as the planner's copy).
+- **Vet record (step 4).** `cargo vet certify --locked rustix 1.1.5 1.1.6 --criteria safe-to-deploy`: `supply-chain/audits.toml` `6 0`, only change in `supply-chain/`; `cargo vet --locked`: Vetting Succeeded (241 fully audited, 3 partially audited, 321 exempted). `config.toml` and `imports.lock` unchanged.
+- **Tests (step 9).** xtask pins (`cooldown_covers_m7_lock`, `cooldown_covers_m6_lock`, `audit_ignores_unchanged`, `audit_ignores_match_deny_toml`, `vet_records_for_m7_closure`): 5 passed; `docs::`: 8/8 passed.
+
+| gate | verdict | note |
+|---|---|---|
+| deny | PASS | advisories, bans, licenses, sources ok |
+| vet | PASS | secmp-crypto/secmp-proto closure 60 external crates, 0 exempted; tracked exemptions elsewhere 328 |
+| audit | PASS | no advisories; ignored with an ADR (unchanged): RUSTSEC-2026-0173, -2023-0071, -2024-0436, -2025-0141, -2026-0387, -2026-0459 |
+| cooldown | PASS | 567 registry packages; youngest rustix 1.1.6, 15 days |
+| sbom | PASS | 12 CycloneDX SBOMs; `cargo audit bin` on relay, cli, ui |
+
+- **D-ADV1 (lock edit).** The lockfiles were edited with the dictated `sed` (rustix version + checksum) instead of `cargo update -p rustix --precise 1.1.6`, which also re-points seven `windows-sys` edges (Q229); `cargo metadata/tree --locked` and `cargo check --workspace --locked --all-targets` accept the edit without rewriting it; `cargo vet certify` ran with `--locked` (without it, cargo-vet refreshes `imports.lock`).

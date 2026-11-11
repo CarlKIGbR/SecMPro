@@ -31,9 +31,8 @@ SUITES = {**cases.SUITES, encodings_cases.SUITE: encodings_cases.encodings_cases
 BLOCKED_BY: dict[str, list[str]] = {}
 
 
-# `all` writes into vectors/, where an unregistered file fails ci-fast (xtask vectors); `store` is generated
-# explicitly (--out-dir) until the reviewer's VEC1 registers it, and then leaves this set.
-NOT_IN_ALL = {"store"}
+# Suites that `all` skips. `store` left the set with WEISUNG REF-M7-store3 (registered by WEISUNG M7-VEC1).
+NOT_IN_ALL: set[str] = set()
 
 
 def suite_bytes(suite: str) -> bytes:

@@ -23,7 +23,7 @@ def by_op(op):
 def test_header_and_validation():
     vectorfile.validate_document(DOC)
     assert (DOC["schema"], DOC["suite"], DOC["spec"], DOC["generator"]) == (8, "store", "SecMP/1 rev 2.7", "ref-python")
-    assert [c["id"] for c in DOC["cases"]] == [f"store-{i:04d}" for i in range(1, 20)]
+    assert [c["id"] for c in DOC["cases"]] == [f"store-{i:04d}" for i in range(1, 27)]
 
 
 def test_keys_item_3_4():
@@ -97,7 +97,7 @@ REJECTS = [c for c in DOC["cases"] if c.get("expect") == "reject"]
 
 def test_reject_count_and_shape():
     ops = [c["op"] for c in REJECTS]
-    assert (ops.count("wrap-reject"), ops.count("seal-reject"), ops.count("backup-reject")) == (4, 4, 3)
+    assert (ops.count("wrap-reject"), ops.count("seal-reject"), ops.count("backup-reject")) == (4, 5, 9)
     assert all("outputs" not in c for c in REJECTS)
 
 

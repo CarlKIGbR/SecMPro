@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The `store` case table (SCHEMA-4.12-store.md; Weisung REF-M7-store): the ADR-053 constructions.
 
-Cases in file order: keys (1), wrap + rejects (2–7), seal + rejects (8–15), backup + rejects (16–19).
+Cases in file order: keys (1), wrap + rejects (2–7), seal + rejects (8–15), backup + rejects (16–19), label isolation (20), Amendment 2 and 3 rejects (21–26).
 Every random-looking input of a positive case is drawn from its own stream (SCHEMA §2, suite "store",
 the case index) in the order of the *_STREAM lists; derived values follow. A reject case draws nothing:
 it restates the inputs of the case it manipulates (`from`) so that it is self-contained. The run checks
@@ -10,6 +10,7 @@ itself while it generates: each output is recomputed by the opening side, and ea
 """
 
 from . import labels, store
+from .identity import iks_public_from_seeds
 from .cases import TableMismatch
 from .errors import Reject
 from .vectorfile import Case, CaseStream, case_id, drop_last
@@ -27,13 +28,13 @@ KEYS_STREAM = [("mk", 32)]
 WRAP_STREAM = [("salt", 16), ("n", 24), ("mk", 32)]
 BACKUP_STREAM = [("salt", 16), ("n_prime", 24), ("mk_bk", 32), ("n", 24), ("identity_secrets", 96)]
 
-# (table, column, row-key parts (int | bytes), record length). Column names are case inputs, not schema claims.
+# (table, column, row-key parts (int | bytes), record length). Sealed columns named by the reviewer (R1).
 # The byte-string part of (b) is drawn from the stream (16 B); marked by None here.
 SEALS = [
     ("contacts", "routes", [7], 48),
-    ("invitations", "payload", [None], 33),
+    ("invitations", "record", [None], 33),
     ("prekeys", "secret", [1, 42], 64),
-    ("sessions", "state", [3, 5, 0], 80),
+    ("sessions", "data", [3, 5, 0], 80),
 ]
 
 
@@ -113,7 +114,7 @@ def store_cases() -> list[Case]:
     table, column, parts, k_t, label, rec = sealed[8]
     k_other = store.table_key(mk_keys, "sessions")
     attempts = [
-        ("column=status", k_t, label, "status", parts, rec),
+        ("column=queues", k_t, label, "queues", parts, rec),
         ("row=8", k_t, label, column, [8], rec),
         ("table=sessions", k_other, store.table_label("sessions"), column, parts, rec),
     ]
@@ -160,5 +161,36 @@ def store_cases() -> list[Case]:
     for i, (manip, p, f) in enumerate(rejects, start=17):
         _wrong_ok(store.open_backup, p, f)
         cases.append(Case(i, "backup-reject", {"passphrase": p, "file": f}, None,
+                          {"from": case_id(SUITE, 16), "manipulation": manip, "expect": "reject"}))
+    # Reviewer rulings R2, R3, R6 (WEISUNG REF-M7-store3), after the backup cases
+    table, column, parts, k_t, label, rec = sealed[8]
+    lab = store.table_label("sessions")
+    _wrong_ok(store.open_record, k_t, lab, column, parts, rec)
+    cases.append(Case(20, "seal-reject", {"k_t": k_t, "label": lab.decode("ascii"), "column": column,
+                                          "row_key_parts": _parts_input(parts), "rec": rec}, None,
+                      {"from": case_id(SUITE, 8), "manipulation": "label=sessions", "expect": "reject"}))
+    iks = iks_public_from_seeds(bytes([1]) * 32, bytes([2]) * 32, bytes([3]) * 32)
+    one, ret = (1).to_bytes(4, "big"), b"\x0eretention_days\x00\x04" + (30).to_bytes(4, "big")
+
+    def contact(profile=b"\x04peer\x00"):
+        return iks + b"\x01" + profile + b"\x03Bob"
+
+    def message(index=0, kind=b"\x01"):
+        return (index.to_bytes(4, "big") + b"\x01" + (1_800_000_000_000).to_bytes(8, "big") + bytes([7]) * 16
+                + kind + bytes(4) + b"\x00\x02hi")
+
+    body_rejects = [  # (i, manipulation, contacts, settings, messages); identity as in store-0016
+        (21, "settings-key=mode", bytes(4), b"\x00\x01\x04mode\x00\x04\x00\x00\x00\x01", bytes(4)),
+        (22, "retention_days-len=3", bytes(4), b"\x00\x01\x0eretention_days\x00\x03\x00\x00\x1e", bytes(4)),
+        (23, "settings-key-twice", bytes(4), b"\x00\x02" + ret + ret, bytes(4)),
+        (24, "contact_index=1", one + contact(), b"\x00\x00", one + message(index=1)),
+        (25, "profile-avatar-flag=2", one + contact(b"\x04peer\x02"), b"\x00\x00", bytes(4)),
+        (26, "view-once", one + contact(), b"\x00\x00", one + message(kind=b"\x03")),
+    ]
+    for i, manip, contacts, settings, messages in body_rejects:
+        secs = (identity, contacts, settings, messages)
+        f = store.backup_file(store.backup_header(d["salt"], bwrap, [len(x) for x in secs]), d["n"], k_bk, b"".join(secs))
+        _wrong_ok(store.open_backup, PASS_BK, f)
+        cases.append(Case(i, "backup-reject", {"passphrase": PASS_BK, "file": f}, None,
                           {"from": case_id(SUITE, 16), "manipulation": manip, "expect": "reject"}))
     return cases

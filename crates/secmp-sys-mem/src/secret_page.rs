@@ -8,7 +8,7 @@
 //!
 //! | Platform | Data page |
 //! |---|---|
-//! | Linux | `memfd_secret(2)` (removed from the kernel direct map, implicitly locked and excluded from core dumps), not inherited across `fork` (`MADV_DONTFORK`); where `memfd_secret` is unavailable, `mlock` + `MADV_DONTDUMP` + `MADV_WIPEONFORK` |
+//! | Linux | `memfd_secret(2)` (removed from the kernel direct map, unevictable through its secretmem address space, refused to the kernel's `get_user_pages` and excluded from core dumps; docs/04 CS-2.2), not inherited across `fork` (`MADV_DONTFORK`); where `memfd_secret` is unavailable, `mlock` + `MADV_DONTDUMP` + `MADV_WIPEONFORK` |
 //! | Windows | `VirtualLock` (the working set is enlarged when the lock quota is exhausted) |
 //! | macOS (development host) | `mlock` |
 //! | Miri, Kani | a heap allocation (verification backends: neither tool executes the operating-system calls) |
@@ -244,13 +244,16 @@ mod tests {
     }
 
     /// Operating-system view of the pages: the data page is accessible, both guard pages are not, and the data
-    /// page is locked (Linux: `VmFlags` in `/proc/self/smaps`). Not compiled under Miri or Kani, which have no OS.
+    /// page is protected as its backend promises (Linux: `VmFlags` in `/proc/self/smaps`, and for `memfd_secret` the
+    /// kernel's refusal to read it through `/proc/self/mem`; ADR-059). Not compiled under Miri or Kani, which have
+    /// no OS.
     #[cfg(not(any(miri, kani)))]
     #[test]
     fn guard_pages_and_locking_as_seen_by_the_os() -> Result<(), Error> {
         let page = os::page_size()?;
         for allow_secretmem in [true, false] {
-            let p = SecretPage::<32>::with_options(allow_secretmem)?;
+            let mut p = SecretPage::<32>::with_options(allow_secretmem)?;
+            p.get_mut().fill(0xa5);
             let data = p.map.data();
             assert!(os::probe_readable(data), "data page must be readable");
             assert!(

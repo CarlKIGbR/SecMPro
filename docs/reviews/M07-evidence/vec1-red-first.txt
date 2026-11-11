@@ -1,0 +1,44 @@
+head 0c19ab2d136ea6c81924631aceb1773d70cc0e3f
+== (a) xtask hex_validator_accepts_the_store_column, before the TEXT_FIELDS edit
+test:  cargo nextest run --locked -p xtask -E 'test(=vectors::tests::hex_validator_accepts_the_store_column)'
+red:   panicked at xtask/src/vectors.rs:511:9: ["store-0008: inputs.column is not lowercase hex"]
+cause: `column` (an ASCII string, schema 8) was not in TEXT_FIELDS, so hex_violations read "routes" as a byte string.
+== (b) secmp-store vector_gen::rust_store_vectors_equal_the_reference_file, seal.rs ad = [label, column, row_key] (no `&[len]`)
+test:  cargo nextest run --locked -p secmp-store --features kat --lib -E 'test(=vector_gen::rust_store_vectors_equal_the_reference_file)'
+red:   panicked at crates/secmp-store/src/vector_gen.rs: store-0008 differs from vectors/ref/store.json
+cause: the seal AD without col_len u8 gives another `ad`/`rec`; the cross-check sees it at the first seal case. seal.rs restored (git diff -- crates/secmp-store/src/seal.rs is empty); the test is green again (PASS 3.6 s).
+== (c) ST-10 keys::tests::table_keys_match_vectors, first hex digit after "k_db":" in vectors/store.json flipped (python3 -B target/fable/vec1-scripts/flip.py '"k_db":"')
+test:  cargo nextest run --locked -p secmp-store --features kat --lib -E 'test(=keys::tests::table_keys_match_vectors)'
+red:   FAIL [0.007s] store-0001 is not in vectors/store.json: {"id":"store-0001","inputs":{"mk":"c96031...
+cause: the new byte-exact assertion; the frozen file no longer holds the case the product's keys produce. git checkout -- vectors/store.json afterwards.
+== (d) BK-04 backup::tests::wrapping_and_header_kat, first hex digit after "kek_bk":" flipped
+test:  cargo nextest run --locked -p secmp-store --features kat --lib -E 'test(=backup::tests::wrapping_and_header_kat)'
+red:   FAIL [6.010s] store-0016 is not in vectors/store.json
+cause: the new byte-exact loop over backup_cases(true); store-0016 carries kek_bk. git checkout -- vectors/store.json afterwards.
+== ref/ (REF-M7-store3)
+head c652db419fbcf773ebcf3a0e422268f55d4b1b9a
+== L7 red-first (old _check_sections)
+>               raise ValueError("generator parses only empty sections")
+E               ValueError: generator parses only empty sections
+
+secmp_ref/store.py:166: ValueError
+=========================== short test summary info ============================
+FAILED tests/test_store.py::test_l7_full_body_is_accepted - ValueError: gener...
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[am3-contact_index-without-contacts]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[am3-contact_index=1]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[am3-iks-ver=02] - ...
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[am3-profile-avatar-flag=2]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[am3-settings-key-twice]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[contacts-truncated]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[direction=2] - Val...
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[kind=7] - ValueErr...
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[local-name-65] - V...
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[local-name-invalid-utf8]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[retention_days-len=3]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[settings-key=mode]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[settings-trailing-byte]
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[verified=2] - Valu...
+FAILED tests/test_store.py::test_l7_malformed_body_rejects[view-once] - Value...
+16 failed, 974 deselected in 2.88s
+== L7 after
+16 passed, 974 deselected in 2.72s

@@ -2873,6 +2873,66 @@ mod tests {
         Ok(())
     }
 
+    /// B-4f killer (`prepare`, `actor.rs:1314:27`; Q225): a control cell held for its row does not hold the slot — a
+    /// queued message is planned and sealed in it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn held_control_cell_lets_a_message_through() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = pair(script(0, 2), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        a.outbox_mut().enqueue(text_message(7, 10), 0);
+        let p2 = a.prepare(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(
+            ids,
+            [[7; 16]],
+            "the held control cell does not take the slot"
+        );
+        assert_eq!(resets(b), 0, "and is not sealed");
+        Ok(())
+    }
+
+    /// B-4f killer (`on_lost`, `actor.rs:1438:16`; Q222 (3)): a lost queue plans each control content once — a planned cell
+    /// is not restored on its own before the re-plan of every content (one re-write attempt of a missing row, not two).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn lost_queue_replans_each_control_content_once() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, _convs) = pair(script(0, 9), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        let requeued = |a: &super::Conversation<_, Script, _>| {
+            a.persist()
+                .log
+                .iter()
+                .filter(|(k, _)| *k == "requeued")
+                .count()
+        };
+        assert_eq!(requeued(&a), 1, "the eviction's re-write (fails)");
+        a.on_lost();
+        assert_eq!(requeued(&a), 2, "one re-plan per content on a lost queue");
+        Ok(())
+    }
+
     /// SE-46 (Q224, Option R): adding a newer `RouteUpdate` deletes the older one's row at once; a failed delete is
     /// retried at the next preparation and only until it succeeds; the outcomes of the older one's cells plan nothing,
     /// and only the newer one reaches the peer.

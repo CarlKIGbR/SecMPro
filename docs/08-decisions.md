@@ -1134,6 +1134,20 @@ reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
 
 ---
 
+### ADR-059 — OS-level evidence for the `memfd_secret` page without the `lo` flag
+
+**Status.** Accepted (Reviewer, Owner-Delegation 30.09., Engineering: evidence rule) — 2026-11-11. Q232, WEISUNG M7-MEM1.
+
+**Context.** `secret_page::tests::guard_pages_and_locking_as_seen_by_the_os` (`secmp-sys-mem`) required the VmFlag `lo` (`VM_LOCKED`) for the `memfd_secret` data page. The PR run 43033287006 (job `linux-fast`, runner image ubuntu-26.04, Version 20261101.186.1) failed with `MemfdSecret: VmFlags " rd wr sh mr mw ms dc dd sd " lacks lo`; the previous run on ubuntu-24.04 (Version 20261101.360.1) passed; `crates/secmp-sys-mem` is unchanged between the two heads. Kernel facts per reviewer diagnosis 2026-11-11: upstream commit 97d34aa65c29 "mm/secretmem: properly account locked pages" (CVE-2026-93243; mainline v7.3-rc2, stable 7.2.5 and 6.18.52, backports to 6.12.y and 6.6.y; distribution kernels through their own backports) stops marking secretmem mappings `VM_LOCKED` and charges `RLIMIT_MEMLOCK` per user at the first fault. The pages stay unevictable through the secretmem address space, out of the kernel direct map, out of core dumps (`dd`), and refused to `get_user_pages`, so `/proc/<pid>/mem` cannot read them. CS-2.2 (`docs/04`) still holds; only its observable `lo` is gone.
+
+**Decision.** (Q232) For the `MemfdSecret` backend the test requires, on every kernel: (1) a read of the data page through `/proc/self/mem` is refused (an error; the errno is not pinned, the observed error is printed only in the failure message) and returns no byte; (2) control: the same read of an ordinary page of the same process returns that page's bytes, so the refusal is evidence and not a broken probe; (3) the VMA's path in `/proc/self/smaps` is `/secretmem`; (4) its VmFlags contain `sh`, `dd` and `dc`. `lo` is neither required nor rejected for this backend. The `Mlock` fallback keeps `lo`, `dd`, `wf`; the guard-page assertions are unchanged. No `#[ignore]`, no kernel-version switch, no threshold.
+
+**Alternatives.** (a) `mlock` the secretmem mapping: the kernel refuses it on every version (`ENOMEM`, measured on 6.18.44) — not viable; `MAP_LOCKED` on its `mmap` would bring `lo` back on patched kernels as a label only, with no protection gained and a second charge of the locked-memory budget (per reviewer diagnosis) — rejected. (b) Pin the runner image to ubuntu-24.04: hides the change, and its kernels can receive the same backport — rejected. (c) Drop the assertion or `#[ignore]` the test: removes the OS-level evidence — rejected (CLAUDE.md §6).
+
+**Consequences.** Test code and three doc comments of `secmp-sys-mem` change; product code, `unsafe` and the sanctioned allows do not. The predicate is red on an `mlock` page and on a shared memfd page mapped by the `MemfdSecret` path (`docs/reviews/M07-evidence/mem1-red-first.txt`); a memfd page with `sh`, `dc`, `dd` and no `lo` (the patched kernel's flag set) is readable through `/proc/self/mem` (reviewer probe on 6.18.44, 2026-11-11), so the flags alone are no evidence. The first-fault SIGBUS on locked-memory exhaustion that the same kernel change introduces is OPEN-M7-B-18 (Q233). `docs/04` is unchanged.
+
+---
+
 *Template for new entries:*
 
 ### ADR-0NN — Title

@@ -1612,7 +1612,15 @@ Anchors re-found (old @aac2242 → `4251a0b`): `sessions/actor.rs` `Owner` `:134
 
 ### §B-4f.5 Blocked
 
-The STOP at step 5 (SE-28) is resolved by WEISUNG M7-B-4f2 (Q223 = (A), Q224 Option R). Blocked: none. STOP: none.
+The STOP at step 5 (SE-28) is resolved by WEISUNG M7-B-4f2 (Q223 = (A), Q224 Option R). 
+**STOP (WEISUNG M7-B-4f §5 "any gate red that the step did not expect"; CLAUDE.md §6 "an open RustSec advisory").** The ci-fast of the
+docs commit `4b95e6a` (`ci-fast-b4f-10-4b95e6a.txt`) is red in `deny` and `audit` only: RUSTSEC-2026-0486 "xattr functions mark
+unwritten bytes as initialized when given a zero-length buffer" (unsound), `rustix 1.1.5` (`Cargo.lock:283`), solution "Upgrade to
+>=1.1.6"; `cargo tree -i rustix@1.1.5 -e normal`: `rustix` ← `tempfile 3.27.0` ← `arti-client 0.46.0`. The advisory reached the
+local database after the final ci-fast (`2225414`, PASS) and ci-full (`2225414`, PASS, `audit` PASS at 04:20 UTC); no B-4f commit
+touches `Cargo.toml`, `Cargo.lock` or `fuzz/Cargo.lock`. Not fixed here (a lock bump or an ignore needs an ADR; WEISUNG M7-B-4f §0
+forbids lock movement). Every other ci-fast step of `4b95e6a` passed. Question: (A) `cargo update -p rustix --precise 1.1.6` (if ≥ 7
+days old, `cargo vet` record) or (B) an ADR-051 amendment ignoring RUSTSEC-2026-0486 with a closure check of the xattr functions.
 
 ### Pre-push fix-ups (PP) and B-4e2/CI3 fix-ups (L2–L5)
 

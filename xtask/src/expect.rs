@@ -914,10 +914,13 @@ pub(crate) const WINDOWS_SKIP_TESTS: &[(&str, &str)] = &[
 pub(crate) const MUTANT_HARNESS_TEST_PACKAGES: &[&str] =
     &["secmp-client-core", "secmp-transport", "secmp-testkit"];
 
-/// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
-/// `cargo xtask step --strict mutants --shard K/12` for K = 0…11, and the job `mutants` (`step mutants-merge`) merges
-/// their results and gives the verdict.
-pub(crate) const MUTANT_SHARDS: usize = 12;
+/// ADR-047 Amendment 1 (2), Amendment 11 (Q234): the shards of the mutation gate in CI — the matrix job `mutants-shard`
+/// of `ci.yml` (and `dispatch-mutants-shard` of `ci-dispatch.yml`) runs `cargo xtask step --strict mutants --shard K/24`
+/// for K = 0…23, and the job `mutants` (`step mutants-merge`) merges their results and gives the verdict. 24: the
+/// larger of two bounds under [`MUTANTS_STEP_TIMEOUT_SECONDS`] — the fast-host 12-shard load (PR run 43033287006,
+/// shard 4) times 2.1, and the slowest observed one (PR run 43083238010, shard 4) times 1.5, baselines included; the policy step checks both matrices and run lines against
+/// this number (`gates::mutant_shard_findings`).
+pub(crate) const MUTANT_SHARDS: usize = 24;
 
 /// ADR-047 Amendment 2 (1) (replacing the unviable cap of Amendment 1 (4), M4 review R-06): the floor per package of
 /// [`MUTANT_PACKAGES`] — at least one caught mutant, and caught at least this percentage of all the package's generated
@@ -2061,7 +2064,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("ct", &["cargo xtask step --strict ct"]),
     (
         "mutants-shard",
-        &["cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12"],
+        &["cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24"],
     ),
     ("mutants", &["cargo xtask step --strict mutants-merge"]),
     (

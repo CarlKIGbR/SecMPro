@@ -268,7 +268,7 @@ jobs:
       - name: ci-full (steps 1–14)
         run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr
 
-  # Step 8 as in ci.yml (ADR-047 Amendment 1): 8 shards, then the verdict over them.
+  # Step 8 as in ci.yml (ADR-047 Amendment 1, Amendment 11): 24 shards, then the verdict over them.
   dispatch-mutants-shard:
     if: inputs.suite == 'all' || inputs.suite == 'full'
     runs-on: ubuntu-latest
@@ -289,6 +289,18 @@ jobs:
           - 9
           - 10
           - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
+          - 20
+          - 21
+          - 22
+          - 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -313,8 +325,8 @@ jobs:
         with:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: Mutation testing, one shard of 12 (step 8, `-j 3`)
-        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12
+      - name: Mutation testing, one shard of 24 (step 8, `-j 3`)
+        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24
       - name: Upload the shard's mutants evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -341,7 +353,7 @@ jobs:
         with:
           pattern: mutants-*-${{ github.run_attempt }}
           path: target/mutants-shards
-      - name: Mutation verdict over the 12 shards (step 8)
+      - name: Mutation verdict over the 24 shards (step 8)
         run: cargo xtask step --strict mutants-merge
       - name: Upload the merged mutants evidence
         if: always()

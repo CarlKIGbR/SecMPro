@@ -4803,6 +4803,89 @@ pub(crate) fn job_budget_findings(
     out
 }
 
+/// ADR-047 Amendment 11 (Q234): the items of the block list `strategy:` → `matrix:` → `shard:` of job `job`, in order
+/// (plain scalars); `None` without such a list, for a second `shard:` key and for a flow list (`shard: [0, 1]`), so the
+/// caller reports each of them.
+fn matrix_shards(text: &str, job: &str) -> Option<Vec<String>> {
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut found: Option<Vec<String>> = None;
+    let mut list: Option<usize> = None;
+    for l in yaml_lines(text) {
+        if l.job.as_deref() != Some(job) || l.header {
+            continue;
+        }
+        if let (Some(c), Some(items)) = (list, found.as_mut()) {
+            if l.dash.is_some_and(|d| d >= c) && l.key.is_empty() {
+                items.push(l.value);
+                continue;
+            }
+            list = None;
+        }
+        let col = l.dash.unwrap_or(l.col);
+        while stack.last().is_some_and(|(c, _)| *c >= col) {
+            stack.pop();
+        }
+        if l.dash.is_some() {
+            continue;
+        }
+        let under_matrix = stack.len() == 2
+            && stack.first().is_some_and(|(_, k)| k == "strategy")
+            && stack.get(1).is_some_and(|(_, k)| k == "matrix");
+        if under_matrix && l.key == "shard" {
+            if found.is_some() || !l.value.is_empty() {
+                return None;
+            }
+            found = Some(Vec::new());
+            list = Some(l.col);
+        }
+        stack.push((l.col, l.key));
+    }
+    found
+}
+
+/// ADR-047 Amendment 11 (Q234): the shard count of the mutation gate is one number, `n` (`expect::MUTANT_SHARDS`, which
+/// the merge reads). Findings: the matrix `shard:` of `mutants-shard` in `ci.yml` or of `dispatch-mutants-shard` in
+/// `ci-dispatch.yml` is not the block list 0, 1, …, n−1 in this order, or the job's gate lines are not exactly
+/// `cargo xtask step --strict mutants --shard ${{ matrix.shard }}/n`. An accident guard like the other workflow checks.
+pub(crate) fn mutant_shard_findings(ci: &str, dispatch: &str, n: usize) -> Vec<String> {
+    let want: Vec<String> = (0..n).map(|k| k.to_string()).collect();
+    let line = format!("cargo xtask step --strict mutants --shard ${{{{ matrix.shard }}}}/{n}");
+    let mut out = Vec::new();
+    for (file, text, job) in [
+        ("ci.yml", ci, "mutants-shard"),
+        ("ci-dispatch.yml", dispatch, "dispatch-mutants-shard"),
+    ] {
+        match matrix_shards(text, job) {
+            None => out.push(format!(
+                "mutant-shards: {file} `{job}` has no block list `strategy: matrix: shard:`"
+            )),
+            Some(found) if found != want => {
+                let missing: Vec<&String> = want.iter().filter(|w| !found.contains(w)).collect();
+                let extra: Vec<&String> = found.iter().filter(|f| !want.contains(f)).collect();
+                out.push(format!(
+                    "mutant-shards: {file} `{job}`: matrix `shard:` has {} items, lacks {missing:?}, has the extra {extra:?} (0…{} in order, expect::MUTANT_SHARDS = {n})",
+                    found.len(),
+                    n.saturating_sub(1)
+                ));
+            }
+            Some(_) => {}
+        }
+        let runs: Vec<String> = yaml_jobs(text)
+            .into_iter()
+            .filter(|j| j.id == job)
+            .flat_map(|j| j.steps.into_iter().flatten())
+            .filter(|(k, v)| k == "run" && is_gate_run(v))
+            .map(|(_, v)| v)
+            .collect();
+        if runs != [line.clone()] {
+            out.push(format!(
+                "mutant-shards: {file} `{job}` runs the gates {runs:?}, not [{line:?}]"
+            ));
+        }
+    }
+    out
+}
+
 /// The job-level property `key` of job `job` of a workflow (`None`: no such job or no such property).
 #[cfg(test)]
 pub(crate) fn job_prop(text: &str, job: &str, key: &str) -> Option<String> {
@@ -5112,6 +5195,11 @@ fn workflows(root: &Path) -> Result<String> {
     if let Some((_, text)) = texts.iter().find(|(n, _)| n == expect::REQUIRED_WORKFLOW) {
         findings.extend(required_gate_findings(expect::REQUIRED_WORKFLOW, text));
     }
+    findings.extend(mutant_shard_findings(
+        text_of(expect::REQUIRED_WORKFLOW),
+        text_of(".github/workflows/ci-dispatch.yml"),
+        expect::MUTANT_SHARDS,
+    ));
     for f in &findings {
         say(&format!("  FINDING {f}"));
     }
@@ -5119,9 +5207,10 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, delegations mapped (accident guard, not tamper-proof)",
+        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, mutation shard matrix 0…{} in both workflows, delegations mapped (accident guard, not tamper-proof)",
         files.len(),
-        expect::PINNED_JOBS.join(", ")
+        expect::PINNED_JOBS.join(", "),
+        expect::MUTANT_SHARDS.saturating_sub(1)
     ))
 }
 
@@ -7047,7 +7136,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -9812,18 +9901,21 @@ mod tests {
     }
 
     /// TEST-SPEC-M5 X-02 (ADR-047 Amendment 3, OPEN-M5-12): `secmp-relay` (executor, stores, link server) is in the
-    /// 8-shard gate with the Amendment 2 floor, every shard's command line names it, and its Kani-only file is kept
+    /// sharded gate (`expect::MUTANT_SHARDS`, ADR-047 Amendment 11) with the Amendment 2 floor, every shard's command line names it, and its Kani-only file is kept
     /// out like `secmp-proto`'s; the package builds with feature `kat` like the other two.
     #[test]
     fn mutants_scope_includes_relay() -> Result<()> {
         assert!(expect::MUTANT_PACKAGES.contains(&"secmp-relay"));
         assert!(!expect::MUTANT_HARNESS_PACKAGES.contains(&"secmp-relay"));
-        assert_eq!(expect::MUTANT_SHARDS, 12);
+        assert_eq!(expect::MUTANT_SHARDS, 24);
         assert_eq!(expect::MUTANT_MIN_CAUGHT_PERCENT, 50);
         assert_eq!(expect::MUTANT_UNVIABLE_WARN_PERCENT, 35);
         assert!(expect::MUTANT_EXCLUDE_FILES.contains(&"crates/secmp-relay/src/kani_proofs.rs"));
-        for k in 0..12 {
-            let args = mutants_args(Some(MutantsShard { k, n: 12 }));
+        for k in 0..expect::MUTANT_SHARDS {
+            let args = mutants_args(Some(MutantsShard {
+                k,
+                n: expect::MUTANT_SHARDS,
+            }));
             assert!(
                 args.windows(2)
                     .any(|w| w.first().map(String::as_str) == Some("--package")
@@ -9842,6 +9934,97 @@ mod tests {
             standards.contains("`secmp-crypto`, `secmp-proto`, `secmp-relay`"),
             "docs/06 §4 Mutation names the three packages (ADR-047 Am. 3 consequence)"
         );
+        Ok(())
+    }
+
+    /// The committed `ci.yml` and `ci-dispatch.yml`, with LF line endings.
+    fn committed_ci_and_dispatch() -> Result<(String, String)> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows");
+        Ok((
+            lf(&std::fs::read_to_string(dir.join("ci.yml"))?),
+            lf(&std::fs::read_to_string(dir.join("ci-dispatch.yml"))?),
+        ))
+    }
+
+    /// ADR-047 Amendment 11 (Q234): the mutation gate runs as 24 shards, one number — the matrix of `mutants-shard`
+    /// (`ci.yml`) and of `dispatch-mutants-shard` (`ci-dispatch.yml`) is 0…23 in order, both run lines end in `/24`, and
+    /// the pinned gate line of `expect::REQUIRED_GATE_RUNS` is the same line.
+    #[test]
+    fn mutant_shard_matrix_matches_the_shard_count() -> Result<()> {
+        let (ci, dispatch) = committed_ci_and_dispatch()?;
+        let found = mutant_shard_findings(&ci, &dispatch, expect::MUTANT_SHARDS);
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(expect::MUTANT_SHARDS, 24);
+        let line = format!(
+            "cargo xtask step --strict mutants --shard ${{{{ matrix.shard }}}}/{}",
+            expect::MUTANT_SHARDS
+        );
+        let pinned = expect::REQUIRED_GATE_RUNS
+            .iter()
+            .find(|(job, _)| *job == "mutants-shard")
+            .map(|(_, lines)| lines.to_vec());
+        assert_eq!(pinned, Some(vec![line.as_str()]));
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 11 (Q234): every way in which the matrix, the run line and the count can disagree is a finding
+    /// naming the file and the job — a shard dropped, added or out of order, a flow list, a second `shard:` key, a run
+    /// line of another count in `ci-dispatch.yml` — and the old count 12 against the committed workflows gives four.
+    #[test]
+    fn mutant_shard_mismatches_are_findings() -> Result<()> {
+        let (ci, dispatch) = committed_ci_and_dispatch()?;
+        let n = expect::MUTANT_SHARDS;
+        let items: Vec<String> = (0..n).map(|k| format!("          - {k}\n")).collect();
+        let block = items.concat();
+        let full = format!("        shard:\n{block}");
+        assert_eq!(ci.matches(&full).count(), 1);
+        assert_eq!(dispatch.matches(&full).count(), 1);
+        let ci_variants = [
+            ("drop 23", ci.replacen("          - 23\n", "", 1)),
+            (
+                "add 24",
+                ci.replacen("          - 23\n", "          - 23\n          - 24\n", 1),
+            ),
+            (
+                "swap 0 and 1",
+                ci.replacen(
+                    "          - 0\n          - 1\n",
+                    "          - 1\n          - 0\n",
+                    1,
+                ),
+            ),
+            (
+                "flow list",
+                ci.replacen(&full, "        shard: [0, 1]\n", 1),
+            ),
+            (
+                "second key",
+                ci.replacen(&full, &format!("{full}        shard:\n          - 0\n"), 1),
+            ),
+        ];
+        for (label, text) in &ci_variants {
+            assert_ne!(text, &ci, "{label}: the edit applied");
+            let found = mutant_shard_findings(text, &dispatch, n);
+            assert!(
+                found.len() == 1 && found.iter().all(|f| f.contains("ci.yml `mutants-shard`")),
+                "{label}: {found:?}"
+            );
+        }
+        let other = dispatch.replacen(
+            &format!("mutants --shard ${{{{ matrix.shard }}}}/{n}"),
+            "mutants --shard ${{ matrix.shard }}/12",
+            1,
+        );
+        assert_ne!(other, dispatch);
+        let found = mutant_shard_findings(&ci, &other, n);
+        assert!(
+            found.len() == 1
+                && found
+                    .iter()
+                    .all(|f| f.contains("ci-dispatch.yml `dispatch-mutants-shard` runs the gates")),
+            "{found:?}"
+        );
+        assert_eq!(mutant_shard_findings(&ci, &dispatch, 12).len(), 4);
         Ok(())
     }
 
@@ -9887,8 +10070,8 @@ mod tests {
     }
 
     /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
-    /// `secmp-relay`, `secmp-client-core`, `secmp-transport` and (M7, ADR-047 Amendment 10, G7-13) `secmp-store` in the 8
-    /// shards with the Amendment 2 floor; the two M6 packages are mutated in the second run of every shard, tested by their
+    /// `secmp-relay`, `secmp-client-core`, `secmp-transport` and (M7, ADR-047 Amendment 10, G7-13) `secmp-store` in the
+    /// shards of `expect::MUTANT_SHARDS` (ADR-047 Amendment 11) with the Amendment 2 floor; the two M6 packages are mutated in the second run of every shard, tested by their
     /// own tests and the testkit harness (`--test-package`, feature `harness`), the first run keeps the four others with
     /// feature `kat`; `secmp-testkit`
     /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
@@ -9915,14 +10098,17 @@ mod tests {
             &["secmp-client-core", "secmp-transport", "secmp-testkit"]
         );
         assert!(!expect::MUTANT_PACKAGES.contains(&"secmp-testkit"));
-        assert_eq!(expect::MUTANT_SHARDS, 12);
+        assert_eq!(expect::MUTANT_SHARDS, 24);
         let pairs = |args: &[String]| -> Vec<(String, String)> {
             args.windows(2)
                 .filter_map(|w| Some((w.first()?.clone(), w.get(1)?.clone())))
                 .collect()
         };
-        for k in 0..12 {
-            let shard = Some(MutantsShard { k, n: 12 });
+        for k in 0..expect::MUTANT_SHARDS {
+            let shard = Some(MutantsShard {
+                k,
+                n: expect::MUTANT_SHARDS,
+            });
             let first = pairs(&mutants_args(shard));
             let second = pairs(&mutants_harness_args(shard));
             let has =
@@ -9944,10 +10130,8 @@ mod tests {
             }
             assert!(!first.iter().any(|(a, _)| a == "--test-package"), "{k}");
             assert!(has(&first, "--features", "kat") && has(&second, "--features", "harness"));
-            assert!(
-                has(&first, "--shard", &format!("{k}/12"))
-                    && has(&second, "--shard", &format!("{k}/12"))
-            );
+            let label = format!("{k}/{}", expect::MUTANT_SHARDS);
+            assert!(has(&first, "--shard", &label) && has(&second, "--shard", &label));
             assert!(has(&first, "--output", "target"));
             assert!(has(&second, "--output", MUTANTS_HARNESS_OUTPUT));
             assert!(
@@ -10837,6 +11021,35 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
         assert!(merge_mutant_shards(&dir, 2).is_err(), "nothing downloaded");
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 11 (Q234): the merge of the CI gate reads `expect::MUTANT_SHARDS` (24) results. All 24 with a
+    /// PASS verdict: no failure, one line per shard; the last one missing: one failure naming shard 23/24; one result
+    /// labelled with the old 12-shard layout: one failure naming that label.
+    #[test]
+    fn mutants_merge_needs_all_24_shards() -> Result<()> {
+        let n = expect::MUTANT_SHARDS;
+        assert_eq!(n, 24);
+        let (dir, _) = merge_dirs("ci5");
+        let crypto = mutant_outcomes("secmp-crypto", 1, 0, 0);
+        for k in 0..n.saturating_sub(1) {
+            write_shard(&dir, (k, n), "PASS", &crypto, 1)?;
+        }
+        assert_eq!(
+            merge_mutant_shards(&dir, n)?.failures,
+            vec!["shard 23/24: 0 result directories (exactly one expected)".to_owned()]
+        );
+        write_shard(&dir, (23, n), "PASS", &crypto, 1)?;
+        let merged = merge_mutant_shards(&dir, n)?;
+        assert!(merged.failures.is_empty(), "{:?}", merged.failures);
+        assert_eq!((merged.shards.len(), merged.outcomes.len()), (24, 24));
+        write_shard(&dir, (4, 12), "PASS", &crypto, 1)?;
+        assert_eq!(
+            merge_mutant_shards(&dir, n)?.failures,
+            vec!["shard 4/24: verdict PASS for shard 4/12: d".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

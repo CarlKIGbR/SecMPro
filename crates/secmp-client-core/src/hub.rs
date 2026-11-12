@@ -105,6 +105,9 @@ pub struct Hub<C: Clock, S: EntropySource> {
     /// registers no second queue (Q222). It holds a send seed: compared in constant time.
     send_routes: BTreeMap<i64, Zeroizing<Vec<u8>>>,
     retiring_sends: Vec<(u64, QueueId)>,
+    /// The physical queue (relay, `sid`) of every send queue registered and not removed — current or in send overlap: one
+    /// sender per physical queue (spec §10.2, Q236).
+    send_targets: BTreeMap<QueueId, (RelayId, Id)>,
     /// The queue each contact sent to before its latest route update.
     previous_sends: BTreeMap<i64, QueueId>,
     next_send: u32,
@@ -136,6 +139,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             send_ids: BTreeMap::new(),
             send_routes: BTreeMap::new(),
             retiring_sends: Vec::new(),
+            send_targets: BTreeMap::new(),
             previous_sends: BTreeMap::new(),
             next_send: 0,
             recv_periods: BTreeMap::new(),
@@ -309,7 +313,9 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     }
 
     /// The send queue of the first route of a kind this version knows; a route byte-equal to the one the current send
-    /// queue was registered from is a re-sent `RouteUpdate` and registers nothing (Q222).
+    /// queue was registered from is a re-sent `RouteUpdate` and registers nothing (Q222); so is a route to a physical
+    /// queue (relay, `sid`) that is registered already, current or in send overlap — a stale `RouteUpdate` (A → B → A),
+    /// which must not give that queue a second sender (spec §10.2, Q236).
     fn register_route(&mut self, contact: ContactId, at: usize, bytes: &[u8]) -> Result<(), Error> {
         let body = RouteUpdateBody::decode(bytes)?;
         let Some((descriptor, route)) = body.routes.iter().find_map(|r| match r {
@@ -326,6 +332,21 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         {
             return Ok(());
         }
+        let target = (self.config.relay, route.sid);
+        if self.send_targets.values().any(|t| *t == target) {
+            // the stored routes follow the live registration, so a restart registers the current queue (Q236, D-B71)
+            if let Some(current) = self.send_routes.get(&contact.0) {
+                let routes = secmp_proto::Encode::encode(&RouteUpdateBody {
+                    routes: vec![<RouteDescriptor as secmp_proto::Decode>::decode(current)?],
+                })?;
+                self.core
+                    .store
+                    .lock()
+                    .map_err(|_| Error::Unavailable)?
+                    .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &routes))?;
+            }
+            return Ok(());
+        }
         let queue = self.alloc_send();
         self.actions.push(Action::AddSend {
             queue,
@@ -335,6 +356,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             period_ms: u64::from(route.period_s.seconds()).saturating_mul(1_000),
         });
         self.registered.insert(queue);
+        self.send_targets.insert(queue, target);
         let previous = self.send_ids.insert(contact.0, queue);
         self.send_routes.insert(contact.0, encoded);
         if let Some(conversation) = self.core.convs.get_mut(at) {
@@ -586,6 +608,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                     c.drop_send_queue(queue);
                 }
             }
+            self.send_targets.remove(&queue);
             self.actions.push(Action::Remove { queue });
         }
     }
@@ -1375,6 +1398,188 @@ mod tests {
             hub.register_route(contact, at, &update(4)?)?;
             counts.push(add_sends(hub));
             assert_eq!(counts, [1, 0, 1], "AddSend per register_route");
+            Ok(())
+        })
+    }
+
+    /// A scene after the first reply (the invitee's contact, its conversation's index) and a `RouteUpdate` body of the
+    /// relay queue `n` with period `period`.
+    #[cfg(feature = "kat")]
+    fn routed(label: &str, seed: u64) -> Result<(Scene, ContactId, usize), crate::testutil::E> {
+        let (host, guest) = (
+            party(&format!("{label}-h"), seed)?,
+            party(&format!("{label}-g"), seed.wrapping_add(2))?,
+        );
+        let mut sc = scene(host, &guest)?;
+        step_invite(&mut sc)?;
+        step_accept(&mut sc)?;
+        step_handshake(&mut sc)?;
+        step_reply(&mut sc)?;
+        let contact = sc.contact;
+        let at = *sc.invitee.core.index.get(&contact.0).ok_or("index")?;
+        sc.invitee.take_actions();
+        Ok((sc, contact, at))
+    }
+
+    #[cfg(feature = "kat")]
+    fn route_body(n: u8, period: Period) -> Result<Vec<u8>, crate::testutil::E> {
+        use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
+        Ok(RouteUpdateBody {
+            routes: vec![RouteDescriptor::RelayQueue(RelayQueue {
+                relay: crate::testutil::relay_ref(),
+                sid: [n; 16],
+                send_seed: secmp_crypto::SecretBytes::from_slice(&[n; 32])?,
+                period_s: period,
+            })],
+        }
+        .encode()?
+        .to_vec())
+    }
+
+    /// The queues of the `AddSend`s among the actions taken since the last call, with their `sid`.
+    #[cfg(feature = "kat")]
+    fn add_sends(hub: &mut Hub<ManualClock, Fixed>) -> Vec<(QueueId, Id)> {
+        hub.take_actions()
+            .iter()
+            .filter_map(|a| match a {
+                Action::AddSend { queue, sid, .. } => Some((*queue, *sid)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// SE-54 (Q236, EXT2c-3; spec §10.2): A → B → A while A is still in send overlap registers nothing for the third
+    /// update — one sender per physical queue — and the contact keeps sending to B.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn route_back_to_a_queue_in_overlap_registers_nothing() -> R {
+        big(|| {
+            let (mut sc, contact, at) = routed("hub-aba", 85)?;
+            let hub = &mut sc.invitee;
+            let mut counts = Vec::new();
+            hub.register_route(contact, at, &route_body(9, Period::S80)?)?;
+            let a = add_sends(hub);
+            counts.push(a.len());
+            hub.register_route(contact, at, &route_body(4, Period::S80)?)?;
+            let b = add_sends(hub);
+            counts.push(b.len());
+            hub.register_route(contact, at, &route_body(9, Period::S80)?)?;
+            let actions = hub.take_actions();
+            counts.push(
+                actions
+                    .iter()
+                    .filter(|x| matches!(x, Action::AddSend { .. }))
+                    .count(),
+            );
+            assert_eq!(counts, [1, 1, 0], "AddSend per register_route");
+            assert!(
+                !actions.iter().any(|x| matches!(x, Action::Remove { .. })),
+                "nothing removed"
+            );
+            let (qa, qb) = (a.first().ok_or("A")?.0, b.first().ok_or("B")?.0);
+            assert_eq!(hub.sends_of(contact), Some((qa, qb)), "still sending to B");
+            Ok(())
+        })
+    }
+
+    /// SE-55 (Q236): a route to the current physical queue (relay, `sid`) that differs in another field registers nothing.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn route_to_the_current_queue_registers_nothing() -> R {
+        big(|| {
+            let (mut sc, contact, at) = routed("hub-cur", 93)?;
+            let hub = &mut sc.invitee;
+            hub.register_route(contact, at, &route_body(9, Period::S80)?)?;
+            let a = add_sends(hub);
+            hub.register_route(contact, at, &route_body(9, Period::S40)?)?;
+            assert_eq!((a.len(), add_sends(hub).len()), (1, 0));
+            assert_eq!(hub.send_ids.get(&contact.0), a.first().map(|x| &x.0));
+            Ok(())
+        })
+    }
+
+    /// SE-56 (Q236): once A has left send overlap (its registration is removed), a route to A registers it once more —
+    /// one live registration of A.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn route_back_after_its_overlap_registers_once() -> R {
+        big(|| {
+            let (mut sc, contact, at) = routed("hub-abta", 97)?;
+            let hub = &mut sc.invitee;
+            hub.register_route(contact, at, &route_body(9, Period::S80)?)?;
+            let a = add_sends(hub);
+            hub.register_route(contact, at, &route_body(4, Period::S80)?)?;
+            add_sends(hub);
+            hub.tick(u64::MAX);
+            let removed = hub
+                .take_actions()
+                .iter()
+                .filter(|x| matches!(x, Action::Remove { queue } if Some(queue) == a.first().map(|y| &y.0)))
+                .count();
+            hub.register_route(contact, at, &route_body(9, Period::S80)?)?;
+            let again = add_sends(hub);
+            let live_a = hub
+                .send_targets
+                .values()
+                .filter(|(_, sid)| *sid == [9_u8; 16])
+                .count();
+            assert_eq!((removed, again.len(), live_a), (1, 1, 1));
+            Ok(())
+        })
+    }
+
+    /// SE-57 (Q236, negative control): a genuinely new route registers exactly once each time (A, B, C).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn new_routes_register_once_each() -> R {
+        big(|| {
+            let (mut sc, contact, at) = routed("hub-abc", 101)?;
+            let hub = &mut sc.invitee;
+            let mut sids = Vec::new();
+            for n in [9_u8, 4, 7] {
+                hub.register_route(contact, at, &route_body(n, Period::S80)?)?;
+                sids.extend(add_sends(hub).into_iter().map(|(_, sid)| sid));
+            }
+            assert_eq!(sids, [[9_u8; 16], [4; 16], [7; 16]]);
+            Ok(())
+        })
+    }
+
+    /// SE-63 (Q236, D-B71): A, B, then A again as the receive path does it (routes stored, then registered); after a
+    /// restart (the profile opened again from its files) the contact registers B, the queue it sends to live, not the
+    /// stale A.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_after_a_stale_route_registers_the_current_queue() -> R {
+        big(|| {
+            let (host, guest) = (party("hub-rst-h", 185)?, party("hub-rst-g", 187)?);
+            let mut sc = scene(host, &guest)?;
+            step_invite(&mut sc)?;
+            step_accept(&mut sc)?;
+            step_handshake(&mut sc)?;
+            step_reply(&mut sc)?;
+            let contact = sc.contact;
+            let at = *sc.invitee.core.index.get(&contact.0).ok_or("index")?;
+            sc.invitee.take_actions();
+            for n in [9_u8, 4, 9] {
+                let body = route_body(n, Period::S80)?;
+                guest
+                    .profile
+                    .store()
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &body))?;
+                sc.invitee.register_route(contact, at, &body)?;
+            }
+            drop(sc);
+            // a restart: the profile is opened again from its files
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let sids: Vec<Id> = add_sends(&mut again)
+                .into_iter()
+                .map(|(_, sid)| sid)
+                .collect();
+            assert_eq!(sids, [[4_u8; 16]], "after a restart");
             Ok(())
         })
     }

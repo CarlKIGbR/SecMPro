@@ -2287,6 +2287,60 @@ fn extb2_key_change_survives_last_seal_before_write_restart() -> R {
     })
 }
 
+/// SE-62 (Q238, EXT2c-2; Q225, ADR-058): a `KeyChange` whose four cells all had their `OK_SEND` on the old queue (row
+/// gone, guard still set) is planned again by a send-queue switch: its row is written again before any cell of the new
+/// attempt is sealed, the guard stays set, the new copy reaches the peer (`KeyChanged`), and the stranded old copy
+/// that the peer fetches later is a no-op there (not frozen, no event).
+#[cfg(feature = "kat")]
+#[test]
+fn switch_resends_settled_key_change() -> R {
+    use crate::scheduler::types::QueueId;
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_host("q238-kc", 671)?;
+        let store = host.profile.store();
+        // type byte + body (§7.6)
+        let total = u64::try_from(secmp_proto::tr::content::chunk_total(1 + 5390))?;
+        let mut old = Vec::new();
+        for i in 0..total {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            old.push(p.cell);
+        }
+        next(&mut h, ms(110))?;
+        assert_eq!(
+            control_rows(&store)?,
+            0,
+            "the row went after the last OK_SEND"
+        );
+        assert!(h.key_change_in_flight());
+        h.switch_send_queue(QueueId(9));
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "Q225: the row is written again before a cell of the new attempt is sealed"
+        );
+        assert!(h.key_change_in_flight(), "the guard stays set");
+        for i in 0..total {
+            deliver(&mut g, &next(&mut h, ms(200 + i))?)?;
+        }
+        assert!(matches!(
+            g.take_events().as_slice(),
+            [SessionEvent::KeyChanged(_)]
+        ));
+        for cell in &old {
+            deliver(&mut g, cell)?;
+        }
+        assert!(
+            g.take_events().is_empty(),
+            "ADR-058: the stranded copy is a no-op"
+        );
+        assert_eq!(g.trust(), Trust::KeyChanged, "not frozen");
+        Ok(())
+    })
+}
+
 /// SE-27 (spec §9.5): an evicted `RouteUpdate` is sent again — new seal, new cell — and its row lives until the
 /// `OK_SEND` of the new cell (deleted at the next slot).
 #[cfg(feature = "kat")]

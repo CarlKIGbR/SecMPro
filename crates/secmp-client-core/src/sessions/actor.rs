@@ -878,7 +878,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// The peer's `RouteUpdate` moved us to the queue `new` (spec §10.6 (4)): the old queue carries dummies only from now on
     /// ([`Conversations`] prepares those), and every real message among the last `QUEUE_CAPACITY` cells sent on it goes
     /// back to the outbox, to be sent again on the new queue — the receiver deduplicates by `msg_id` — and every control
-    /// content whose current attempt has a cell without `OK_SEND` is planned again for the new queue (Q222 (3), Q-5).
+    /// content that is not retired and either has a cell of its current attempt without `OK_SEND` or one among those last
+    /// `QUEUE_CAPACITY` cells (settled, but stranded on the old queue) is planned again for the new queue (Q222 (3), Q-5,
+    /// Q238): a row that went is written again before its cells are sealed (Q225), a repeated `KeyChange` is a no-op at the
+    /// peer (ADR-058), a repeated `RouteUpdate` registers nothing there (Q222, Q236).
     /// Returns how many messages were requeued.
     pub fn switch_send_queue(&mut self, new: QueueId) -> usize {
         if let Some(old) = self.send_queue.replace(new)
@@ -899,19 +902,33 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 _ => None,
             })
             .collect();
+        let stranded: Vec<ControlRef> = self
+            .by_cell
+            .range(floor..)
+            .filter_map(|(_, sent)| match sent.owner {
+                Owner::Control(c) => Some(c),
+                _ => None,
+            })
+            .collect();
         for id in &ids {
             self.outbox.requeue(id);
         }
         // a cell still in flight on the old queue only drops its token (overlap branch): without this re-plan an
-        // unsettled control content would never settle (§10.6 (4), Q222 (3))
+        // unsettled control content would never settle (§10.6 (4), Q222 (3)); a settled one whose cells are among the old
+        // queue's last QUEUE_CAPACITY cells is not known to be fetched, and the old queue's evictions are not reported
+        // back (Q238)
         let open: Vec<ControlRef> = self
             .controls
             .iter()
-            .filter(|(_, e)| !e.done)
-            .map(|(id, e)| ControlRef {
-                id: *id,
-                attempt: e.attempt,
+            .map(|(id, e)| {
+                let r = ControlRef {
+                    id: *id,
+                    attempt: e.attempt,
+                };
+                // a retired `RouteUpdate` is not planned again (`replan_control`, Q224)
+                (r, !e.done || stranded.contains(&r))
             })
+            .filter_map(|(r, again)| again.then_some(r))
             .collect();
         for r in open {
             self.replan_control(r);
@@ -2815,6 +2832,64 @@ mod tests {
             b.take_events().as_slice(),
             [super::SessionEvent::ResetRequested]
         ));
+        Ok(())
+    }
+
+    /// SE-60 (Q238, EXT2c-2; spec §10.6 (4)): a control content whose cells all have their `OK_SEND` on the old queue
+    /// and are among its last `QUEUE_CAPACITY` cells (row gone, entry kept for the eviction window) is planned again for
+    /// the new queue after a send-queue switch and reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_resends_settled_control_in_window() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p0.token, 1);
+        // settles: done, the row goes; the entry stays while its cell is in the window
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(a.live_controls_test(), 1);
+        a.switch_send_queue(QueueId(9));
+        assert!(
+            a.has_pending_real(),
+            "Q238: settled control content stranded on the old queue is planned again"
+        );
+        let p1 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p1.cell).map_err(|_| "delivery")?;
+        assert_eq!(resets(b), 1, "the new queue's copy reaches the peer");
+        Ok(())
+    }
+
+    /// SE-61 (Q238, negative control): a settled control content whose cell is no longer among the old queue's last
+    /// `QUEUE_CAPACITY` cells (128 later cells had their `OK_SEND` without its eviction: it was fetched) is not planned
+    /// again by a switch.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_leaves_control_content_outside_the_window() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, _convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p0.token, 1);
+        let d = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        // cell 1 is outside the last 128 (73..=200) but still held by the 256-cell eviction map
+        a.relayed_direct(d.token, 200);
+        assert_eq!(a.live_controls_test(), 1);
+        a.switch_send_queue(QueueId(9));
+        assert!(!a.has_pending_real(), "fetched content is not sent again");
         Ok(())
     }
 

@@ -1520,6 +1520,93 @@ const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 /// artefact).
 const MUTANTS_SHARD_VERDICT: &str = "xtask-shard.json";
 
+/// The file in which a sharded `mutants` step records the mutant inventory of both runs as `cargo mutants --list`
+/// lists it for the shard's tree (ADR-047 Amendment 12): `{"mutants": [name, …]}`, sorted, every listed mutant once per
+/// listing.
+const MUTANTS_SHARD_INVENTORY: &str = "xtask-inventory.json";
+
+/// The `cargo mutants --list --json` command line of one run of the gate (ADR-047 Amendment 12): the run's features,
+/// packages and the exclusions of `expect.rs` — what decides which mutants exist; no shard, so the whole inventory.
+fn mutants_list_args(features: &str, packages: &[&str]) -> Vec<String> {
+    let mut a: Vec<String> = ["mutants", "--list", "--json", "--features", features]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    for p in packages {
+        a.extend(["--package".to_owned(), (*p).to_owned()]);
+    }
+    for f in expect::MUTANT_EXCLUDE_FILES {
+        a.extend(["--exclude".to_owned(), (*f).to_owned()]);
+    }
+    for re in expect::MUTANT_EXCLUDE_RE {
+        a.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
+    }
+    a
+}
+
+/// The listings of the two runs: the first run's packages with `kat`, the harness packages with `harness` (the
+/// packages of the two runs are disjoint, so a mutant name names one run).
+fn mutants_inventory_args() -> [Vec<String>; 2] {
+    [
+        mutants_list_args("kat", &mutants_own_test_packages()),
+        mutants_list_args("harness", expect::MUTANT_HARNESS_PACKAGES),
+    ]
+}
+
+/// The names of the mutants of one `cargo mutants --list --json` output (an array of mutants, each with its `name`).
+fn inventory_names(json: &str) -> Result<Vec<String>> {
+    let v: Value = serde_json::from_str(json)
+        .map_err(|e| Error(format!("cargo mutants --list --json: {e}")))?;
+    let all = v
+        .as_array()
+        .ok_or_else(|| Error("cargo mutants --list --json: not an array".to_owned()))?;
+    all.iter()
+        .map(|m| {
+            m.get("name")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    Error("cargo mutants --list --json: a mutant without a name".to_owned())
+                })
+        })
+        .collect()
+}
+
+/// The inventory of both runs for this tree, sorted; an empty inventory is an error.
+fn mutants_inventory(ctx: &Ctx) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for args in mutants_inventory_args() {
+        names.extend(inventory_names(
+            &Cmd::cargo().args(args).dir(&ctx.root).read()?,
+        )?);
+    }
+    if names.is_empty() {
+        bail!("cargo mutants --list: no mutants");
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// The inventory a shard recorded (`MUTANTS_SHARD_INVENTORY`), sorted.
+fn read_inventory(path: &Path) -> Result<Vec<String>> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    let mut names: Vec<String> = v
+        .get("mutants")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error(format!("{}: no `mutants` array", path.display())))?
+        .iter()
+        .filter_map(|m| m.as_str().map(str::to_owned))
+        .collect();
+    if names.is_empty() {
+        bail!("{}: an empty inventory", path.display());
+    }
+    names.sort();
+    Ok(names)
+}
+
 /// The subdirectory of the first run's `mutants.out` that keeps the second run's own files (outcomes, survivor lists,
 /// log), so the shard artefact carries them.
 const MUTANTS_HARNESS_SUBDIR: &str = "harness";
@@ -1669,6 +1756,16 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     };
     let exit_codes = [status, status_h].map(|s| s.and_then(|s| s.code()));
     if let Some(shard) = shard {
+        // ADR-047 Amendment 12: the merge checks the shards against the inventory of this tree
+        let verdict = verdict.and_then(|d| {
+            let names = mutants_inventory(ctx)?;
+            std::fs::create_dir_all(&out)?;
+            std::fs::write(
+                out.join(MUTANTS_SHARD_INVENTORY),
+                serde_json::json!({ "mutants": names }).to_string(),
+            )?;
+            Ok(format!("{d}; inventory {} mutants", names.len()))
+        });
         let (passed, detail) = match &verdict {
             Ok(d) => ("PASS", d.clone()),
             Err(e) => ("FAIL", e.0.clone()),
@@ -2025,7 +2122,10 @@ fn shard_dirs(dir: &Path) -> Result<std::collections::BTreeMap<usize, Vec<PathBu
 /// no other, each with a PASS verdict of shard `K/n` (written by the shard's `mutants` step) and a complete
 /// `outcomes.json`. Every shard is read and reported before anything fails (ADR-047 Amendment 2 (3)): a shard that
 /// is missing, unfinished or failed is a failure naming it, and the outcomes of a failed shard that finished still
-/// count in the package tallies.
+/// count in the package tallies. ADR-047 Amendment 12: each shard also holds the mutant inventory of its tree
+/// (`MUTANTS_SHARD_INVENTORY`) and at least one mutant outcome; once every shard is sound, the inventories must be one
+/// and the same, and the outcomes of all shards together must be that inventory, each mutant exactly once — shards
+/// non-empty, pairwise disjoint, their union the whole list.
 fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
     let mut by_shard = shard_dirs(dir)?;
     let mut merged = MergedShards {
@@ -2033,6 +2133,7 @@ fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
         shards: Vec::new(),
         failures: Vec::new(),
     };
+    let mut inventories: Vec<(usize, Vec<String>)> = Vec::new();
     for k in 0..n {
         let dirs = by_shard.remove(&k).unwrap_or_default();
         let [d] = dirs.as_slice() else {
@@ -2076,8 +2177,18 @@ fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
                 field("shard"),
                 field("detail").replace("; ", ", ")
             ))
+        } else if let Err(e) = &read {
+            Some(e.0.clone())
+        } else if read.as_ref().is_ok_and(|r| r.outcomes.is_empty()) {
+            Some("no mutant outcomes (an empty shard)".to_owned())
         } else {
-            read.as_ref().err().map(|e| e.0.clone())
+            match read_inventory(&out.join(MUTANTS_SHARD_INVENTORY)) {
+                Ok(names) => {
+                    inventories.push((k, names));
+                    None
+                }
+                Err(e) => Some(format!("no mutant inventory: {}", e.0)),
+            }
         };
         merged.shards.push(format!(
             "shard {k}/{n}: {} — {mutants} ({dir_name})",
@@ -2095,7 +2206,77 @@ fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
             .failures
             .push(format!("a result directory for shard {k}, outside 0..{n}"));
     }
+    if merged.failures.is_empty() {
+        merged
+            .failures
+            .extend(inventory_failures(&inventories, &merged.outcomes, n));
+    }
     Ok(merged)
+}
+
+/// ADR-047 Amendment 12: the shards' inventories are one list, and the mutant outcomes of all shards are that list,
+/// every mutant exactly once.
+fn inventory_failures(
+    inventories: &[(usize, Vec<String>)],
+    outcomes: &[Value],
+    n: usize,
+) -> Vec<String> {
+    let Some((first, list)) = inventories.first() else {
+        return vec!["inventory: no shard recorded one".to_owned()];
+    };
+    let mut failures: Vec<String> = inventories
+        .iter()
+        .filter(|(_, other)| other != list)
+        .map(|(k, _)| {
+            format!(
+                "inventory: shard {k}/{n} lists another mutant inventory than shard {first}/{n}"
+            )
+        })
+        .collect();
+    let mut tested: Vec<&str> = outcomes
+        .iter()
+        .map(|o| {
+            o.get("scenario")
+                .and_then(|s| s.get("Mutant"))
+                .and_then(|m| m.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+        })
+        .collect();
+    tested.sort_unstable();
+    let (mut at_list, mut at_tested) = (0_usize, 0_usize);
+    let (mut missing, mut extra) = (Vec::new(), Vec::new());
+    loop {
+        match (list.get(at_list), tested.get(at_tested)) {
+            (Some(listed), Some(name)) if listed.as_str() == *name => {
+                at_list = at_list.saturating_add(1);
+                at_tested = at_tested.saturating_add(1);
+            }
+            (Some(listed), Some(name)) if listed.as_str() < *name => {
+                missing.push(listed.as_str());
+                at_list = at_list.saturating_add(1);
+            }
+            (Some(listed), None) => {
+                missing.push(listed.as_str());
+                at_list = at_list.saturating_add(1);
+            }
+            (_, Some(name)) => {
+                extra.push(*name);
+                at_tested = at_tested.saturating_add(1);
+            }
+            (None, None) => break,
+        }
+    }
+    if !missing.is_empty() || !extra.is_empty() {
+        failures.push(format!(
+            "inventory: {} of {} listed mutants without an outcome, {} outcomes not listed or repeated (first: {})",
+            missing.len(),
+            list.len(),
+            extra.len(),
+            missing.first().or(extra.first()).copied().unwrap_or("?")
+        ));
+    }
+    failures
 }
 
 /// The names (`path:line:col: description`, as `missed.txt`/`timeout.txt` list them) of the mutants with `summary`.
@@ -10946,6 +11127,55 @@ mod tests {
         Ok(())
     }
 
+    /// ADR-047 Amendment 12: write into every shard result under `dir` the inventory of all their outcomes together,
+    /// each mutant once — what `cargo mutants --list` would list for a tree whose shards are complete.
+    fn seal_inventory(dir: &Path) -> Result<()> {
+        let mut outs = Vec::new();
+        let mut names = BTreeSet::new();
+        for entry in std::fs::read_dir(dir)? {
+            let out = entry?.path().join("mutants.out");
+            for o in read_outcomes(&out.join("outcomes.json"))?.outcomes {
+                if let Some(name) = o
+                    .get("scenario")
+                    .and_then(|s| s.get("Mutant"))
+                    .and_then(|m| m.get("name"))
+                    .and_then(Value::as_str)
+                {
+                    names.insert(name.to_owned());
+                }
+            }
+            outs.push(out);
+        }
+        let names: Vec<String> = names.into_iter().collect();
+        for out in outs {
+            write_inventory(&out, &names)?;
+        }
+        Ok(())
+    }
+
+    /// Write `names` as the inventory of the shard result `out` (a `mutants.out`).
+    fn write_inventory(out: &Path, names: &[String]) -> Result<()> {
+        std::fs::write(
+            out.join(MUTANTS_SHARD_INVENTORY),
+            serde_json::json!({ "mutants": names }).to_string(),
+        )?;
+        Ok(())
+    }
+
+    /// `outcomes` as shard `k` holds them: every name and file in `lib<k>.rs`, so no two shards share a mutant.
+    fn in_shard(outcomes: &[Value], k: usize) -> Vec<Value> {
+        outcomes
+            .iter()
+            .map(|o| {
+                serde_json::from_str(
+                    &o.to_string()
+                        .replace("/src/lib.rs", &format!("/src/lib{k}.rs")),
+                )
+                .unwrap_or(Value::Null)
+            })
+            .collect()
+    }
+
     /// A mutant outcome with the name cargo-mutants prints (`crates/<package>/<file>:<line>:<col>: <description>`).
     fn named_mutant(name: &str, summary: &str) -> Value {
         let file = name.split_once(':').map_or(name, |(f, _)| f);
@@ -10985,6 +11215,7 @@ mod tests {
         let proto = mutant_outcomes("secmp-proto", 3, 1, 0);
         write_shard(&dir, (0, 2), "PASS", &crypto, 4)?;
         write_shard(&dir, (1, 2), "PASS", &proto, 4)?;
+        seal_inventory(&dir)?;
         let merged = merge_mutant_shards(&dir, 2)?;
         assert!(merged.failures.is_empty(), "{:?}", merged.failures);
         assert_eq!(merged.outcomes.len(), 8);
@@ -11034,22 +11265,218 @@ mod tests {
         let (dir, _) = merge_dirs("ci5");
         let crypto = mutant_outcomes("secmp-crypto", 1, 0, 0);
         for k in 0..n.saturating_sub(1) {
-            write_shard(&dir, (k, n), "PASS", &crypto, 1)?;
+            write_shard(&dir, (k, n), "PASS", &in_shard(&crypto, k), 1)?;
         }
+        seal_inventory(&dir)?;
         assert_eq!(
             merge_mutant_shards(&dir, n)?.failures,
             vec!["shard 23/24: 0 result directories (exactly one expected)".to_owned()]
         );
-        write_shard(&dir, (23, n), "PASS", &crypto, 1)?;
+        write_shard(&dir, (23, n), "PASS", &in_shard(&crypto, 23), 1)?;
+        seal_inventory(&dir)?;
         let merged = merge_mutant_shards(&dir, n)?;
         assert!(merged.failures.is_empty(), "{:?}", merged.failures);
         assert_eq!((merged.shards.len(), merged.outcomes.len()), (24, 24));
-        write_shard(&dir, (4, 12), "PASS", &crypto, 1)?;
+        write_shard(&dir, (4, 12), "PASS", &in_shard(&crypto, 4), 1)?;
         assert_eq!(
             merge_mutant_shards(&dir, n)?.failures,
             vec!["shard 4/24: verdict PASS for shard 4/12: d".to_owned()]
         );
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12, Q239, EXT2c-4): 24 PASS shards of which 23 hold no mutant outcome (`total_mutants` 0) do not
+    /// merge: each empty shard is a failure naming it.
+    #[test]
+    fn mutants_merge_refuses_an_empty_shard() -> Result<()> {
+        let n = expect::MUTANT_SHARDS;
+        let (dir, out) = merge_dirs("am12-empty");
+        let full = [
+            mutant_outcomes("secmp-crypto", 10, 0, 0),
+            mutant_outcomes("secmp-proto", 10, 0, 0),
+            mutant_outcomes("secmp-relay", 10, 0, 0),
+            mutant_outcomes("secmp-client-core", 10, 0, 0),
+            mutant_outcomes("secmp-transport", 10, 0, 0),
+            mutant_outcomes("secmp-store", 10, 0, 0),
+        ]
+        .concat();
+        write_shard(&dir, (0, n), "PASS", &full, full.len())?;
+        for k in 1..n {
+            write_shard(&dir, (k, n), "PASS", &[], 0)?;
+        }
+        seal_inventory(&dir)?;
+        let v = merge_verdict(&dir, n, &accepted_survivors()?, &out)?;
+        let expected: Vec<String> = (1..n)
+            .map(|k| format!("shard {k}/{n}: no mutant outcomes (an empty shard)"))
+            .collect();
+        assert_eq!(v.failures, expected);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap_or(&dir));
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): two shards that share a mutant do not merge (pairwise disjoint), though every listed mutant
+    /// has an outcome.
+    #[test]
+    fn mutants_merge_refuses_overlapping_shards() -> Result<()> {
+        let (dir, _) = merge_dirs("am12-overlap");
+        let crypto = mutant_outcomes("secmp-crypto", 2, 0, 0);
+        let shared = named_mutant(
+            "crates/secmp-proto/src/a.rs:1:1: replace g with ()",
+            "CaughtMutant",
+        );
+        write_shard(
+            &dir,
+            (0, 2),
+            "PASS",
+            &[crypto, vec![shared.clone()]].concat(),
+            3,
+        )?;
+        write_shard(&dir, (1, 2), "PASS", &[shared], 1)?;
+        seal_inventory(&dir)?;
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec![
+                "inventory: 0 of 3 listed mutants without an outcome, 1 outcomes not listed or repeated (first: \
+                 crates/secmp-proto/src/a.rs:1:1: replace g with ())"
+                    .to_owned()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): the union of the shards must be the whole inventory — a listed mutant without an outcome
+    /// fails, and so does an outcome of a mutant the inventory does not list (a substituted mutant).
+    #[test]
+    fn mutants_merge_refuses_an_incomplete_or_substituted_union() -> Result<()> {
+        let (dir, _) = merge_dirs("am12-union");
+        let crypto = mutant_outcomes("secmp-crypto", 2, 0, 0);
+        let proto = mutant_outcomes("secmp-proto", 1, 0, 0);
+        write_shard(&dir, (0, 2), "PASS", &crypto, 2)?;
+        write_shard(&dir, (1, 2), "PASS", &proto, 1)?;
+        seal_inventory(&dir)?;
+        assert!(merge_mutant_shards(&dir, 2)?.failures.is_empty());
+        let mut names: Vec<String> = [&crypto, &proto]
+            .iter()
+            .flat_map(|o| o.iter())
+            .filter_map(|o| o.pointer("/scenario/Mutant/name").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect();
+        let untested = "crates/secmp-a/src/lib.rs:9:1: replace f9 with ()".to_owned();
+        names.push(untested.clone());
+        names.sort();
+        for k in 0..2 {
+            write_inventory(
+                &dir.join(format!("mutants-{k}-1")).join("mutants.out"),
+                &names,
+            )?;
+        }
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec![format!(
+                "inventory: 1 of 4 listed mutants without an outcome, 0 outcomes not listed or repeated (first: \
+                 {untested})"
+            )]
+        );
+        // the proto mutant is replaced in the inventory by the untested one: one missing, one outcome not listed
+        names.retain(|x| !x.starts_with("crates/secmp-proto/"));
+        for k in 0..2 {
+            write_inventory(
+                &dir.join(format!("mutants-{k}-1")).join("mutants.out"),
+                &names,
+            )?;
+        }
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec![format!(
+                "inventory: 1 of 3 listed mutants without an outcome, 1 outcomes not listed or repeated (first: \
+                 {untested})"
+            )]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): every shard records the inventory, the inventories are one, and none is empty.
+    #[test]
+    fn mutants_merge_needs_one_inventory_in_every_shard() -> Result<()> {
+        let (dir, _) = merge_dirs("am12-inventory");
+        write_shard(
+            &dir,
+            (0, 2),
+            "PASS",
+            &mutant_outcomes("secmp-crypto", 2, 0, 0),
+            2,
+        )?;
+        write_shard(
+            &dir,
+            (1, 2),
+            "PASS",
+            &mutant_outcomes("secmp-proto", 1, 0, 0),
+            1,
+        )?;
+        seal_inventory(&dir)?;
+        let one = dir.join("mutants-1-1").join("mutants.out");
+        let list = read_inventory(&one.join(MUTANTS_SHARD_INVENTORY))?;
+        std::fs::remove_file(one.join(MUTANTS_SHARD_INVENTORY))?;
+        let found = merge_mutant_shards(&dir, 2)?.failures;
+        assert!(
+            found.len() == 1
+                && found
+                    .iter()
+                    .all(|f| f.starts_with("shard 1/2: no mutant inventory: ")),
+            "{found:?}"
+        );
+        write_inventory(&one, &[])?;
+        let found = merge_mutant_shards(&dir, 2)?.failures;
+        assert!(
+            found.len() == 1 && found.iter().all(|f| f.ends_with(": an empty inventory")),
+            "{found:?}"
+        );
+        write_inventory(
+            &one,
+            &[list, vec!["crates/x/src/y.rs:1:1: z".to_owned()]].concat(),
+        )?;
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec!["inventory: shard 1/2 lists another mutant inventory than shard 0/2".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): the inventory is listed per run with the run's features, packages and exclusions, without a
+    /// shard; `--list --json` gives each mutant's `name`.
+    #[test]
+    fn mutants_inventory_lists_both_runs() -> Result<()> {
+        let [first, second] = mutants_inventory_args();
+        for (args, features, packages) in [
+            (&first, "kat", mutants_own_test_packages()),
+            (&second, "harness", expect::MUTANT_HARNESS_PACKAGES.to_vec()),
+        ] {
+            let mut want: Vec<String> = ["mutants", "--list", "--json", "--features", features]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+            for p in packages {
+                want.extend(["--package".to_owned(), p.to_owned()]);
+            }
+            for f in expect::MUTANT_EXCLUDE_FILES {
+                want.extend(["--exclude".to_owned(), (*f).to_owned()]);
+            }
+            for re in expect::MUTANT_EXCLUDE_RE {
+                want.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
+            }
+            assert_eq!(*args, want);
+        }
+        assert_eq!(
+            inventory_names(r#"[{"name": "a", "package": "p"}, {"name": "b"}]"#)?,
+            ["a", "b"]
+        );
+        assert!(inventory_names("{}").is_err());
+        assert!(inventory_names(r#"[{"package": "p"}]"#).is_err());
+        assert_eq!(inventory_names("[]")?, Vec::<String>::new());
         Ok(())
     }
 
@@ -11060,21 +11487,21 @@ mod tests {
         let (dir, out) = merge_dirs("below-half");
         write_shard(
             &dir,
-            (0, 8),
+            (0, 3),
             "PASS",
             &mutant_outcomes("secmp-crypto", 40, 60, 0),
             100,
         )?;
         write_shard(
             &dir,
-            (1, 8),
+            (1, 3),
             "PASS",
             &mutant_outcomes("secmp-proto", 80, 20, 0),
             100,
         )?;
         write_shard(
             &dir,
-            (2, 8),
+            (2, 3),
             "PASS",
             &[
                 mutant_outcomes("secmp-relay", 50, 10, 0),
@@ -11085,10 +11512,8 @@ mod tests {
             .concat(),
             160,
         )?;
-        for k in 3..8 {
-            write_shard(&dir, (k, 8), "PASS", &[], 0)?;
-        }
-        let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
+        seal_inventory(&dir)?;
+        let v = merge_verdict(&dir, 3, &accepted_survivors()?, &out)?;
         assert_eq!(
             v.failures,
             vec!["secmp-crypto: caught 40 of 100 mutants (40.0 %) is below 50 %".to_owned()]
@@ -11128,11 +11553,11 @@ mod tests {
         ] {
             proto.push(named_mutant(name, "MissedMutant"));
         }
-        write_shard(&dir, (0, 8), "PASS", &crypto, 268)?;
-        write_shard(&dir, (1, 8), "PASS", &proto, 1024)?;
+        write_shard(&dir, (0, 3), "PASS", &crypto, 268)?;
+        write_shard(&dir, (1, 3), "PASS", &proto, 1024)?;
         write_shard(
             &dir,
-            (2, 8),
+            (2, 3),
             "PASS",
             &[
                 mutant_outcomes("secmp-relay", 50, 10, 0),
@@ -11143,10 +11568,8 @@ mod tests {
             .concat(),
             160,
         )?;
-        for k in 3..8 {
-            write_shard(&dir, (k, 8), "PASS", &[], 0)?;
-        }
-        let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
+        seal_inventory(&dir)?;
+        let v = merge_verdict(&dir, 3, &accepted_survivors()?, &out)?;
         assert!(v.failures.is_empty(), "{:?}", v.failures);
         let warnings: Vec<&String> = v
             .lines
@@ -11212,6 +11635,7 @@ mod tests {
                 total,
             )?;
         }
+        seal_inventory(&dir)?;
         let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
         let text = format!("mutants-merge: {}", v.lines.join("; "));
         for k in 0..8 {

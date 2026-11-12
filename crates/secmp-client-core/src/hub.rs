@@ -1528,6 +1528,48 @@ mod tests {
         })
     }
 
+    /// SE-59 (ADR-054 item 5, EXT2c-5): an inviter whose `Profile.name` holds C1 and C0 characters is accepted (the
+    /// handshake completes), its contact shows the name as empty, the stored name is the one received, and so after a
+    /// reopen.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn peer_name_with_control_characters_is_shown_empty() -> R {
+        big(|| {
+            let (host, guest) = (party("hub-nm-h", 89)?, party("hub-nm-g", 91)?);
+            let mut sc = scene(host, &guest)?;
+            sc.inviter = hub_over(&sc.host, "A\u{85}B\n", 200)?;
+            step_invite(&mut sc)?;
+            step_accept(&mut sc)?;
+            step_handshake(&mut sc)?;
+            let shown = |core: &mut Core<ManualClock, Fixed>| -> Result<Vec<Option<String>>, crate::testutil::E> {
+                let Response::Contacts(list) = core.handle(Request::Contacts)? else {
+                    return Err("contacts".into());
+                };
+                Ok(list.into_iter().map(|c| c.display_name).collect())
+            };
+            assert_eq!(shown(&mut sc.invitee.core)?, [Some(String::new())]);
+            let stored: Vec<Option<String>> = guest
+                .profile
+                .store()
+                .lock()
+                .map_err(|_| "lock")?
+                .contacts()?
+                .into_iter()
+                .map(|c| c.display_name)
+                .collect();
+            assert_eq!(
+                stored,
+                [Some("A\u{85}B\n".to_owned())],
+                "stored as received"
+            );
+            let mut again = Core::with_profile(guest.profile.clone(), guest.clock.clone(), || {
+                Fixed(entropy(995))
+            })?;
+            assert_eq!(shown(&mut again)?, [Some(String::new())], "after a reopen");
+            Ok(())
+        })
+    }
+
     /// SE-57 (Q236, negative control): a genuinely new route registers exactly once each time (A, B, C).
     #[test]
     #[cfg(feature = "kat")]

@@ -60,7 +60,8 @@ pub struct Contact {
     pub fingerprint: [u8; 32],
     /// The user has verified the safety number.
     pub verified: bool,
-    /// The name the peer gave itself in its handshake profile (the user's own name for it is set by the application).
+    /// The name the peer gave itself in its handshake profile (the user's own name for it is set by the application); a
+    /// name with a C0, DEL or C1 control character is shown as empty (ADR-054 item 5).
     pub display_name: Option<String>,
     /// The state.
     pub state: ContactState,
@@ -80,13 +81,26 @@ impl Contact {
     }
 }
 
+/// ADR-054 item 5: a `Profile.name` with a C0 (U+0000–U+001F), DEL (U+007F) or C1 (U+0080–U+009F) control character is
+/// shown as empty; the handshake was accepted and the stored name is kept as received.
+fn shown_name(name: &str) -> String {
+    if name
+        .chars()
+        .any(|c| matches!(c, '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}'))
+    {
+        String::new()
+    } else {
+        name.to_owned()
+    }
+}
+
 fn contact_of(c: &StoredContact) -> Result<Contact, Error> {
     Ok(Contact {
         id: ContactId(c.id),
         fingerprint: <[u8; 32]>::try_from(c.fingerprint.as_slice())
             .map_err(|_| Error::Unavailable)?,
         verified: c.verified,
-        display_name: c.display_name.clone(),
+        display_name: c.display_name.as_deref().map(shown_name),
         state: ContactState::of(c.state)?,
     })
 }
@@ -356,6 +370,30 @@ pub(crate) fn events_of(planned: &Planned) -> Vec<Event> {
 
 #[cfg(test)]
 mod tests {
+    /// SE-58 (ADR-054 item 5, EXT2c-5): the shown name is empty exactly when the name holds a C0 (U+0000–U+001F), DEL
+    /// (U+007F) or C1 (U+0080–U+009F) character; the neighbours of each range and other Unicode are shown as they are.
+    #[test]
+    fn shown_name_follows_adr054_item5() {
+        let cases: [(&str, &str); 13] = [
+            ("", ""),
+            ("Alice", "Alice"),
+            ("Zo\u{eb} \u{674e} \u{1f642}", "Zo\u{eb} \u{674e} \u{1f642}"),
+            (" ~", " ~"),
+            ("\u{a0}x", "\u{a0}x"),
+            ("a\u{0}b", ""),
+            ("a\u{1}", ""),
+            ("a\u{1f}", ""),
+            ("\u{7f}", ""),
+            ("\u{80}", ""),
+            ("x\u{9f}", ""),
+            ("A\u{85}B", ""),
+            ("line\n", ""),
+        ];
+        for (name, shown) in cases {
+            assert_eq!(super::shown_name(name), shown, "{name:?}");
+        }
+    }
+
     #[cfg(feature = "kat")]
     use secmp_crypto::Zeroizing;
     #[cfg(feature = "kat")]

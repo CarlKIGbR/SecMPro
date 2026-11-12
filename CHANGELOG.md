@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 CI5 (Q234, ADR-047 Amendment 11): the mutation gate runs as 24 shards instead of 12 (PR run 43083238010: shard 4 hit the 16800-s step budget on a slow runner with 8 of 458 mutants left); every mutant is still tested against the same tests, and no timeout changes; the policy step checks the shard matrices of `ci.yml` and `ci-dispatch.yml` and their run lines against `expect::MUTANT_SHARDS`; evidence `docs/reviews/M07-evidence/ci5-red-first.txt`, `ci5-shard-partition.txt`.
 - M7 MEM1 (Q232, Q233, ADR-059): the OS-level test of `SecretPage` proves the `memfd_secret` page by the kernel's refusal to read it through `/proc/self/mem` (with an ordinary-page control, the `/secretmem` path and `sh` `dd` `dc`) instead of the `lo` flag, which kernels with commit 97d34aa65c29 no longer set; `lo` stays required for the `mlock` fallback; the first-fault SIGBUS on locked-memory exhaustion is OPEN-M7-B-18; evidence `docs/reviews/M07-evidence/mem1-red-first.txt`.
 - M7 B-4f3 (Q230, Q231): a newer RouteUpdate keeps its row while a retired older row is still kept, so a crash cannot leave the older one alone; the unbounded KeyChange guard of an identity rotation is documented (OPEN-M7-B-17).
 - M7 ADV1 (Q229, ADR-051 Am. 9): `rustix` 1.1.5 → 1.1.6 (lockfile only; RUSTSEC-2026-0486, unsound xattr functions, not reachable; vet delta certified, no cooldown exception).

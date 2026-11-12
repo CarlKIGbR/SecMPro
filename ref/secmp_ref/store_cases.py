@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The `store` case table (SCHEMA-4.12-store.md; Weisung REF-M7-store): the ADR-053 constructions.
 
-Cases in file order: keys (1), wrap + rejects (2–7), seal + rejects (8–15), backup + rejects (16–19), label isolation (20), Amendment 2 and 3 rejects (21–26).
+Cases in file order: keys (1), wrap + rejects (2–7), seal + rejects (8–15), backup + rejects (16–19), label isolation (20), Amendment 2 and 3 rejects (21–26), Amendment 4 rejects (27–28).
 Every random-looking input of a positive case is drawn from its own stream (SCHEMA §2, suite "store",
 the case index) in the order of the *_STREAM lists; derived values follow. A reject case draws nothing:
 it restates the inputs of the case it manipulates (`from`) so that it is self-contained. The run checks
@@ -175,9 +175,9 @@ def store_cases() -> list[Case]:
     def contact(profile=b"\x04peer\x00"):
         return iks + b"\x01" + profile + b"\x03Bob"
 
-    def message(index=0, kind=b"\x01"):
-        return (index.to_bytes(4, "big") + b"\x01" + (1_800_000_000_000).to_bytes(8, "big") + bytes([7]) * 16
-                + kind + bytes(4) + b"\x00\x02hi")
+    def message(index=0, kind=b"\x01", ts=1_800_000_000_000, expire_after=0):
+        return (index.to_bytes(4, "big") + b"\x01" + ts.to_bytes(8, "big") + bytes([7]) * 16
+                + kind + expire_after.to_bytes(4, "big") + b"\x00\x02hi")
 
     body_rejects = [  # (i, manipulation, contacts, settings, messages); identity as in store-0016
         (21, "settings-key=mode", bytes(4), b"\x00\x01\x04mode\x00\x04\x00\x00\x00\x01", bytes(4)),
@@ -186,6 +186,8 @@ def store_cases() -> list[Case]:
         (24, "contact_index=1", one + contact(), b"\x00\x00", one + message(index=1)),
         (25, "profile-avatar-flag=2", one + contact(b"\x04peer\x02"), b"\x00\x00", bytes(4)),
         (26, "view-once", one + contact(), b"\x00\x00", one + message(kind=b"\x03")),
+        (27, "ts=2^63", one + contact(), b"\x00\x00", one + message(ts=2**63)),
+        (28, "ts+1000*expire_after=2^63", one + contact(), b"\x00\x00", one + message(ts=2**63 - 1000, expire_after=1)),
     ]
     for i, manip, contacts, settings, messages in body_rejects:
         secs = (identity, contacts, settings, messages)

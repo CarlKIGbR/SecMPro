@@ -156,7 +156,7 @@ HEADER_LEN = 1 + SALT + 12 + BWRAP_LEN + 1 + 5 * 4   # 154
 def _check_sections(body: bytes, lengths) -> None:
     """The four sections of the Appendix, each consuming exactly its length, every field checked; settings per
     Amendment 2 (key `retention_days` only, `val` 4 bytes); Amendment 3 (a key at most once, contact_index < n,
-    D.3/D.5/IKSPublic decoders, no view-once). Every failure is the uniform Reject."""
+    D.3/D.5/IKSPublic decoders, no view-once); Amendment 4 (ts + 1000·expire_after ≤ 2^63 − 1). Every failure is the uniform Reject."""
     if len(body) != sum(lengths):
         raise Reject()
     identity, contacts, settings, messages = (body[sum(lengths[:i]):sum(lengths[:i + 1])] for i in range(4))
@@ -193,8 +193,11 @@ def _check_sections(body: bytes, lengths) -> None:
             raise Reject()
         if r.uint(1) not in (0, 1):                        # direction
             raise Reject()
-        r.uint(8)                                          # ts
-        if encodings._d_appmessage(r)["kind"] == 3:        # view-once-text (docs/03:507), Amendment 3 (4)
+        ts = r.uint(8)                                     # ts
+        app = encodings._d_appmessage(r)
+        if app["kind"] == 3:                               # view-once-text (docs/03:507), Amendment 3 (4)
+            raise Reject()
+        if ts + 1000 * app["expire_after"] > 2**63 - 1:    # Amendment 4: ts and expiry fit a signed 64-bit ms value
             raise Reject()
     r.done()
 

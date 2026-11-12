@@ -23,7 +23,7 @@ def by_op(op):
 def test_header_and_validation():
     vectorfile.validate_document(DOC)
     assert (DOC["schema"], DOC["suite"], DOC["spec"], DOC["generator"]) == (8, "store", "SecMP/1 rev 2.7", "ref-python")
-    assert [c["id"] for c in DOC["cases"]] == [f"store-{i:04d}" for i in range(1, 27)]
+    assert [c["id"] for c in DOC["cases"]] == [f"store-{i:04d}" for i in range(1, 29)]
 
 
 def test_keys_item_3_4():
@@ -97,7 +97,7 @@ REJECTS = [c for c in DOC["cases"] if c.get("expect") == "reject"]
 
 def test_reject_count_and_shape():
     ops = [c["op"] for c in REJECTS]
-    assert (ops.count("wrap-reject"), ops.count("seal-reject"), ops.count("backup-reject")) == (4, 5, 9)
+    assert (ops.count("wrap-reject"), ops.count("seal-reject"), ops.count("backup-reject")) == (4, 5, 11)
     assert all("outputs" not in c for c in REJECTS)
 
 
@@ -153,8 +153,9 @@ ONE = (1).to_bytes(4, "big")
 SETTINGS_OK = b"\x00\x01\x0eretention_days\x00\x04" + (30).to_bytes(4, "big")
 def _contact(verified=b"\x01", local=b"\x03Bob", profile=b"\x04peer\x00", iks=IKS):
     return iks + verified + profile + local
-def _message(direction=b"\x01", kind=b"\x01", index=0):
-    return index.to_bytes(4, "big") + direction + (1_800_000_000_000).to_bytes(8, "big") + bytes([7]) * 16 + kind + bytes(4) + b"\x00\x02hi"
+def _message(direction=b"\x01", kind=b"\x01", index=0, ts=1_800_000_000_000, expire_after=0):
+    return (index.to_bytes(4, "big") + direction + ts.to_bytes(8, "big") + bytes([7]) * 16 + kind
+            + expire_after.to_bytes(4, "big") + b"\x00\x02hi")
 RET = b"\x0eretention_days\x00\x04" + (30).to_bytes(4, "big")
 def _l7_file(contacts, settings, messages):
     salt, n1, mk, n = (H(B16[k]) for k in ("salt", "n_prime", "mk_bk", "n"))
@@ -181,6 +182,16 @@ L7_REJECTS = {
     "am3-contact_index-without-contacts": (bytes(4), b"\x00\x00", ONE + _message()),
     "am3-iks-ver=02": (ONE + _contact(iks=b"\x02" + IKS[1:]), b"\x00\x00", bytes(4)),
     "am3-profile-avatar-flag=2": (ONE + _contact(profile=b"\x04peer\x02"), b"\x00\x00", bytes(4)),
+    "am4-ts=2^63": (ONE + _contact(), b"\x00\x00", ONE + _message(ts=2**63)),
+    "am4-ts=2^64-1": (ONE + _contact(), b"\x00\x00", ONE + _message(ts=2**64 - 1)),
+    "am4-sum=2^63-expire=1": (ONE + _contact(), b"\x00\x00", ONE + _message(ts=2**63 - 1000, expire_after=1)),
+    "am4-sum=2^63-expire=max": (ONE + _contact(), b"\x00\x00",
+                                ONE + _message(ts=2**63 - 1000 * (2**32 - 1), expire_after=2**32 - 1)),
+    "am4-sum-beyond-u64": (ONE + _contact(), b"\x00\x00", ONE + _message(ts=2**64 - 1, expire_after=2**32 - 1)),
+    "am4-second-of-two-ts=2^63": (ONE + _contact(), b"\x00\x00",
+                                  (2).to_bytes(4, "big") + _message() + _message(ts=2**63)),
+    "am4-first-of-two-ts=2^63": (ONE + _contact(), b"\x00\x00",
+                                 (2).to_bytes(4, "big") + _message(ts=2**63) + _message()),
 }
 @pytest.mark.parametrize("name", sorted(L7_REJECTS))
 def test_l7_malformed_body_rejects(name):
@@ -188,3 +199,17 @@ def test_l7_malformed_body_rejects(name):
     with pytest.raises(Reject) as e:
         store.open_backup(H(B16["passphrase"]), f)
     assert type(e.value) is Reject and str(e.value) == "reject"
+
+
+AM4_ACCEPTED = {  # ADR-053 Amendment 4: the largest accepted value of each leg
+    "ts=2^63-1": (2**63 - 1, 0),
+    "sum=2^63-1-expire=1": (2**63 - 1001, 1),
+    "sum=2^63-1-expire=max": (2**63 - 1 - 1000 * (2**32 - 1), 2**32 - 1),
+}
+
+
+@pytest.mark.parametrize("name", sorted(AM4_ACCEPTED))
+def test_am4_largest_time_is_accepted(name):
+    ts, expire_after = AM4_ACCEPTED[name]
+    body, f = _l7_file(ONE + _contact(), b"\x00\x00", ONE + _message(ts=ts, expire_after=expire_after))
+    assert store.open_backup(H(B16["passphrase"]), f) == body

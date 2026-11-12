@@ -672,7 +672,7 @@ mod tests {
         Ok(())
     }
 
-    /// M7 VEC1: `store` is a registered, frozen suite of 26 cases.
+    /// M7 VEC1: `store` is a registered, frozen suite; 28 cases since M7-B16 (ADR-053 Amendment 4, SCHEMA rev 9).
     #[test]
     fn vectors_step_12a_covers_the_store_suite() -> Result<()> {
         assert!(expect::VECTOR_SUITES.contains(&"store"));
@@ -683,7 +683,7 @@ mod tests {
             std::fs::read(vectors.join("store.json"))?,
             std::fs::read(vectors.join("ref").join("store.json"))?,
         );
-        assert_eq!(check_frozen_suite("store", &frozen, &reference)?, 26);
+        assert_eq!(check_frozen_suite("store", &frozen, &reference)?, 28);
         Ok(())
     }
 

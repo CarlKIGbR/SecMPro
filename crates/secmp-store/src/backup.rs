@@ -605,8 +605,20 @@ fn settings_slot(seen: &mut [bool], key: &str, val_len: usize) -> Result<()> {
     }
 }
 
+/// ADR-053 Amendment 4: a message's `ts` and its expiry `ts + 1000 · expire_after` (exact integers) fit the store's
+/// signed 64-bit millisecond columns (`ts_ms`, `expire_at_ms`), i.e. `ts + 1000 · expire_after ≤ 2^63 − 1`; anything
+/// else is the uniform `Unlock`.
+fn message_time(ts_ms: u64, expire_after: u32) -> Result<()> {
+    let end = u64::from(expire_after)
+        .checked_mul(1000)
+        .and_then(|e| ts_ms.checked_add(e))
+        .ok_or(Error::Unlock)?;
+    i64::try_from(end).map(|_| ()).map_err(|_| Error::Unlock)
+}
+
 /// The four sections of a decrypted body (`lens` from the section table), each consuming exactly its length; every
-/// field is checked (`IKSPublic` and `Profile` by the `secmp-proto` decoders, `AppMessage` likewise and never view-once).
+/// field is checked (`IKSPublic` and `Profile` by the `secmp-proto` decoders, `AppMessage` likewise and never view-once;
+/// the message time per ADR-053 Amendment 4).
 fn decode(body: &[u8], lens: [usize; 4]) -> Result<Contents> {
     let mut sections: [&[u8]; 4] = [&[]; 4];
     let mut rest = body;
@@ -690,6 +702,7 @@ fn decode(body: &[u8], lens: [usize; 4]) -> Result<Contents> {
         if kind == KIND_VIEW_ONCE {
             return Err(Error::Unlock);
         }
+        message_time(ts_ms, app.expire_after)?;
         messages.push(BackupMessage {
             contact_index,
             direction,
@@ -1205,7 +1218,7 @@ mod tests {
     /// BK-04 (ADR-053 item 6, Appendix): with fixed salt, `MK_bk`, `N'` and `N` (kat entropy, `kat_small`) the
     /// file has the magic, header, `bwrap`, section table and body seal at their offsets and lengths, and `bwrap` and
     /// the body seal equal the item-6 compositions recomputed from the `secmp-crypto` primitives; a wrong passphrase is
-    /// `Err(Unlock)`. Byte-exact (`PROFILE` parameters): `store-0016`…`-0019`, `-0021`…`-0026` occur verbatim in
+    /// `Err(Unlock)`. Byte-exact (`PROFILE` parameters): `store-0016`…`-0019`, `-0021`…`-0028` occur verbatim in
     /// `vectors/store.json`; the file imports.
     #[test]
     fn wrapping_and_header_kat() -> R {
@@ -1944,6 +1957,156 @@ mod tests {
             ("name of 65", body(&identity(), &contacts(65, false))),
         ] {
             assert_eq!(decode(&b, lens).err(), Some(Error::Unlock), "{name}");
+        }
+        Ok(())
+    }
+
+    /// One message record of contact 0 at `ts_ms` with `expire_after` (ADR-053 Amendment 4 tests).
+    fn time_message(ts_ms: u64, expire_after: u32) -> Vec<u8> {
+        [
+            &0_u32.to_be_bytes()[..],
+            &[1],
+            &ts_ms.to_be_bytes(),
+            &[7; 16],
+            &[1],
+            &expire_after.to_be_bytes(),
+            &[0, 2],
+            b"hi",
+        ]
+        .concat()
+    }
+
+    /// A body of one contact and the message `time_message(ts_ms, expire_after)`, with its section lengths.
+    fn time_body(ts_ms: u64, expire_after: u32) -> Res<(Vec<u8>, [usize; 4])> {
+        time_body_of(&[(ts_ms, expire_after)])
+    }
+
+    /// A body of one contact and one `time_message` per (`ts_ms`, `expire_after`), in order, with its section lengths.
+    fn time_body_of(times: &[(u64, u32)]) -> Res<(Vec<u8>, [usize; 4])> {
+        let profile = Profile::new("Bob", None)?.encode()?;
+        let contacts = [
+            &1_u32.to_be_bytes()[..],
+            &peer_iks(1)?,
+            &[1],
+            &profile,
+            &[0],
+        ]
+        .concat();
+        let mut messages = u32::try_from(times.len())?.to_be_bytes().to_vec();
+        for (ts_ms, expire_after) in times {
+            messages.extend(time_message(*ts_ms, *expire_after));
+        }
+        let settings = 0_u16.to_be_bytes();
+        let lens = [IDENTITY_LEN, contacts.len(), settings.len(), messages.len()];
+        Ok((
+            [&identity()[..], &contacts, &settings, &messages].concat(),
+            lens,
+        ))
+    }
+
+    /// The Amendment 4 cases: (name, `ts_ms`, `expire_after`); 2^63 − 1 = 9 223 372 036 854 775 807, 1000 · (2^32 − 1) =
+    /// 4 294 967 295 000.
+    const TIME_ACCEPTED: [(&str, u64, u32); 3] = [
+        (
+            "ts = 2^63 - 1, expire_after 0",
+            9_223_372_036_854_775_807,
+            0,
+        ),
+        ("ts + 1000 = 2^63 - 1", 9_223_372_036_854_774_807, 1),
+        (
+            "ts + 1000 * (2^32 - 1) = 2^63 - 1",
+            9_223_367_741_887_480_807,
+            u32::MAX,
+        ),
+    ];
+    const TIME_REJECTED: [(&str, u64, u32); 5] = [
+        ("ts = 2^63, expire_after 0", 9_223_372_036_854_775_808, 0),
+        ("ts = 2^64 - 1, expire_after 0", u64::MAX, 0),
+        ("ts + 1000 = 2^63", 9_223_372_036_854_774_808, 1),
+        (
+            "ts + 1000 * (2^32 - 1) = 2^63",
+            9_223_367_741_887_480_808,
+            u32::MAX,
+        ),
+        ("ts + 1000 * (2^32 - 1) beyond u64", u64::MAX, u32::MAX),
+    ];
+
+    /// ADR-053 Amendment 4 (OPEN-M7-B-16, Q235): `decode` accepts a message whose `ts + 1000 · expire_after` is
+    /// 2^63 − 1 on each leg and refuses one whose sum is 2^63 or more (also beyond u64) with the uniform `Unlock`, also
+    /// when only the second of two messages is out of range.
+    #[test]
+    fn decode_refuses_unrepresentable_message_time() -> R {
+        for (name, ts, expire_after) in TIME_ACCEPTED {
+            let (body, lens) = time_body(ts, expire_after)?;
+            let got = decode(&body, lens)?;
+            let m = got.messages.first().ok_or("one message")?;
+            assert_eq!((m.ts_ms, m.expire_after), (ts, expire_after), "{name}");
+        }
+        for (name, ts, expire_after) in TIME_REJECTED {
+            let (body, lens) = time_body(ts, expire_after)?;
+            assert_eq!(decode(&body, lens).err(), Some(Error::Unlock), "{name}");
+        }
+        // every message is checked, not only the first: the second of two is 2^63
+        let (body, lens) = time_body_of(&[(1_800_000_000_000, 0), (9_223_372_036_854_775_808, 0)])?;
+        assert_eq!(
+            decode(&body, lens).err(),
+            Some(Error::Unlock),
+            "second of two messages"
+        );
+        // and not only the last: the first of two is 2^63
+        let (body, lens) = time_body_of(&[(9_223_372_036_854_775_808, 0), (1_800_000_000_000, 0)])?;
+        assert_eq!(
+            decode(&body, lens).err(),
+            Some(Error::Unlock),
+            "first of two messages"
+        );
+        Ok(())
+    }
+
+    /// ADR-053 Amendment 4 through `import` (OPEN-M7-B-16): a correctly sealed body whose message time does not fit is
+    /// the one uniform `Err(Unlock)` (equal value and `Debug`), not `Unavailable`, and nothing is written; the largest
+    /// accepted time of each leg imports, with `ts_ms` and `expire_at_ms` as stored.
+    #[test]
+    fn import_refuses_unrepresentable_message_time() -> R {
+        let dir = TempDir::new("bk-am4")?;
+        let small = Argon2Params::kat_small();
+        for (i, (name, ts, expire_after)) in TIME_REJECTED.iter().enumerate() {
+            let (body, [a, b, c, d]) = time_body(*ts, *expire_after)?;
+            let table = [
+                (1, len_u32(a)?),
+                (2, len_u32(b)?),
+                (3, len_u32(c)?),
+                (4, len_u32(d)?),
+            ];
+            let file = seal_file(PASS, small, &table, &body)?;
+            let mut fresh = Store::open(&dir.path().join(format!("r{i}")), &TestKey::db_key())?;
+            let got = import_bytes(&mut fresh, &file, PASS, small, 1);
+            assert_eq!(got, Err(Error::Unlock), "{name}");
+            assert_eq!(
+                format!("{got:?}"),
+                format!("{:?}", Err::<(), _>(Error::Unlock)),
+                "{name}"
+            );
+            assert_eq!(written(&fresh)?, 0, "{name}: nothing written");
+        }
+        for (i, (name, ts, expire_after)) in TIME_ACCEPTED.iter().enumerate() {
+            let (body, [a, b, c, d]) = time_body(*ts, *expire_after)?;
+            let table = [
+                (1, len_u32(a)?),
+                (2, len_u32(b)?),
+                (3, len_u32(c)?),
+                (4, len_u32(d)?),
+            ];
+            let file = seal_file(PASS, small, &table, &body)?;
+            let mut fresh = Store::open(&dir.path().join(format!("a{i}")), &TestKey::db_key())?;
+            import_bytes(&mut fresh, &file, PASS, small, 1)?;
+            let row: (i64, Option<i64>) = fresh.connection_kat().query_row(
+                "SELECT ts_ms, expire_at_ms FROM messages",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            let want_at = (*expire_after != 0).then_some(i64::MAX);
+            assert_eq!(row, (i64::try_from(*ts)?, want_at), "{name}");
         }
         Ok(())
     }

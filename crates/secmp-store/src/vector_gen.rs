@@ -40,6 +40,10 @@ const PASS_BK: &str = "backup-\u{3a9} 2026";
 const PASS_BK_WRONG: &str = "backup-\u{3a9} 2027";
 const VER: u8 = 1;
 const TS_MS: u64 = 1_800_000_000_000;
+/// 2^63: the first `ts + 1000 · expire_after` that ADR-053 Amendment 4 rejects (cases 27, 28).
+const TS_2_63: u64 = 9_223_372_036_854_775_808;
+/// 2^63 − 1000 (case 28, `expire_after` 1).
+const TS_2_63_LESS_1000: u64 = 9_223_372_036_854_774_808;
 
 /// A JSON value of the vector file (SCHEMA §1).
 #[derive(Clone)]
@@ -526,16 +530,16 @@ fn contact_section(profile: &[u8]) -> Res<Vec<u8>> {
     Ok([&1_u32.to_be_bytes()[..], &contact].concat())
 }
 
-/// The messages section of one message.
-fn message_section(index: u32, kind: u8) -> Vec<u8> {
+/// The messages section of one message at `ts_ms` with `expire_after`.
+fn message_section(index: u32, kind: u8, ts_ms: u64, expire_after: u32) -> Vec<u8> {
     [
         &1_u32.to_be_bytes()[..],
         &index.to_be_bytes(),
         &[1],
-        &TS_MS.to_be_bytes(),
+        &ts_ms.to_be_bytes(),
         &[7; 16],
         &[kind],
-        &[0_u8; 4],
+        &expire_after.to_be_bytes(),
         &[0_u8, 2],
         b"hi",
     ]
@@ -579,10 +583,10 @@ fn export_case(b: &Backup, dir: &TempDir, verify: bool) -> Res<(J, Vec<u8>, Stor
     Ok((case, file, kek_bk))
 }
 
-/// The contacts, settings and messages sections of a reject case (cases 21–26).
+/// The contacts, settings and messages sections of a reject case (cases 21–28).
 type BodyCase = (u32, &'static str, [Vec<u8>; 3]);
 
-/// Cases 21–26: honest sections that only Amendment 2 (21, 22) or Amendment 3 (23–26) rejects.
+/// Cases 21–28: honest sections that only Amendment 2 (21, 22), Amendment 3 (23–26) or Amendment 4 (27, 28) rejects.
 fn body_cases() -> Res<Vec<BodyCase>> {
     let (zero4, zero2) = (vec![0_u8; 4], vec![0_u8; 2]);
     let settings = |entries: &[&[u8]]| -> Vec<u8> {
@@ -626,7 +630,7 @@ fn body_cases() -> Res<Vec<BodyCase>> {
             [
                 contact_section(&profile)?,
                 zero2.clone(),
-                message_section(1, 1),
+                message_section(1, 1, TS_MS, 0),
             ],
         ),
         (
@@ -637,12 +641,34 @@ fn body_cases() -> Res<Vec<BodyCase>> {
         (
             26,
             "view-once",
-            [contact_section(&profile)?, zero2, message_section(0, 3)],
+            [
+                contact_section(&profile)?,
+                zero2.clone(),
+                message_section(0, 3, TS_MS, 0),
+            ],
+        ),
+        (
+            27,
+            "ts=2^63",
+            [
+                contact_section(&profile)?,
+                zero2.clone(),
+                message_section(0, 1, TS_2_63, 0),
+            ],
+        ),
+        (
+            28,
+            "ts+1000*expire_after=2^63",
+            [
+                contact_section(&profile)?,
+                zero2,
+                message_section(0, 1, TS_2_63_LESS_1000, 1),
+            ],
         ),
     ])
 }
 
-/// Cases 16–19 and 21–26: the backup file and its rejects (ADR-053 item 6, Amendments 2 and 3). With `verify` the
+/// Cases 16–19 and 21–28: the backup file and its rejects (ADR-053 item 6, Amendments 2, 3 and 4). With `verify` the
 /// product also imports (case 16) or refuses (the rest) each file: one `PROFILE` Argon2id per check.
 pub(crate) fn backup_cases(verify: bool) -> Res<Vec<J>> {
     let b = Backup::draw();

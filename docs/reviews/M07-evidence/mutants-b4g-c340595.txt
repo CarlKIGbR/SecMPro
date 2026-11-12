@@ -1,0 +1,17 @@
+head c34059518e5900b858d133acd9b9e9a2edab343d
+git diff 840e72b073faa3bdb578f1a194c4de0df653c73e -- crates/secmp-client-core/src/hub.rs crates/secmp-client-core/src/contacts.rs crates/secmp-client-core/src/sessions/actor.rs > target/m7-b4g-mutants.diff
+timeout 7200 cargo mutants --no-shuffle -j 2 --output target/m7-b4g-mutants --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --file crates/secmp-client-core/src/hub.rs --file crates/secmp-client-core/src/contacts.rs --file crates/secmp-client-core/src/sessions/actor.rs --in-diff target/m7-b4g-mutants.diff --test-tool nextest --timeout 900 > target/m7-b4g-mutants.log 2>&1
+Found 11 mutants to test
+ok       Unmutated baseline in 106s build + 13s test
+caught   crates/secmp-client-core/src/contacts.rs:87:5: replace shown_name -> String with String::new() in 2s build + 4s test
+caught   crates/secmp-client-core/src/contacts.rs:87:5: replace shown_name -> String with "xyzzy".into() in 2s build + 9s test
+unviable crates/secmp-client-core/src/contacts.rs:98:5: replace contact_of -> Result<Contact, Error> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/hub.rs:320:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 4s build + 13s test
+caught   crates/secmp-client-core/src/hub.rs:336:50: replace == with != in Hub<C, S>::register_route in 3s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:595:9: replace Hub<C, S>::tick with () in 3s build + 16s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:887:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 0 in 4s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:887:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 1 in 2s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:909:17: delete match arm Owner::Control(c) in Conversation<O, P, S>::switch_send_queue in 4s build + 18s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:929:29: replace || with && in Conversation<O, P, S>::switch_send_queue in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:929:21: delete ! in Conversation<O, P, S>::switch_send_queue in 2s build + 30s test
+11 mutants tested in 18m: 10 caught, 1 unviable

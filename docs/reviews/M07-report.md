@@ -1721,3 +1721,36 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 - **ci-fast.** `docs/reviews/M07-evidence/ci-fast-b16-1-3391ee0.txt` (`ci-fast: PASS`, exit 0).
 - **Not changed.** `backup.rs` import keeps its `Unavailable` conversions of `ts_ms`/`expire_at` as defence in depth; a decoded body can no longer reach them (Q-B16-5). The live insert path `messages.rs` is unchanged (Q-B16-4).
 - **No new deviation.** D-B71 is not used.
+
+## B-4g (WEISUNG M7-B-4g; EXT-M7B-EXT2c; Q236–Q239, ADR-047 Amendment 12; modell=claude-sonnet-5-5)
+
+- **Commits.** START `840e72b`; `8f10096` fix(core) B20 (Q236, with the `mutants-accepted.md` re-pin); `e7a84dc` fix(core) APP2 (Q237); `c94767f` fix(core) B19 (Q238); `c340595` ci(mutants) CI6 (Q239); this docs commit; the ci-fast evidence commit.
+- **External review EXT2c.**
+
+```text
+| EXT2c | Astra | Internal | Status after B-4g |
+|---|---|---|---|
+| EXT2c-1 control row gone in the eviction window; restart loses content | BLOCKER | Major (known, OPEN-M7-B-12) | open — B17 (OPEN-M7-B-17) |
+| EXT2c-2 switch drops settled control content | BLOCKER | Major | closed — Q238, `c94767f`, SE-60/61/62 |
+| EXT2c-3 A → B → A registers a physical queue twice | BLOCKER | Blocker | closed — Q236, `8f10096`, SE-54…57, SE-63 |
+| EXT2c-4 mutation merge not tied to the inventory | BLOCKER | Major | closed — Q239, ADR-047 Am. 12, `c340595`, G7-22 |
+| EXT2c-5 ADR-054 item 5 not implemented | BLOCKER | Blocker | closed — Q237, `e7a84dc`, SE-58/59 |
+| EXT2c-6 guard without a bound | MAJOR | Major (known, OPEN-M7-B-17) | open — B17 |
+| EXT2c-7 first-plan failure leaves the guard | MAJOR | minor | open — OPEN-M7-B-19 (with B17) |
+| EXT2c-8 secretmem branch not asserted | MINOR | minor | open — OPEN-M7-B-20 |
+```
+
+  Adjudication: `EXT-M7B-EXT2c-adjudication` (reviewer, 2026-11-12), overall BLOCK at `ab3280b`; this unit closes EXT2c-2, -3, -4, -5.
+- **Red-first.** Evidence files in `docs/reviews/M07-evidence/`:
+  - `b4g-red-b20.txt`: edit `sed -i '336s#if self.send_targets#if false && self.send_targets#' hub.rs`; `2 passed; 3 failed`; `hub.rs:1474:13` `AddSend per register_route` left `[1, 1, 1]` right `[1, 1, 0]`; `hub.rs:1495:13` left `(1, 1)` right `(1, 0)`; `hub.rs:1582:13` `after a restart` left sixteen 9s, right sixteen 4s.
+  - `b4g-red-app2.txt`: edit `contacts.rs:103` `c.display_name.as_deref().map(shown_name)` → `c.display_name.clone()`; `1 passed; 1 failed`; `hub.rs:1550:13` left `[Some("A\u{85}B\n")]` right `[Some("")]`.
+  - `b4g-red-b19.txt`: edit `actor.rs:929` `(r, !e.done || stranded.contains(&r))` → `(r, !e.done)`; `3 passed; 2 failed`; `actor.rs:2859:9` `Q238: settled control content stranded on the old queue is planned again`; `tests.rs:2319:9` `Q225: the row is written again before a cell of the new attempt is sealed` left `0` right `1`.
+  - `b4g-red-ci6.txt`: three edits in `gates.rs` (2182, 2190, 2209); `6 passed; 4 failed`; `gates.rs:11313:9` (left `[]`, right the 23 empty-shard lines), `11337:9` (left `[]`), `11375:9` (left `[]`), `11424:9`.
+  - Green: B20 `5 passed`, `hub::` `12 passed`, APP2 `2 passed`, B19 `5 passed`, CI6 `10 passed`.
+- **Tests.** `secmp-client-core` lib `--test-threads=1`: `227 passed; 0 failed`. nextest of `secmp-client-core`: `227 tests run: 227 passed, 0 skipped`. `cargo test -p xtask`: `324 passed; 0 failed`. `cargo fmt --all -- --check`: no output. clippy: part of `ci-fast` (gate 2, PASS).
+- **List names.** `b4g-list-names.txt`: `listed 2, tested 2, total_mutants 2` / `names equal` (backup.rs `--in-diff` against the B16 outcomes); `listed 969` (`secmp-store`, whole package).
+- **Mutants.** `--in-diff` run, `docs/reviews/M07-evidence/mutants-b4g-c340595.txt`: 11 found; 10 caught; 0 missed; 1 unviable (`contact_of` → `Ok(Default::default())`); 0 timeout. No `docs/mutants-accepted.md` row added.
+- **ci-fast.** `ci-fast-b4g-1-c340595.txt` (`ci-fast: PASS`).
+- **D-B71 (B20, closed in C1).** The receive commit stores the routes of every `RouteUpdate`, including a stale one that Q236 does not register. The hub's skip branch writes the contact's current route back, so a restart registers the current queue (SE-63). A crash between the receive commit and that write leaves the stale route stored (a narrow window, OPEN-M7-B-12). A failed write-back fails the pump with `Unavailable`, as a failed store read there already does; the live registration is unchanged.
+- **D-B72 (B19 residual, recorded).** A settled `Control` (codes 1, 2) that is re-sent on the new queue can reach the peer twice if the peer also fetches the old copy. The peer then raises `ContactRemoved` or `ResetRequested` twice. As with the re-plan of unsettled content under Q222, `Control` has no `msg_id` to deduplicate. `KeyChange` (ADR-058) and `RouteUpdate` (Q222, Q236) repeats are no-ops. A stranded `KeyChange` copy on the old queue is not covered by the guard once the re-planned attempt leaves the new queue's window; a later rotation can reach the peer before that copy (freeze, fail closed). B17's truthful guard must also cover the old queue until it leaves overlap (OPEN-M7-B-17).
+- **D-CI9 (not yet proven on CI).** Amendment 12 has not run on GitHub in this unit. The next PR run shows all 24 shards recording an inventory and the merge passing on it.

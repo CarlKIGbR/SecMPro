@@ -1,4 +1,6 @@
-# Test-vector schema — revision 8 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`/`secmp-store`)
+# Test-vector schema — revision 9 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`/`secmp-store`)
+
+Revision 9 (2026-11-12, Weisungen REF-M7-store4 and M7-B16) adds the ADR-053 Amendment 4 rejects `store-0027` and `store-0028` to §4.12 (`store.json` is re-frozen with 28 cases; cases `store-0001`…`-0026` and the header are unchanged, its `"schema"` stays 8 and its `"spec"` stays "SecMP/1 rev 2.7"; Q235). The other twelve files are unchanged.
 
 Revision 8 (2026-11-11, Weisungen REF-M7-store, REF-M7-store3 and M7-VEC1) adds §4.12 `store` (ADR-053 items 1–6, Amendments 1–3; its case table is `SCHEMA-4.12-store.md`), the suite tag `store` (§3) and the `"schema": 8` shapes (§1). The M1–M5 files are unchanged.
 
@@ -231,7 +233,7 @@ The case shape, the constants, the obligations per op, the positive run, the com
 
 ### 4.12 `store` — the local-store constructions (ADR-053)
 
-The constants, obligations per op, stream layouts and the case table are in `SCHEMA-4.12-store.md` (decided by the reviewer for Weisungen REF-M7-store and REF-M7-store3; generated from `ref/secmp_ref/store_cases.py`).
+The constants, obligations per op, stream layouts and the case table are in `SCHEMA-4.12-store.md` (decided by the reviewer for Weisungen REF-M7-store, REF-M7-store3 and REF-M7-store4; generated from `ref/secmp_ref/store_cases.py`).
 
 ## 5. Later suites
 

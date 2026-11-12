@@ -20,4 +20,4 @@ compares the frozen files with `ref/` (`cargo xtask step ref-vectors`).
 Status (M1): `hkdf-labels`, `caead`, `msgencrypt`, `hybridkem-768`, `hybridkem-1024`, `hybridsign`, `fingerprint`,
 `sas` — 118 cases, identical between Rust and `ref/` on the first comparison, frozen 2026-09-28.
 
-Status (M7): `store` — 26 cases (ADR-053, spec rev 2.7), identical between Rust (`secmp-store` test `vector_gen::rust_store_vectors_equal_the_reference_file`) and `ref/`, frozen 2026-11-11 (WEISUNG M7-VEC1).
+Status (M7): `store` — 28 cases (ADR-053, spec rev 2.7), identical between Rust (`secmp-store` test `vector_gen::rust_store_vectors_equal_the_reference_file`) and `ref/`, frozen 2026-11-11 (WEISUNG M7-VEC1) and re-frozen 2026-11-12 with the Amendment 4 rejects store-0027/-0028 (SCHEMA rev 9, Q235, WEISUNG M7-B16).

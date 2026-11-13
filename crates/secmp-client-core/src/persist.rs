@@ -48,6 +48,9 @@ pub struct StorePersist {
     entries: Vec<(i64, EntryKey)>,
     next_ord: i64,
     counts: WriteCounts,
+    /// The routes each receive commit of this session wrote, oldest first, since the hub last took them: the stored body
+    /// holds only the last one (Q242).
+    routes: Vec<Zeroizing<Vec<u8>>>,
 }
 
 /// The key `hk ‖ n` of a skipped entry (spec §7.1): `hk` is a header key, so the key is a secret (CLAUDE.md §1.6) —
@@ -101,7 +104,13 @@ impl StorePersist {
             entries,
             next_ord,
             counts: WriteCounts::default(),
+            routes: Vec::new(),
         })
+    }
+
+    /// The routes the receive commits of this session wrote since the last call, in commit order (Q242).
+    pub fn take_routes(&mut self) -> Vec<Zeroizing<Vec<u8>>> {
+        core::mem::take(&mut self.routes)
     }
 
     /// The durable state of the session, in its parts (`None` before its first commit).
@@ -222,6 +231,10 @@ impl Persist for StorePersist {
                 write_parts(tx, session, parts)
             })
             .map_err(|_| PersistError)?;
+        }
+        // committed: the hub registers each in this order (Q242)
+        if let Some(routes) = parts.routes {
+            self.routes.push(Zeroizing::new(routes.to_vec()));
         }
         self.entries.retain(|(o, _)| !deleted.contains(o));
         // the keys of the inserted entries move out of `new_keys` (no copy of a key is made)
@@ -1137,6 +1150,40 @@ mod tests {
         assert!(f(s.has_message(6, &[7; 16]), "has")?);
         assert_eq!(f(s.expire_messages(now + 86_400_000 + 1), "expire")?, 1);
         assert!(!f(s.has_message(6, &[7; 16]), "has")?);
+        Ok(())
+    }
+
+    /// SE-82 (Q242): a receive commit whose transaction fails records no route for the hub — here its routes name no
+    /// contact row, so `put_contact_routes` refuses and the whole transaction rolls back (the push sits after it).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn failed_commit_records_no_route() -> R {
+        let dir = f(secmp_store::kat::TempDir::new("pc-routes"), "dir")?;
+        let store = shared(dir.path())?;
+        let (a, _, _, _) = pair(14)?;
+        let mut pa = f(StorePersist::open(Arc::clone(&store), 6), "persist")?;
+        let ratchet = f(RatchetParts::split(&f(a.to_bytes(), "a")?), "split")?;
+        let routes = b"routes";
+        let committed = pa.commit_parts(
+            PersistKind::Receive,
+            &CommitParts {
+                ratchet: &ratchet,
+                inbox: None,
+                trust: None,
+                block: None,
+                identity: None,
+                previous_identity: None,
+                delivered: &[],
+                receipted: &[],
+                routes: Some(routes),
+                clear_handshake: false,
+            },
+        );
+        assert!(committed.is_err(), "no contact row: the transaction fails");
+        assert!(
+            pa.take_routes().is_empty(),
+            "Q242: a failed commit records no route"
+        );
         Ok(())
     }
 

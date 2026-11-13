@@ -335,17 +335,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         let target = (self.config.relay, route.sid);
         if self.send_targets.values().any(|t| *t == target) {
             // the stored routes follow the live registration, so a restart registers the current queue (Q236, D-B71)
-            if let Some(current) = self.send_routes.get(&contact.0) {
-                let routes = secmp_proto::Encode::encode(&RouteUpdateBody {
-                    routes: vec![<RouteDescriptor as secmp_proto::Decode>::decode(current)?],
-                })?;
-                self.core
-                    .store
-                    .lock()
-                    .map_err(|_| Error::Unavailable)?
-                    .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &routes))?;
-            }
-            return Ok(());
+            return self.store_current_route(contact);
         }
         let queue = self.alloc_send();
         self.actions.push(Action::AddSend {
@@ -379,6 +369,22 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 .unwrap_or(OLD_SEND_MS);
             let until = self.core.clock.mono_ms().saturating_add(overlap);
             self.retiring_sends.push((until, old));
+        }
+        Ok(())
+    }
+
+    /// Write the route `contact`'s send queue was registered from back to its stored routes, so that a restart registers
+    /// the queue it sends to live (Q236, D-B71, Q242); a contact without a send registration keeps its stored routes.
+    fn store_current_route(&mut self, contact: ContactId) -> Result<(), Error> {
+        if let Some(current) = self.send_routes.get(&contact.0) {
+            let routes = secmp_proto::Encode::encode(&RouteUpdateBody {
+                routes: vec![<RouteDescriptor as secmp_proto::Decode>::decode(current)?],
+            })?;
+            self.core
+                .store
+                .lock()
+                .map_err(|_| Error::Unavailable)?
+                .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &routes))?;
         }
         Ok(())
     }
@@ -554,18 +560,24 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         for op in self.core.take_ops() {
             self.actions.push(Action::Control(op));
         }
-        let changed = core::mem::take(&mut self.core.routes_changed);
-        for contact in changed {
-            let routes = self
-                .core
-                .store
-                .lock()
-                .map_err(|_| Error::Unavailable)?
-                .contact_routes(contact.0)?;
-            let at = *self.core.index.get(&contact.0).ok_or(Error::Unavailable)?;
-            if let Some(bytes) = routes {
-                self.register_route(contact, at, &bytes)?;
+        // the routes of every `RouteUpdate` committed since the last pump, per contact in arrival order, not the stored body:
+        // that holds only the last of them, and a stale last one must not hide a newer one before it (Q242)
+        self.core.routes_changed.clear();
+        let contacts: Vec<(i64, usize)> = self.core.index.iter().map(|(c, i)| (*c, *i)).collect();
+        for (id, at) in contacts {
+            let Some(conversation) = self.core.convs.get_mut(at) else {
+                continue;
+            };
+            let routes = conversation.persist_mut().take_routes();
+            if routes.is_empty() {
+                continue;
             }
+            let contact = ContactId(id);
+            for bytes in &routes {
+                self.register_route(contact, at, bytes)?;
+            }
+            // the store ends on the route the contact sends to, whatever the order of the updates was (Q242, D-B71)
+            self.store_current_route(contact)?;
         }
         Ok(())
     }
@@ -1622,6 +1634,276 @@ mod tests {
                 .map(|(_, sid)| sid)
                 .collect();
             assert_eq!(sids, [[4_u8; 16]], "after a restart");
+            Ok(())
+        })
+    }
+
+    /// A scene after the first reply whose invitee then sent to A (`sid` 9) and B (`sid` 4), one pump each: B is its
+    /// current send queue, A is in send overlap. Also the invitee's fixture (for a restart) and its contact.
+    #[cfg(feature = "kat")]
+    fn on_b(label: &str, seed: u64) -> Result<(Scene, Fixture, ContactId), crate::testutil::E> {
+        let (host, guest) = (
+            party(&format!("{label}-h"), seed)?,
+            party(&format!("{label}-g"), seed.wrapping_add(2))?,
+        );
+        let mut sc = scene(host, &guest)?;
+        step_invite(&mut sc)?;
+        step_accept(&mut sc)?;
+        step_handshake(&mut sc)?;
+        step_reply(&mut sc)?;
+        let contact = sc.contact;
+        sc.invitee.take_actions();
+        for (n, now) in [(9_u8, 20), (4, 30)] {
+            send_route(&mut sc, n, ms(now))?;
+            sc.invitee.pump()?;
+            assert_eq!(sids(&mut sc.invitee), [[n; 16]], "the setup registers {n}");
+        }
+        Ok((sc, guest, contact))
+    }
+
+    /// The inviter sends a `RouteUpdate` of the relay queue `n` (period S80) in one cell at `now`, and the invitee's
+    /// receive commit takes it (its routes are stored); no pump.
+    #[cfg(feature = "kat")]
+    fn send_route(sc: &mut Scene, n: u8, now: u64) -> R {
+        let at = *sc.inviter.core.index.get(&1).ok_or("host index")?;
+        let routes = RouteUpdateBody::decode(&route_body(n, Period::S80)?)?.routes;
+        sc.inviter
+            .core
+            .convs
+            .get_mut(at)
+            .ok_or("host conversation")?
+            .queue_route_update(routes);
+        let cell = sc
+            .inviter
+            .prepare_cell(sc.host_send, now)
+            .map_err(|_| "prepare")?
+            .ok_or("cell")?;
+        let decided = sc.invitee.deliver(sc.reply_queue, 0, 1, &cell.cell);
+        assert_eq!(decided, Ok(Delivered::Committed), "route {n}");
+        Ok(())
+    }
+
+    /// The `sid`s of the `AddSend`s among the actions taken since the last call.
+    #[cfg(feature = "kat")]
+    fn sids(hub: &mut Hub<ManualClock, Fixed>) -> Vec<Id> {
+        add_sends(hub).into_iter().map(|(_, sid)| sid).collect()
+    }
+
+    /// The `sid` of the first relay-queue route stored for `contact`.
+    #[cfg(feature = "kat")]
+    fn stored_sid(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<Option<Id>, crate::testutil::E> {
+        let store = hub.profile_store();
+        let bytes = store
+            .lock()
+            .map_err(|_| "lock")?
+            .contact_routes(contact.0)?;
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        Ok(RouteUpdateBody::decode(&bytes)?
+            .routes
+            .iter()
+            .find_map(|r| match r {
+                RouteDescriptor::RelayQueue(q) => Some(q.sid),
+                RouteDescriptor::Unknown { .. } => None,
+            }))
+    }
+
+    /// The queue the `AddSend` of `sid` registered among `added`.
+    #[cfg(feature = "kat")]
+    fn queue_of(added: &[(QueueId, Id)], sid: u8) -> Option<QueueId> {
+        added.iter().find(|(_, s)| *s == [sid; 16]).map(|(q, _)| *q)
+    }
+
+    /// SE-77 (Q242, OPEN-M7-B-22): a new route C (`sid` 7) and then a stale A (in send overlap), received before one pump:
+    /// C is registered once and the contact sends to it, A registers nothing, and the store holds C.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn new_route_then_stale_one_in_one_pump_registers_the_new_one() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-ca", 105)?;
+            let b = sc.invitee.send_ids.get(&contact.0).copied();
+            send_route(&mut sc, 7, ms(40))?;
+            send_route(&mut sc, 9, ms(50))?;
+            sc.invitee.pump()?;
+            let added = add_sends(&mut sc.invitee);
+            let sids: Vec<Id> = added.iter().map(|(_, s)| *s).collect();
+            assert_eq!(sids, [[7_u8; 16]], "Q242: C once, A nothing");
+            let c = queue_of(&added, 7);
+            assert_eq!(sc.invitee.sends_of(contact), b.zip(c), "Q242: from B to C");
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([7; 16]),
+                "Q242: the store holds C"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-78 (Q242): the mirror order — the stale A first, then C, before one pump: C is registered once, A registers
+    /// nothing, and the store ends on C (A's write-back of B is overwritten).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn stale_route_then_new_one_in_one_pump_registers_the_new_one() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-ac", 107)?;
+            let b = sc.invitee.send_ids.get(&contact.0).copied();
+            send_route(&mut sc, 9, ms(40))?;
+            send_route(&mut sc, 7, ms(50))?;
+            sc.invitee.pump()?;
+            let added = add_sends(&mut sc.invitee);
+            let sids: Vec<Id> = added.iter().map(|(_, s)| *s).collect();
+            assert_eq!(sids, [[7_u8; 16]], "Q242: C once, A nothing");
+            assert_eq!(sc.invitee.sends_of(contact), b.zip(queue_of(&added, 7)));
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([7; 16]),
+                "Q242: the store ends on C"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-79 (Q242): C (`sid` 7), D (`sid` 5) and the stale A in one pump register C then D, in arrival order; the
+    /// contact sends to D, C is in send overlap, and the store holds D.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn three_routes_in_one_pump_register_in_arrival_order() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-cda", 109)?;
+            for (n, now) in [(7_u8, 40), (5, 50), (9, 60)] {
+                send_route(&mut sc, n, ms(now))?;
+            }
+            sc.invitee.pump()?;
+            let added = add_sends(&mut sc.invitee);
+            let sids: Vec<Id> = added.iter().map(|(_, s)| *s).collect();
+            assert_eq!(sids, [[7_u8; 16], [5; 16]], "Q242: C, then D");
+            assert_eq!(
+                sc.invitee.sends_of(contact),
+                queue_of(&added, 7).zip(queue_of(&added, 5)),
+                "Q242: from C to D"
+            );
+            assert_eq!(stored_sid(&sc.invitee, contact)?, Some([5; 16]));
+            Ok(())
+        })
+    }
+
+    /// SE-80 (Q242, negative control): one route per pump behaves as before — C registers once, then the stale A and a
+    /// byte-equal repeat of C register nothing (Q236, Q222); each pump raises one `RoutesChanged` and the store holds C.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn one_route_per_pump_registers_as_before() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-1pp", 111)?;
+            sc.invitee.core_mut().take_events();
+            let mut seen = Vec::new();
+            for (n, now) in [(7_u8, 40), (9, 50), (7, 60)] {
+                send_route(&mut sc, n, ms(now))?;
+                sc.invitee.pump()?;
+                let changed = sc
+                    .invitee
+                    .core_mut()
+                    .take_events()
+                    .iter()
+                    .filter(|e| e.event == crate::api::Event::RoutesChanged(contact))
+                    .count();
+                seen.push((
+                    sids(&mut sc.invitee).len(),
+                    changed,
+                    stored_sid(&sc.invitee, contact)?,
+                ));
+            }
+            let c = Some([7_u8; 16]);
+            assert_eq!(
+                seen,
+                [(1, 1, c), (0, 1, c), (0, 1, c)],
+                "(AddSend, RoutesChanged, stored) per pump"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-81 (Q242, D-B71): after C and the stale A in one pump, in either order, a restart (the profile opened again
+    /// from its files) registers C only.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_after_routes_in_one_pump_registers_the_new_one() -> R {
+        big(|| {
+            let mut after = Vec::new();
+            for (label, seed, order) in [("hub-rca", 113_u64, [7_u8, 9]), ("hub-rac", 117, [9, 7])]
+            {
+                let (mut sc, guest, _contact) = on_b(label, seed)?;
+                for (n, now) in order.into_iter().zip([40, 50]) {
+                    send_route(&mut sc, n, ms(now))?;
+                }
+                sc.invitee.pump()?;
+                drop(sc);
+                let guest = guest.reopen()?;
+                let mut again = hub_over(&guest, "guest", 900)?;
+                after.push(sids(&mut again));
+            }
+            assert_eq!(after, [[[7_u8; 16]], [[7; 16]]], "Q242: after a restart");
+            Ok(())
+        })
+    }
+
+    /// SE-83 (Q242): a pump without a new `RouteUpdate` registers nothing, also after the old queue's send overlap ended
+    /// (the routes already taken are not taken again: an old route replayed after its overlap would register it anew).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn pump_after_the_overlap_registers_nothing_again() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-again", 119)?;
+            sc.invitee.tick(ms(200_000));
+            sc.invitee.take_actions();
+            sc.invitee.pump()?;
+            assert_eq!(sids(&mut sc.invitee), Vec::<Id>::new(), "Q242: nothing new");
+            assert_eq!(stored_sid(&sc.invitee, contact)?, Some([4; 16]));
+            Ok(())
+        })
+    }
+
+    /// SE-84 (Q242): a second contact (conversation 1) of the same hub receives a new route C (`sid` 7): its own routes
+    /// register it, and the first contact's stored route stays B.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn second_contact_registers_its_own_routes() -> R {
+        big(|| {
+            let (mut sc, guest, first) = on_b("hub-two", 121)?;
+            // the first contact's overlaps end first, so the second scene's steps see only their own queues
+            sc.invitee.tick(ms(200_000));
+            let mut sc2 = scene(party("hub-two-h2", 125)?, &guest)?;
+            core::mem::swap(&mut sc2.invitee, &mut sc.invitee);
+            sc2.invitee.take_actions();
+            step_invite(&mut sc2)?;
+            step_accept(&mut sc2)?;
+            step_handshake(&mut sc2)?;
+            step_reply(&mut sc2)?;
+            let second = sc2.contact;
+            let at = sc2.invitee.core.index.get(&second.0).copied();
+            assert_eq!(
+                (first.0, second.0, at),
+                (1, 2, Some(1)),
+                "two conversations"
+            );
+            sc2.invitee.take_actions();
+            send_route(&mut sc2, 7, ms(40))?;
+            sc2.invitee.pump()?;
+            assert_eq!(
+                sids(&mut sc2.invitee),
+                [[7_u8; 16]],
+                "Q242: the second contact's C"
+            );
+            assert_eq!(
+                (
+                    stored_sid(&sc2.invitee, first)?,
+                    stored_sid(&sc2.invitee, second)?
+                ),
+                (Some([4; 16]), Some([7; 16]))
+            );
             Ok(())
         })
     }

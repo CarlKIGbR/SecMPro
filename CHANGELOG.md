@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 B17b-1 (EXT-M7B-EXT2c EXT2c-6, OPEN-M7-B-17; Q244–Q246, ADR-060 (4)–(6)): an identity rotation is no longer refused because a contact has not fetched the previous `KeyChange`; each contact's `KeyChange`s are sent in order, the next only once the previous one can no longer reach the peer, and `SuccessionPending` warns about a contact whose succession has been pending for 24 h or that has two pending.
 - M7 B22 (OPEN-M7-B-22; Q242): the hub registers every RouteUpdate received before a pump in arrival order, so a newer route followed by a stale one is no longer lost, and the stored route ends on the queue the contact sends to.
 - M7 B17a (EXT-M7B-EXT2c EXT2c-1, EXT2c-7; Q240, Q241, ADR-060): a `KeyChange` keeps its row until it has left the eviction window and no copy may wait on an old send queue (also one whose `SEND` ended without an answer), so the rotation guard survives a restart; a durable control content whose plan fails is kept and planned at the next preparation.
 - M7 B-4g (EXT-M7B-EXT2c; Q236–Q239, ADR-047 Amendment 12): one sender per physical send queue (a stale RouteUpdate naming a queue in send overlap registers nothing); a peer name with C0/DEL/C1 characters is shown as empty (ADR-054 item 5); a send-queue switch re-sends settled control content still among the old queue's last 128 cells; the mutation merge checks every shard against the `cargo mutants --list` inventory (non-empty, disjoint, complete).

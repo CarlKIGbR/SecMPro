@@ -909,7 +909,8 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
 
     fn rotate_identity(&mut self) -> Result<Response, Error> {
         // no second succession while a `KeyChange` is in flight (Q222, OPEN-M7-B-12): a re-sent older one would freeze the
-        // peer (ADR-058 covers only the repeat of the last accepted one)
+        // peer (ADR-058 covers only the repeat of the last accepted one); its row lives as long, so an open rebuilds this
+        // (Q240), and a row whose plan fails is kept and guarded (Q240, OPEN-M7-B-19)
         if self.index.values().any(|at| {
             self.convs
                 .get(*at)
@@ -930,6 +931,9 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             .zip(rotation.pending)
         {
             if let Some(conversation) = self.convs.get_mut(at) {
+                // a plan failure keeps the content and answers Ok (Q240); this `?` stops only at an encode error of the
+                // body, which the profile has just built (known, unchanged): every row is committed already and the
+                // next open plans the contacts after this one
                 conversation
                     .queue_pending(ord, crate::sessions::actor::PendingControl::KeyChange(body))
                     .map_err(|_| Error::Unavailable)?;
@@ -1872,6 +1876,97 @@ mod tests {
                 core.handle(Request::RotateIdentity)?,
                 Response::IdentityRotated(_)
             ));
+            Ok(())
+        })
+    }
+
+    /// The pending control rows of contact 1 in `host`'s store.
+    #[cfg(feature = "kat")]
+    fn control_rows(host: &crate::testutil::Fixture) -> Result<usize, E> {
+        Ok(host
+            .profile
+            .store()
+            .lock()
+            .map_err(|_| "lock")?
+            .pending_controls(1)?
+            .len())
+    }
+
+    /// SE-69 (Q240, EXT2c-1): a restart after the `KeyChange`'s last `OK_SEND` but inside its eviction window keeps the
+    /// rotation guard: the row is still there, and the core opened again refuses a second rotation (`Unavailable`, the
+    /// fingerprint unchanged).
+    #[cfg(feature = "kat")]
+    #[test]
+    fn restart_in_the_window_keeps_the_rotation_guard() -> R {
+        big(|| {
+            let w = world("api-kc-q240", 943)?;
+            let host = w.host;
+            drop((w.h, w.g, w.guest));
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(943))?;
+            let Response::IdentityRotated(fp1) = core.handle(Request::RotateIdentity)? else {
+                return Err("rotated".into());
+            };
+            let conv = core.convs.get_mut(0).ok_or("conversation")?;
+            for i in 0..4_u64 {
+                let p = conv.prepare_direct(ms(10 + i)).map_err(|_| "prepare")?;
+                conv.relayed_direct(p.token, 1 + i);
+            }
+            conv.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+            assert_eq!(
+                control_rows(&host)?,
+                1,
+                "Q240: the row outlives the last OK_SEND"
+            );
+            drop(core);
+            let mut again =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(944))?;
+            assert_eq!(
+                again.handle(Request::RotateIdentity).err(),
+                Some(Error::Unavailable),
+                "Q240: the guard holds across a restart"
+            );
+            assert_eq!(host.profile.fingerprint()?, fp1);
+            Ok(())
+        })
+    }
+
+    /// SE-70 (Q240): once the `KeyChange` has left its eviction window its row is gone; a restart then plans no
+    /// `KeyChange` (nothing is sent again) and a second rotation is taken, with exactly its own row.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn restart_after_the_window_resends_nothing_and_rotates() -> R {
+        big(|| {
+            let w = world("api-kc-q240b", 945)?;
+            let host = w.host;
+            drop((w.h, w.g, w.guest));
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(945))?;
+            core.handle(Request::RotateIdentity)?;
+            let conv = core.convs.get_mut(0).ok_or("conversation")?;
+            for i in 0..4_u64 {
+                let p = conv.prepare_direct(ms(10 + i)).map_err(|_| "prepare")?;
+                conv.relayed_direct(p.token, 1 + i);
+            }
+            let dummy = conv.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+            conv.relayed_direct(dummy.token, 261);
+            conv.prepare_direct(ms(21)).map_err(|_| "prepare")?;
+            assert_eq!(control_rows(&host)?, 0, "the row goes at the window's end");
+            drop(core);
+            let mut again =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(946))?;
+            assert!(
+                !again
+                    .convs
+                    .get(0)
+                    .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight),
+                "nothing is sent again"
+            );
+            assert!(matches!(
+                again.handle(Request::RotateIdentity)?,
+                Response::IdentityRotated(_)
+            ));
+            assert_eq!(control_rows(&host)?, 1);
             Ok(())
         })
     }

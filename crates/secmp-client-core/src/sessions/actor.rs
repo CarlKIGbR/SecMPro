@@ -169,6 +169,8 @@ struct ControlEntry {
     /// Made by [`Conversation::queue_pending`]: a plan after the row went writes the row again.
     durable: bool,
     attempt: u64,
+    /// How many cells its current attempt takes; 0: none planned (Q240: no randomness for the fragment `msg_id`) — the
+    /// entry stays and the next preparation plans it.
     total: u16,
     relayed: u16,
     /// Every cell of `attempt` has its `OK_SEND`: the row goes at the next preparation.
@@ -176,6 +178,26 @@ struct ControlEntry {
     /// Q224: superseded by a newer `RouteUpdate`: never planned again, its row is never written again; kept only until its
     /// row delete succeeded. A retired entry always has `ord.is_some()`; an entry whose row is gone is removed.
     retired: bool,
+    /// Q241 (D-B72): the cells of this `KeyChange` that may still wait on an old send queue (queue, cell id). Such a cell is
+    /// gone once a cell of that queue with an id at least `QUEUE_CAPACITY` higher has its `OK_SEND`, or once the queue is
+    /// lost.
+    stranded: Vec<(QueueId, u64)>,
+    /// Q241: the cells of this `KeyChange` whose `SEND` ended without an answer (queue, cell token): the relay may have
+    /// stored them under an id not known here. Such a mark becomes a stranded one with the id of the first `OK_SEND` on
+    /// that queue of a cell prepared after it.
+    unknown: Vec<(QueueId, u64)>,
+}
+
+impl ControlEntry {
+    /// Q241: a copy of this content may still wait on a queue it is no longer tracked on.
+    fn marked(&self) -> bool {
+        !self.stranded.is_empty() || !self.unknown.is_empty()
+    }
+}
+
+/// Q240: a `KeyChange` (row tag 3).
+fn is_key_change(row: &[u8]) -> bool {
+    row.first() == Some(&3)
 }
 
 /// A control content that is durable from the commit that makes its effect durable until the last cell's `OK_SEND`
@@ -529,11 +551,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.add_control(content, Some(ord))
     }
 
-    /// Whether a `KeyChange` of this conversation is live: planned, on the way, or relayed and still in the eviction
-    /// window of its cells (Q222, OPEN-M7-B-12).
+    /// Whether a `KeyChange` of this conversation is live: unplanned, planned, on the way, relayed and still in the eviction
+    /// window of its cells, or possibly stranded on an old send queue (Q222, Q240, Q241, OPEN-M7-B-12). Its durable row
+    /// lives as long, so an open rebuilds this from the rows.
     #[must_use]
     pub fn key_change_in_flight(&self) -> bool {
-        self.controls.values().any(|e| e.row.first() == Some(&3))
+        self.controls.values().any(|e| is_key_change(&e.row))
     }
 
     /// Keep `content` as a control content until its last `OK_SEND` and plan its first attempt (Q222 (1); spec §9.5,
@@ -560,6 +583,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 relayed: 0,
                 done: false,
                 retired: false,
+                stranded: Vec::new(),
+                unknown: Vec::new(),
             },
         );
         match self.plan_content(ControlRef { id, attempt: 0 }, content) {
@@ -569,11 +594,32 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 }
                 Ok(())
             }
+            Err(_) if ord.is_some() => {
+                // Q240 (OPEN-M7-B-19): a durable content stays without cells (`total` 0; a `KeyChange` keeps the guard)
+                // and is planned at the next preparation
+                Ok(())
+            }
             Err(e) => {
-                // a content that cannot be planned is not kept (its row, if any, is read again at the next open)
+                // an in-memory content that cannot be planned is not kept
                 self.controls.remove(&id);
                 Err(e)
             }
+        }
+    }
+
+    /// Q240: plan the current attempt of the entry `id` that has no planned cells.
+    fn plan_unplanned(&mut self, id: u64) {
+        let Some(entry) = self.controls.get(&id) else {
+            return;
+        };
+        let r = ControlRef {
+            id,
+            attempt: entry.attempt,
+        };
+        if let Ok(total) = PendingControl::decode(&entry.row).and_then(|c| self.plan_content(r, c))
+            && let Some(e) = self.controls.get_mut(&id)
+        {
+            e.total = total;
         }
     }
 
@@ -651,12 +697,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let content = PendingControl::decode(&entry.row);
         self.plan
             .retain(|p| !matches!(p.owner, Owner::Control(c) if c.id == r.id));
-        // a content that does not plan stays unplanned until the next open (its row is read again)
-        if let Ok(total) =
-            content.and_then(|c| self.plan_content(ControlRef { id: r.id, attempt }, c))
-            && let Some(e) = self.controls.get_mut(&r.id)
-        {
-            e.total = total;
+        // a content that does not plan is planned at the next preparation (Q240)
+        let planned = content.and_then(|c| self.plan_content(ControlRef { id: r.id, attempt }, c));
+        if let Some(e) = self.controls.get_mut(&r.id) {
+            match planned {
+                Ok(total) => e.total = total,
+                Err(_) => e.total = 0,
+            }
         }
     }
 
@@ -667,9 +714,32 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// attempt is in the eviction window; the row of a retired `RouteUpdate` (Q224) goes the same way, and the entry is
     /// dropped once its row is gone; the row of a newer `RouteUpdate` stays while a retired one still holds its row
     /// (Q230: a crash in between must not leave the older row alone).
+    ///
+    /// A `KeyChange` keeps its row and its entry until no copy can reach the peer any more (Q240, Q241): every cell of its
+    /// current attempt has its `OK_SEND`, none of them is in the eviction window, and no copy is stranded on an old send
+    /// queue. Its row then goes, and the entry with it — so a restart before that re-reads the row (one more copy, a no-op at
+    /// the peer, ADR-058), and a restart after it re-sends nothing.
     fn settle_controls(&mut self) {
+        let unplanned: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|(_, e)| e.total == 0 && !e.retired)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in unplanned {
+            self.plan_unplanned(id);
+        }
+        let by_cell = &self.by_cell;
+        let windowed = |id: u64, e: &ControlEntry| {
+            by_cell.values().any(
+                |s| matches!(s.owner, Owner::Control(c) if c.id == id && c.attempt == e.attempt),
+            )
+        };
+        let held =
+            |id: u64, e: &ControlEntry| is_key_change(&e.row) && (windowed(id, e) || e.marked());
         let retired_row = self.controls.values().any(|e| e.retired && e.ord.is_some());
-        for e in self.controls.values_mut() {
+        for (id, e) in &mut self.controls {
+            let id = *id;
             if !e.done && e.durable && e.ord.is_none() {
                 match self.persist.control_requeued(&e.row) {
                     Ok(Some(o)) => e.ord = Some(o),
@@ -679,23 +749,19 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     Err(_) => {}
                 }
             }
-            if (e.retired || (e.done && !(retired_row && e.row.first() == Some(&1))))
+            if (e.retired
+                || (e.done && !held(id, e) && !(retired_row && e.row.first() == Some(&1))))
                 && let Some(o) = e.ord
                 && self.persist.control_relayed(o).is_ok()
             {
                 e.ord = None;
             }
         }
-        let by_cell = &self.by_cell;
         self.controls.retain(|id, e| {
             if e.retired {
                 e.ord.is_some()
             } else {
-                !e.done
-                    || e.ord.is_some()
-                    || by_cell.values().any(|s| {
-                        matches!(s.owner, Owner::Control(c) if c.id == *id && c.attempt == e.attempt)
-                    })
+                !e.done || e.ord.is_some() || windowed(*id, e) || e.marked()
             }
         });
     }
@@ -884,7 +950,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// peer (ADR-058), a repeated `RouteUpdate` registers nothing there (Q222, Q236).
     /// Returns how many messages were requeued.
     pub fn switch_send_queue(&mut self, new: QueueId) -> usize {
-        if let Some(old) = self.send_queue.replace(new)
+        let previous = self.send_queue.replace(new);
+        if let Some(old) = previous
             && old != new
             && !self.overlap_send.contains(&old)
         {
@@ -910,6 +977,20 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 _ => None,
             })
             .collect();
+        // Q241 (D-B72): a `KeyChange` cell among the old queue's last QUEUE_CAPACITY cells may still be fetched from there
+        if let Some(old) = previous.filter(|old| *old != new) {
+            let cells: Vec<(u64, u64)> = self
+                .by_cell
+                .range(floor..)
+                .filter_map(|(cell_id, sent)| match sent.owner {
+                    Owner::Control(c) => Some((c.id, *cell_id)),
+                    _ => None,
+                })
+                .collect();
+            for (id, cell_id) in cells {
+                self.mark_stranded(id, old, cell_id);
+            }
+        }
         for id in &ids {
             self.outbox.requeue(id);
         }
@@ -938,7 +1019,73 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         ids.len()
     }
 
-    /// The old queue `queue` is no longer sent to.
+    /// Q241: the `KeyChange` entry `id` may have its cell `cell_id` waiting on the old send queue `queue`.
+    fn mark_stranded(&mut self, id: u64, queue: QueueId, cell_id: u64) {
+        if let Some(e) = self.controls.get_mut(&id)
+            && is_key_change(&e.row)
+        {
+            e.stranded.push((queue, cell_id));
+        }
+    }
+
+    /// `OK_SEND` of the cell `cell_id` on `queue`, a queue in send overlap (Q241): a `KeyChange` cell that was on the way
+    /// there at the switch is marked stranded; a stranded cell `QUEUE_CAPACITY` or more ids older has left that queue
+    /// (fetched or evicted, spec §9.5).
+    fn on_overlap_relayed(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
+        if let Some(Sent {
+            owner: Owner::Control(c),
+            ..
+        }) = self.inflight.remove(&token.0)
+        {
+            self.mark_stranded(c.id, queue, cell_id);
+        }
+        self.count_stranded(queue, token, cell_id);
+    }
+
+    /// An `OK_SEND` of `cell_id` for the cell of `token` on `queue` (Q241): a cell of unknown outcome (see
+    /// [`Conversation::on_unknown_send`]) prepared before this one takes this id — it was written to `queue` earlier, and
+    /// the relay numbers a queue's cells in the order they arrive, so if it was stored it has a lower one (an answer to a
+    /// cell prepared before it, handed over after the failure, names no id for it); a mark `QUEUE_CAPACITY` or more ids
+    /// older has left the queue (fetched or evicted, spec §9.5).
+    fn count_stranded(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
+        let capacity = u64::try_from(secmp_proto::link::QUEUE_CAPACITY).unwrap_or(u64::MAX);
+        for e in self.controls.values_mut() {
+            let before = e.unknown.len();
+            e.unknown.retain(|(q, t)| *q != queue || *t >= token.0);
+            if e.unknown.len() < before {
+                e.stranded.push((queue, cell_id));
+            }
+            e.stranded
+                .retain(|(q, stranded)| *q != queue || cell_id < stranded.saturating_add(capacity));
+        }
+    }
+
+    /// The `SEND` of `token` on `queue` ended without an answer (`SendFailure::Unknown`: the link went down first): the
+    /// relay may have stored the cell under an id not known here, so a `KeyChange` cell is marked on `queue` until an
+    /// `OK_SEND` there of a cell prepared after it names an id for it (Q241).
+    fn on_unknown_send(&mut self, queue: QueueId, token: CellToken) {
+        if let Some(Sent {
+            owner: Owner::Control(c),
+            ..
+        }) = self.inflight.get(&token.0)
+            && let Some(e) = self.controls.get_mut(&c.id)
+            && is_key_change(&e.row)
+        {
+            e.unknown.push((queue, token.0));
+        }
+    }
+
+    /// The queue `queue` (in send overlap, or the current one) is gone at the relay (`ERR_NOQUEUE`): no copy waits there
+    /// any more (Q241).
+    fn on_overlap_lost(&mut self, queue: QueueId) {
+        for e in self.controls.values_mut() {
+            e.stranded.retain(|(q, _)| *q != queue);
+            e.unknown.retain(|(q, _)| *q != queue);
+        }
+    }
+
+    /// The old queue `queue` is no longer sent to. A `KeyChange` copy marked stranded there stays marked (Q241): nothing
+    /// shows that it has left the queue.
     pub fn drop_send_queue(&mut self, queue: QueueId) {
         self.overlap_send.retain(|q| *q != queue);
     }
@@ -1436,6 +1583,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         // an evicted id is always among the newest `QUEUE_CAPACITY`: older entries are dead weight
         let floor = cell_id.saturating_sub(256);
         self.by_cell = self.by_cell.split_off(&floor);
+        if let Some(queue) = self.send_queue {
+            self.count_stranded(queue, token, cell_id);
+        }
     }
 
     fn on_evicted(&mut self, cell_id: u64) {
@@ -1891,7 +2041,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
         if let Some(c) = self.by_send(queue) {
             c.on_relayed(token, cell_id);
         } else if let Some(c) = self.by_overlap_send(queue) {
-            c.inflight.remove(&token.0);
+            c.on_overlap_relayed(queue, token, cell_id);
         }
     }
 
@@ -1901,10 +2051,17 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
         }
     }
 
-    fn send_failed(&mut self, queue: QueueId, token: CellToken, _why: SendFailure) {
+    fn send_failed(&mut self, queue: QueueId, token: CellToken, why: SendFailure) {
+        let unknown = matches!(why, SendFailure::Unknown);
         if let Some(c) = self.by_send(queue) {
+            if unknown {
+                c.on_unknown_send(queue, token);
+            }
             c.on_failed(token);
         } else if let Some(c) = self.by_overlap_send(queue) {
+            if unknown {
+                c.on_unknown_send(queue, token);
+            }
             c.inflight.remove(&token.0);
         }
     }
@@ -1920,6 +2077,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
     fn queue_lost(&mut self, queue: QueueId) {
         if let Some(c) = self.by_send(queue) {
             c.on_lost();
+            c.on_overlap_lost(queue);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.on_overlap_lost(queue);
         }
     }
 

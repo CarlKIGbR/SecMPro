@@ -1058,11 +1058,16 @@ fn pending_control_content_survives_restart() -> R {
                 h.relayed_direct(p.token, cell_id);
                 deliver(&mut g, &p.cell)?;
             }
-            next(&mut h, ms(seed.saturating_mul(10).saturating_add(6)))?;
+            // Q240: a `KeyChange`'s row lives until its cells have left the eviction window (6 + 257)
+            let p = h
+                .prepare_direct(ms(seed.saturating_mul(10).saturating_add(6)))
+                .map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 263);
+            next(&mut h, ms(seed.saturating_mul(10).saturating_add(7)))?;
             assert_eq!(
                 pending(&store)?,
                 0,
-                "the last cell's OK_SEND took the row (Q222)"
+                "the last cell's OK_SEND took the row (Q222, Q240)"
             );
             Ok(g.take_events())
         };
@@ -2287,9 +2292,9 @@ fn extb2_key_change_survives_last_seal_before_write_restart() -> R {
     })
 }
 
-/// SE-62 (Q238, EXT2c-2; Q225, ADR-058): a `KeyChange` whose four cells all had their `OK_SEND` on the old queue (row
-/// gone, guard still set) is planned again by a send-queue switch: its row is written again before any cell of the new
-/// attempt is sealed, the guard stays set, the new copy reaches the peer (`KeyChanged`), and the stranded old copy
+/// SE-62 (Q238, EXT2c-2; Q240, ADR-058): a `KeyChange` whose four cells all had their `OK_SEND` on the old queue (row
+/// kept in the eviction window, guard set) is planned again by a send-queue switch: its row is present before any cell
+/// of the new attempt is sealed, the guard stays set, the new copy reaches the peer (`KeyChanged`), and the stranded old copy
 /// that the peer fetches later is a no-op there (not frozen, no event).
 #[cfg(feature = "kat")]
 #[test]
@@ -2311,15 +2316,15 @@ fn switch_resends_settled_key_change() -> R {
         next(&mut h, ms(110))?;
         assert_eq!(
             control_rows(&store)?,
-            0,
-            "the row went after the last OK_SEND"
+            1,
+            "Q240: the row lives while a cell is in the eviction window"
         );
         assert!(h.key_change_in_flight());
         h.switch_send_queue(QueueId(9));
         assert_eq!(
             control_rows(&store)?,
             1,
-            "Q225: the row is written again before a cell of the new attempt is sealed"
+            "Q240: the row is present before a cell of the new attempt is sealed"
         );
         assert!(h.key_change_in_flight(), "the guard stays set");
         for i in 0..total {
@@ -2337,6 +2342,826 @@ fn switch_resends_settled_key_change() -> R {
             "ADR-058: the stranded copy is a no-op"
         );
         assert_eq!(g.trust(), Trust::KeyChanged, "not frozen");
+        Ok(())
+    })
+}
+
+/// The number of cells of a `KeyChange` (type byte + body, §7.6).
+#[cfg(feature = "kat")]
+fn key_change_cells() -> Result<u64, E> {
+    Ok(u64::try_from(secmp_proto::tr::content::chunk_total(
+        1 + 5390,
+    ))?)
+}
+
+/// SE-64 (Q240, EXT2c-1, OPEN-M7-B-12; ADR-058): the row of a `KeyChange` outlives its last `OK_SEND` until no cell of
+/// its attempt is in the eviction window. A restart inside the window rebuilds the guard from the row and sends the
+/// `KeyChange` once more, a no-op at the peer (no event, not frozen); the row goes once the window has passed (cell id
+/// 4 + 2·4 + 256 + 1 = the first `OK_SEND` past it), and a restart after that sends nothing again.
+#[cfg(feature = "kat")]
+#[test]
+fn key_change_row_lives_until_its_window_passes() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_host("q240-restart", 681)?;
+        let store = host.profile.store();
+        let total = key_change_cells()?;
+        for i in 0..total {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert!(matches!(
+            g.take_events().as_slice(),
+            [SessionEvent::KeyChanged(_)]
+        ));
+        next(&mut h, ms(110))?;
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "Q240: the row lives while a cell is in the eviction window"
+        );
+        drop(h);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(682)), T0)?;
+        assert!(
+            h.key_change_in_flight(),
+            "the guard comes back from the row"
+        );
+        for i in 0..total {
+            let p = h.prepare_direct(ms(200 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, total + 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert!(g.take_events().is_empty(), "ADR-058: the repeat is a no-op");
+        assert_eq!(g.trust(), Trust::KeyChanged, "not frozen");
+        let last = 2 * total;
+        let p = h.prepare_direct(ms(210)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, last + 256);
+        next(&mut h, ms(211))?;
+        assert_eq!(control_rows(&store)?, 1, "still in the window");
+        assert!(h.key_change_in_flight());
+        let p = h.prepare_direct(ms(212)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, last + 257);
+        next(&mut h, ms(213))?;
+        assert_eq!(control_rows(&store)?, 0, "the row goes at the window's end");
+        assert!(!h.key_change_in_flight());
+        drop(h);
+        let h = open_conversation(&store, ContactId(1), Fixed(entropy(683)), T0)?;
+        assert!(!h.key_change_in_flight(), "nothing is sent again");
+        Ok(())
+    })
+}
+
+/// SE-65 (Q240, OPEN-M7-B-19, EXT2c-7): a durable `KeyChange` whose first plan fails (no randomness for the fragment
+/// `msg_id`) is kept and guarded; the next preparation plans it and it reaches the peer. An in-memory one (test kit) is
+/// refused and not kept, as before.
+#[cfg(feature = "kat")]
+#[test]
+fn failed_first_plan_keeps_the_key_change_guarded() -> R {
+    use secmp_proto::prekeys::IdentityKeys;
+    use secmp_proto::tr::FixedEntropy;
+    use secmp_proto::tr::content::key_change_body;
+
+    big(|| {
+        let mut w = established("q240-plan", 684)?;
+        let store = w.host.profile.store();
+        let new = IdentityKeys::generate(&mut entropy(685))?;
+        let body = key_change_body(&w.host.profile.signing_key()?, new.public())?;
+        let (ord, content) = pend(&store, &actor::PendingControl::KeyChange(body.clone()))?;
+        *w.h.source_mut() = Fixed(FixedEntropy::new(&[]));
+        assert!(
+            w.h.queue_key_change(body.clone()).is_err(),
+            "an in-memory content whose plan fails is refused"
+        );
+        assert!(!w.h.key_change_in_flight(), "and not kept");
+        let queued = w.h.queue_pending(ord, content);
+        assert!(
+            queued.is_ok(),
+            "Q240: a durable content whose plan fails is kept"
+        );
+        assert!(w.h.key_change_in_flight(), "Q240: and guarded");
+        *w.h.source_mut() = Fixed(entropy(686));
+        for i in 0..key_change_cells()? {
+            deliver(&mut w.g, &next(&mut w.h, ms(300 + i))?)?;
+        }
+        assert!(
+            matches!(w.g.take_events().as_slice(), [SessionEvent::KeyChanged(_)]),
+            "planned at the next preparation"
+        );
+        assert_eq!(control_rows(&store)?, 1);
+        Ok(())
+    })
+}
+
+/// SE-66 (Q240, Q238): after a send-queue switch the new attempt's last `OK_SEND` does not delete the row while its cells
+/// are in the new queue's window; a restart then rebuilds the guard from the row.
+#[cfg(feature = "kat")]
+#[test]
+fn switch_then_restart_keeps_the_key_change_guarded() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_host("q240-switch", 687)?;
+        let store = host.profile.store();
+        let total = key_change_cells()?;
+        for i in 0..total {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+        }
+        h.switch_send_queue(QueueId(9));
+        for i in 0..total {
+            let p = h.prepare_direct(ms(200 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert!(matches!(
+            g.take_events().as_slice(),
+            [SessionEvent::KeyChanged(_)]
+        ));
+        next(&mut h, ms(210))?;
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "Q240: the row lives after the new queue's last OK_SEND"
+        );
+        drop(h);
+        let h = open_conversation(&store, ContactId(1), Fixed(entropy(688)), T0)?;
+        assert!(
+            h.key_change_in_flight(),
+            "the guard comes back from the row"
+        );
+        Ok(())
+    })
+}
+
+/// One cell of `queue` from `convs`, with its `OK_SEND` as cell `cell_id`.
+#[cfg(feature = "kat")]
+fn send_on(
+    convs: &mut actor::Conversations<StoreOutbox, StorePersist, Fixed>,
+    queue: crate::scheduler::types::QueueId,
+    now_ms: u64,
+    cell_id: u64,
+) -> Result<Cell, E> {
+    use crate::scheduler::types::CellSource as _;
+
+    let p = convs
+        .prepare_cell(queue, now_ms)
+        .map_err(|_| "prepare")?
+        .ok_or("no cell")?;
+    convs.relayed(queue, p.token, cell_id);
+    Ok(p.cell)
+}
+
+/// SE-67 (Q241, D-B72): a `KeyChange` copy among the old queue's last `QUEUE_CAPACITY` cells at a switch keeps the guard
+/// and the row after the new attempt has left the new queue's window, until an `OK_SEND` on the old queue names a cell id
+/// `QUEUE_CAPACITY` above the copy's newest cell (4 + 128 = 132; 131 is not enough).
+#[cfg(feature = "kat")]
+#[test]
+fn stranded_key_change_holds_until_the_old_queue_window_passes() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-strand", 689)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, old, ms(100 + i), 1 + i)?;
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(200 + i), 1 + i)?;
+        }
+        send_on(&mut convs, new, ms(210), total + 257)?;
+        send_on(&mut convs, new, ms(211), total + 258)?;
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        assert!(live(&convs), "Q241: the old queue may still hold a copy");
+        assert_eq!(control_rows(&store)?, 1);
+        send_on(&mut convs, old, ms(212), total + 1)?;
+        assert!(
+            live(&convs),
+            "an old-queue cell inside the count releases nothing"
+        );
+        send_on(&mut convs, old, ms(212), total + 127)?;
+        send_on(&mut convs, new, ms(213), total + 259)?;
+        assert!(live(&convs), "127 later cells are not enough");
+        send_on(&mut convs, old, ms(214), total + 128)?;
+        send_on(&mut convs, new, ms(215), total + 260)?;
+        assert!(!live(&convs), "the copy has left the old queue");
+        assert_eq!(control_rows(&store)?, 0);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-68 (Q241): the old queue lost at the relay (`ERR_NOQUEUE`) holds no copy any more: a stranded `KeyChange` stops
+/// holding the guard and its row goes.
+#[cfg(feature = "kat")]
+#[test]
+fn lost_old_queue_releases_a_stranded_key_change() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId};
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-lost", 691)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, old, ms(100 + i), 1 + i)?;
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(200 + i), 1 + i)?;
+        }
+        send_on(&mut convs, new, ms(210), total + 257)?;
+        send_on(&mut convs, new, ms(211), total + 258)?;
+        assert!(
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        );
+        convs.queue_lost(old);
+        send_on(&mut convs, new, ms(212), total + 259)?;
+        assert!(
+            !convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight),
+            "no copy waits on a lost queue"
+        );
+        assert_eq!(control_rows(&store)?, 0);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-71 (Q241): the sender ending its overlap (`drop_send_queue`) does not clear a stranded mark — nothing shows that
+/// the copy has left the old queue.
+#[cfg(feature = "kat")]
+#[test]
+fn end_of_overlap_keeps_a_stranded_key_change() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-drop", 693)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, old, ms(100 + i), 1 + i)?;
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(200 + i), 1 + i)?;
+        }
+        send_on(&mut convs, new, ms(210), total + 257)?;
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .drop_send_queue(old);
+        send_on(&mut convs, new, ms(211), total + 258)?;
+        assert!(
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight),
+            "Q241: the end of the overlap proves nothing"
+        );
+        assert_eq!(control_rows(&store)?, 1);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-72 (Q241): a `KeyChange` cell on its way to the old queue at the switch is marked stranded at its `OK_SEND` there
+/// (cell id 4): the old-queue `OK_SEND` of id 131 releases the cells 1–3 but not it; 132 does.
+#[cfg(feature = "kat")]
+#[test]
+fn in_flight_key_change_at_the_switch_is_held() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId};
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-flight", 695)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 1..total {
+            send_on(&mut convs, old, ms(100 + i), i)?;
+        }
+        let last = convs
+            .prepare_cell(old, ms(110))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(200 + i), 1 + i)?;
+        }
+        convs.relayed(old, last.token, total);
+        send_on(&mut convs, new, ms(210), total + 257)?;
+        send_on(&mut convs, new, ms(211), total + 258)?;
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        assert!(
+            live(&convs),
+            "Q241: the in-flight copy is held from its OK_SEND"
+        );
+        send_on(&mut convs, old, ms(212), total + 127)?;
+        send_on(&mut convs, new, ms(213), total + 259)?;
+        assert!(live(&convs), "131 releases the cells 1-3, not cell 4");
+        send_on(&mut convs, old, ms(214), total + 128)?;
+        send_on(&mut convs, new, ms(215), total + 260)?;
+        assert!(!live(&convs));
+        assert_eq!(control_rows(&store)?, 0);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-73 (Q241): two switches in a row keep the marks of both old queues; each goes only with its own queue's count.
+#[cfg(feature = "kat")]
+#[test]
+fn two_switches_keep_both_stranded_marks() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-two", 697)?;
+        let store = host.profile.store();
+        let (qa, qb, qc) = (QueueId(1), QueueId(9), QueueId(10));
+        h.bind(qa, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, qa, ms(100 + i), 1 + i)?;
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(qb);
+        for i in 0..total {
+            send_on(&mut convs, qb, ms(200 + i), 1 + i)?;
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(qc);
+        for i in 0..total {
+            send_on(&mut convs, qc, ms(300 + i), 1 + i)?;
+        }
+        send_on(&mut convs, qc, ms(310), total + 257)?;
+        send_on(&mut convs, qc, ms(311), total + 258)?;
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        assert!(live(&convs));
+        send_on(&mut convs, qb, ms(312), total + 128)?;
+        send_on(&mut convs, qc, ms(313), total + 259)?;
+        assert!(
+            live(&convs),
+            "Q241: the first old queue still holds its mark"
+        );
+        send_on(&mut convs, qa, ms(314), total + 128)?;
+        send_on(&mut convs, qc, ms(315), total + 260)?;
+        assert!(!live(&convs));
+        assert_eq!(control_rows(&store)?, 0);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-74 (Q240, OPEN-M7-B-19): a durable `KeyChange` whose re-plan after an eviction fails (no randomness) stays
+/// unplanned and guarded, and the next preparation plans it again.
+#[cfg(feature = "kat")]
+#[test]
+fn failed_replan_is_planned_at_the_next_preparation() -> R {
+    use secmp_proto::tr::FixedEntropy;
+
+    big(|| {
+        let (_host, mut h, mut g) = rotated_host("q240-replan", 699)?;
+        let total = key_change_cells()?;
+        for i in 0..total {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+        }
+        *h.source_mut() = Fixed(FixedEntropy::new(&[]));
+        h.evicted_direct(2);
+        assert!(h.key_change_in_flight());
+        *h.source_mut() = Fixed(entropy(700));
+        for i in 0..total {
+            deliver(&mut g, &next(&mut h, ms(200 + i))?)?;
+        }
+        assert!(
+            matches!(g.take_events().as_slice(), [SessionEvent::KeyChanged(_)]),
+            "Q240: a failed re-plan is planned at the next preparation"
+        );
+        Ok(())
+    })
+}
+
+/// SE-75 (Q241): a `KeyChange` cell whose `SEND` ends without an answer (`SendFailure::Unknown`: the link went down) may
+/// still have been stored: it is marked and takes the id of the next `OK_SEND` on that queue of a cell prepared after it.
+/// Reported on the old queue after the switch, on the current queue just before it, or before the late answer of the
+/// cell prepared just before it (id 3, which names no id for it), the mark takes 5 and holds the guard until the old
+/// queue's id 133 (132 releases the cells 1–3 only). With all four cells of unknown outcome, those marks alone hold the
+/// guard, also through the loss of the new queue, after the new attempt has left its window; they take the id of the next
+/// old-queue `OK_SEND` (1) and go at 129.
+/// Reported on the current queue without a switch, it takes the id of the re-sent attempt's first `OK_SEND` (4), and the
+/// guard lifts with that attempt's window.
+#[cfg(feature = "kat")]
+#[test]
+fn unknown_send_at_the_switch_is_held() -> R {
+    big(|| {
+        for (before, late, label, seed) in [
+            (false, false, "q241-unknown", 701),
+            (true, false, "q241-unknown-before", 705),
+            (false, true, "q241-unknown-late", 709),
+        ] {
+            unknown_send_of_the_last_cell(before, late, label, seed)?;
+        }
+        unknown_send_of_every_cell()?;
+        unknown_send_on_the_current_queue()?;
+        unknown_send_on_both_queues(false)?;
+        unknown_send_on_both_queues(true)?;
+        unknown_send_then_lost_or_rate()
+    })
+}
+
+/// `a + b` for the SE-75 helpers (outside a `#[test]` function, arithmetic must not overflow).
+#[cfg(feature = "kat")]
+const fn add(a: u64, b: u64) -> u64 {
+    a.saturating_add(b)
+}
+
+/// SE-75: the last cell of the `KeyChange` (4) ends with `SendFailure::Unknown` on the queue that is (`before`) or was the
+/// current one at the switch; with `late`, the answer of cell 3 (id 3) is handed over after that failure.
+#[cfg(feature = "kat")]
+fn unknown_send_of_the_last_cell(before: bool, late: bool, label: &str, seed: u64) -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+
+    let (host, mut h, g) = rotated_host(label, seed)?;
+    let store = host.profile.store();
+    let (old, new) = (QueueId(1), QueueId(9));
+    h.bind(old, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    let sent = if late { total.saturating_sub(1) } else { total };
+    for i in 1..sent {
+        send_on(&mut convs, old, ms(add(100, i)), i)?;
+    }
+    let third = if late {
+        convs.prepare_cell(old, ms(109)).map_err(|_| "prepare")?
+    } else {
+        None
+    };
+    let last = convs
+        .prepare_cell(old, ms(110))
+        .map_err(|_| "prepare")?
+        .ok_or("no cell")?;
+    if before {
+        convs.send_failed(old, last.token, SendFailure::Unknown);
+    }
+    convs
+        .get_mut(at)
+        .ok_or("conversation")?
+        .switch_send_queue(new);
+    if !before {
+        convs.send_failed(old, last.token, SendFailure::Unknown);
+    }
+    if let Some(third) = third {
+        convs.relayed(old, third.token, total.saturating_sub(1));
+    }
+    for i in 0..total {
+        send_on(&mut convs, new, ms(add(200, i)), add(1, i))?;
+    }
+    send_on(&mut convs, old, ms(209), add(total, 1))?;
+    send_on(&mut convs, new, ms(210), add(total, 257))?;
+    send_on(&mut convs, new, ms(211), add(total, 258))?;
+    let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+        convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight)
+    };
+    assert!(live(&convs), "Q241: a copy of unknown outcome is held");
+    send_on(&mut convs, old, ms(212), add(total, 128))?;
+    send_on(&mut convs, new, ms(213), add(total, 259))?;
+    assert!(
+        live(&convs),
+        "132 releases the cells 1-3, not the unknown one (before the switch: {before}, late answer: {late})"
+    );
+    send_on(&mut convs, old, ms(214), add(total, 129))?;
+    send_on(&mut convs, new, ms(215), add(total, 260))?;
+    assert!(!live(&convs));
+    assert_eq!(control_rows(&store)?, 0);
+    drop(g);
+    Ok(())
+}
+
+/// SE-75: every cell of the `KeyChange` ends with `SendFailure::Unknown` on the old queue, and the new queue is lost once.
+#[cfg(feature = "kat")]
+fn unknown_send_of_every_cell() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+
+    let (host, mut h, g) = rotated_host("q241-unknown-all", 711)?;
+    let store = host.profile.store();
+    let (old, new) = (QueueId(1), QueueId(9));
+    h.bind(old, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    let mut tokens = Vec::new();
+    for i in 0..total {
+        let p = convs
+            .prepare_cell(old, ms(add(100, i)))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+        tokens.push(p.token);
+    }
+    convs
+        .get_mut(at)
+        .ok_or("conversation")?
+        .switch_send_queue(new);
+    for token in tokens {
+        convs.send_failed(old, token, SendFailure::Unknown);
+    }
+    for i in 0..total {
+        send_on(&mut convs, new, ms(add(200, i)), add(1, i))?;
+    }
+    convs.queue_lost(new);
+    for i in 0..total {
+        send_on(&mut convs, new, ms(add(205, i)), add(1, i))?;
+    }
+    send_on(&mut convs, new, ms(210), add(total, 257))?;
+    send_on(&mut convs, new, ms(211), add(total, 258))?;
+    let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+        convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight)
+    };
+    assert!(
+        live(&convs),
+        "Q241: the marks of unknown outcome hold alone"
+    );
+    send_on(&mut convs, old, ms(212), 1)?;
+    send_on(&mut convs, old, ms(213), 128)?;
+    send_on(&mut convs, new, ms(214), add(total, 259))?;
+    assert!(live(&convs), "128 is not enough for the id 1");
+    send_on(&mut convs, old, ms(215), 129)?;
+    send_on(&mut convs, new, ms(216), add(total, 260))?;
+    assert!(!live(&convs));
+    assert_eq!(control_rows(&store)?, 0);
+    drop(g);
+    Ok(())
+}
+
+/// SE-75: the last cell ends with `SendFailure::Unknown` on the current queue, without a switch.
+#[cfg(feature = "kat")]
+fn unknown_send_on_the_current_queue() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+
+    let (host, mut h, g) = rotated_host("q241-unknown-current", 707)?;
+    let store = host.profile.store();
+    let queue = QueueId(1);
+    h.bind(queue, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    for i in 1..total {
+        send_on(&mut convs, queue, ms(add(100, i)), i)?;
+    }
+    let last = convs
+        .prepare_cell(queue, ms(110))
+        .map_err(|_| "prepare")?
+        .ok_or("no cell")?;
+    convs.send_failed(queue, last.token, SendFailure::Unknown);
+    for i in 0..total {
+        send_on(&mut convs, queue, ms(add(200, i)), add(total, i))?;
+    }
+    send_on(&mut convs, queue, ms(210), add(add(total, total), 256))?;
+    send_on(&mut convs, queue, ms(211), add(add(total, total), 257))?;
+    assert!(
+        !convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight),
+        "Q241: the next OK_SEND on the current queue names the unknown cell"
+    );
+    assert_eq!(control_rows(&store)?, 0);
+    drop(g);
+    Ok(())
+}
+
+/// SE-75: cell 4 ends with `SendFailure::Unknown` on the old queue after the switch, then the first cell of the new
+/// attempt ends so on the new queue: each queue keeps its own mark (the old one takes 5, the new one 1), and the new
+/// mark resolved and gone does not take the old one with it.
+#[cfg(feature = "kat")]
+fn unknown_send_on_both_queues(new_first: bool) -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+
+    let (host, mut h, g) = rotated_host(
+        if new_first {
+            "q241-unknown-both-new-first"
+        } else {
+            "q241-unknown-both"
+        },
+        713,
+    )?;
+    let store = host.profile.store();
+    let (old, new) = (QueueId(1), QueueId(9));
+    h.bind(old, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    for i in 1..total {
+        send_on(&mut convs, old, ms(add(100, i)), i)?;
+    }
+    let last = convs
+        .prepare_cell(old, ms(110))
+        .map_err(|_| "prepare")?
+        .ok_or("no cell")?;
+    convs
+        .get_mut(at)
+        .ok_or("conversation")?
+        .switch_send_queue(new);
+    let first = convs
+        .prepare_cell(new, ms(200))
+        .map_err(|_| "prepare")?
+        .ok_or("no cell")?;
+    // the two links fail in either order; each failure keeps its own mark
+    if new_first {
+        convs.send_failed(new, first.token, SendFailure::Unknown);
+    }
+    convs.send_failed(old, last.token, SendFailure::Unknown);
+    if !new_first {
+        convs.send_failed(new, first.token, SendFailure::Unknown);
+    }
+    send_on(&mut convs, old, ms(201), add(total, 1))?;
+    for i in 0..total {
+        send_on(&mut convs, new, ms(add(202, i)), add(1, i))?;
+    }
+    send_on(&mut convs, new, ms(210), add(total, 257))?;
+    send_on(&mut convs, new, ms(211), add(total, 258))?;
+    let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+        convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight)
+    };
+    assert!(
+        live(&convs),
+        "Q241: the old queue's mark outlives the new one's"
+    );
+    send_on(&mut convs, old, ms(212), add(total, 128))?;
+    send_on(&mut convs, new, ms(213), add(total, 259))?;
+    assert!(
+        live(&convs),
+        "132 releases the cells 1-3, not the unknown one"
+    );
+    send_on(&mut convs, old, ms(214), add(total, 129))?;
+    send_on(&mut convs, new, ms(215), add(total, 260))?;
+    assert!(!live(&convs));
+    assert_eq!(control_rows(&store)?, 0);
+    drop(g);
+    Ok(())
+}
+
+/// SE-75: cell 4 ends on the old queue after the switch with `SendFailure::Unknown`, then the old queue is lost
+/// (`ERR_NOQUEUE`) before any `OK_SEND` there: the mark goes with the queue. Ended with `SendFailure::Rate` instead (not stored), it is not marked.
+#[cfg(feature = "kat")]
+fn unknown_send_then_lost_or_rate() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+
+    for (why, label, seed) in [
+        (SendFailure::Unknown, "q241-unknown-lost", 715),
+        (SendFailure::Rate, "q241-rate", 717),
+    ] {
+        let (host, mut h, g) = rotated_host(label, seed)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 1..total {
+            send_on(&mut convs, old, ms(add(100, i)), i)?;
+        }
+        let last = convs
+            .prepare_cell(old, ms(110))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        convs.send_failed(old, last.token, why);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(add(200, i)), add(1, i))?;
+        }
+        send_on(&mut convs, new, ms(210), add(total, 257))?;
+        if why == SendFailure::Rate {
+            send_on(&mut convs, old, ms(211), add(total, 1))?;
+        }
+        send_on(&mut convs, new, ms(212), add(total, 258))?;
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        assert!(
+            live(&convs),
+            "Q241: the cells 1-3 hold until the old queue's 131"
+        );
+        if why == SendFailure::Unknown {
+            convs.queue_lost(old);
+        } else {
+            send_on(&mut convs, old, ms(213), add(total, 127))?;
+        }
+        send_on(&mut convs, new, ms(214), add(total, 259))?;
+        assert!(
+            !live(&convs),
+            "Q241: a lost queue holds no copy, a cell refused with ERR_RATE is not stored ({why:?})"
+        );
+        assert_eq!(control_rows(&store)?, 0);
+        drop(g);
+    }
+    Ok(())
+}
+
+/// SE-76 (Q241): the loss of the current send queue (`ERR_NOQUEUE`) re-plans the `KeyChange` there but leaves the mark on
+/// the old queue: after the new attempt has left its window the guard still holds until the old queue's count.
+#[cfg(feature = "kat")]
+#[test]
+fn lost_current_queue_keeps_the_old_queue_mark() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId};
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-lostcur", 703)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, old, ms(100 + i), 1 + i)?;
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(200 + i), 1 + i)?;
+        }
+        convs.queue_lost(new);
+        for i in 0..total {
+            send_on(&mut convs, new, ms(300 + i), 1 + i)?;
+        }
+        send_on(&mut convs, new, ms(310), total + 257)?;
+        send_on(&mut convs, new, ms(311), total + 258)?;
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        assert!(
+            live(&convs),
+            "Q241: the old queue's mark outlives the loss of the new one"
+        );
+        send_on(&mut convs, old, ms(312), total + 128)?;
+        send_on(&mut convs, new, ms(313), total + 259)?;
+        assert!(!live(&convs));
+        assert_eq!(control_rows(&store)?, 0);
+        drop(g);
         Ok(())
     })
 }
@@ -2381,8 +3206,8 @@ fn evicted_route_update_is_resent() -> R {
     })
 }
 
-/// SE-29 (Q222 (2)): the row of a `KeyChange` lives through the seals and the `OK_SEND`s of its four cells and goes at
-/// the slot after the last `OK_SEND`.
+/// SE-29 (Q222 (2), Q240): the row of a `KeyChange` lives through the seals and the `OK_SEND`s of its four cells and
+/// through the eviction window after the last `OK_SEND`; it goes at the slot after an `OK_SEND` past that window.
 #[cfg(feature = "kat")]
 #[test]
 fn control_row_deleted_only_after_last_ok_send() -> R {
@@ -2395,8 +3220,15 @@ fn control_row_deleted_only_after_last_ok_send() -> R {
             h.relayed_direct(p.token, 10 + i);
             assert_eq!(control_rows(&store)?, 1, "after the OK_SEND of cell {i}");
         }
-        h.prepare_direct(ms(20)).map_err(|_| "prepare")?;
-        assert_eq!(control_rows(&store)?, 0, "at the next slot");
+        let p = h.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "Q240: kept while a cell is in the eviction window"
+        );
+        h.relayed_direct(p.token, 270);
+        h.prepare_direct(ms(21)).map_err(|_| "prepare")?;
+        assert_eq!(control_rows(&store)?, 0, "at the slot after the window");
         Ok(())
     })
 }
@@ -2429,7 +3261,10 @@ fn superseded_control_attempt_outcomes_are_ignored() -> R {
         }
         assert_eq!(control_rows(&store)?, 1, "after the last OK_SEND");
         assert!(!h.has_pending_real(), "nothing planned again");
-        h.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+        // Q240: the row goes at the slot after the cells left the eviction window (9 + 257)
+        let p = h.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 266);
+        h.prepare_direct(ms(21)).map_err(|_| "prepare")?;
         assert_eq!(control_rows(&store)?, 0);
         for cell in &cells {
             deliver(&mut g, cell)?;

@@ -124,3 +124,71 @@ fn sample_round_composes_ceiling_and_sample() {
     assert_eq!(sample_round(u64::MAX, 100, 5), None);
     assert_eq!(sample_round(3, 0, 0), None);
 }
+
+/// `core/mod.rs:860` (`World::step_due`: the guard `now >= up.die_at` → `false`; PR-run 43385042727, shard 14: TIMEOUT at
+/// 900 s): under it a link never dies of its lifetime, `Scheduler::next_deadline` stays at the passed `die_at`, and every
+/// run beyond a lifetime spins at one instant — the virtual driver until its 50 000 000-pass guard
+/// (`m6_props::prop_at_most_once_per_period`, `m6_reconnect::rotation_and_reconnect_keep_send_spacing`), the tokio driver
+/// for ever (`m7_links::logical_link_id_in_events`). Here the core is polled by hand at fixed times, no deadline loop: a
+/// Strict send link living exactly 30 s is up 1 ms before its end, and at `t_up + 30 s` it is torn down with
+/// `Reason::Lifetime` instead of ticking.
+#[test]
+fn link_is_torn_down_at_the_end_of_its_lifetime() {
+    use secmp_client_core::scheduler::types::{LinkEvent, Reason};
+    let params = Params {
+        phase_max_ms: 0,
+        lifetime_ms: (30_000, 30_000),
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Strict, params);
+    rig.poll_at(0);
+    let info = *rig.sched.links().first().unwrap();
+    let (t_up, die_at) = (info.t_up.unwrap(), info.die_at.unwrap());
+    assert_eq!(die_at, t_up + 30_000, "the configured lifetime");
+    for t in [9_000, 10_000, 19_000, 20_000, 29_000, 29_999] {
+        rig.poll_at(t_up + t);
+    }
+    let torn = |rig: &Rig| {
+        rig.events
+            .iter()
+            .filter(|e| matches!(e, LinkEvent::TornDown(..)))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    assert!(torn(&rig).is_empty(), "up before its end: {:?}", torn(&rig));
+    rig.poll_at(die_at);
+    assert!(
+        matches!(
+            torn(&rig).as_slice(),
+            [LinkEvent::TornDown(_, _, Reason::Lifetime)]
+        ),
+        "torn down at its end: {:?}",
+        torn(&rig)
+    );
+    assert!(!rig.writes.contains(&die_at), "no tick at the end");
+}
+
+/// `core/mod.rs:1907` (`Scheduler::next_deadline`: `lead > self.world.last_now` → `>=`): under it the `FETCH` lead stays
+/// the next deadline once the driver has woken at it, so every run spins at that instant — the virtual driver until its
+/// 50 000 000-pass guard, the tokio driver for ever — and the mutant is caught only by a long wait. Here the core is polled
+/// by hand, no deadline loop: after the wake at the lead the next deadline is the tick itself, one `FETCH` lead later.
+#[test]
+fn next_deadline_moves_past_the_lead_once_it_is_reached() {
+    for mode in [Mode::Strict, Mode::Balanced] {
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let tick = params.slot_ms(mode).unwrap_or(10_000);
+        let lead = tick.saturating_sub(params.fetch_lead_ms);
+        let mut rig = Rig::with(ok_script(), mode, params);
+        rig.poll_at(0);
+        assert_eq!(rig.sched.next_deadline(), Some(lead), "{mode:?}: the lead");
+        rig.poll_at(lead);
+        assert_eq!(
+            rig.sched.next_deadline(),
+            Some(tick),
+            "{mode:?}: the tick after the lead"
+        );
+    }
+}

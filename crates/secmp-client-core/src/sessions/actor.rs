@@ -200,6 +200,22 @@ fn is_key_change(row: &[u8]) -> bool {
     row.first() == Some(&3)
 }
 
+/// Q244 (ADR-060 (5)): whether the content `id` may be planned. Only the head of a conversation's chain of durable
+/// `KeyChange`s is: one behind an older live one (lower id: added earlier, and at an open in the rows' `ord` order, which
+/// the row seal authenticates) waits until that one's row is gone and its entry dropped, so `KC_{n+1}` is never sent
+/// while a copy of `KC_n` may still reach the peer (ADR-058: the peer keeps one previous identity). The in-memory
+/// `KeyChange` of the test kit (Q245) is outside the chain.
+fn plannable(controls: &BTreeMap<u64, ControlEntry>, id: u64) -> bool {
+    let chained = |e: &ControlEntry| is_key_change(&e.row) && e.durable;
+    controls
+        .get(&id)
+        .is_some_and(|e| !chained(e) || !controls.range(..id).any(|(_, o)| chained(o)))
+}
+
+/// How long a succession may stay pending towards one contact before [`SessionEvent::SuccessionPending`] is raised
+/// (ADR-060 (6), Q246): 24 h, monotonic ms of the conversation's preparations.
+pub const SUCCESSION_WARN_MS: u64 = 24 * 60 * 60 * 1000;
+
 /// A control content that is durable from the commit that makes its effect durable until the last cell's `OK_SEND`
 /// (Q210 c, Q222): the rotation's `RouteUpdate`, the `KeyChange` of an identity rotation, the `Control{1|2}` of a removal or
 /// a reset. Its row (the store's CONTROL part, sealed) is `tag u8 ‖ body`: 1 `RouteUpdateBody`, 2 `ControlBody` (no
@@ -327,6 +343,10 @@ pub enum SessionEvent {
     ResetRequested,
     /// A message was relayed and no receipt came within `T_RS` (spec §10.4; OPEN-M7-07 A): not re-sent.
     NotConfirmed(MsgId),
+    /// ADR-060 (6), Q246: an identity succession towards this contact has been pending for [`SUCCESSION_WARN_MS`], or two
+    /// or more are pending; raised once until no `KeyChange` is left. It changes nothing: no timeout, no skip, no
+    /// re-invitation (owner-reserved, ADR-060 (7)).
+    SuccessionPending,
 }
 
 /// Why real content is refused at the one send entry ([`Conversation::may_send_real`]).
@@ -416,6 +436,9 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     /// ADR-054 items 1 and 3 at delivery (EXTB2-3): on in every constructor; off only through the test kit's
     /// `raw_app_payloads_kat`.
     app_rules: bool,
+    /// Q246: while a `KeyChange` of this conversation is live — the first preparation (monotonic ms) that saw one since
+    /// none was left, and whether [`SessionEvent::SuccessionPending`] was raised since.
+    succession: Option<(u64, bool)>,
     /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
     #[cfg(feature = "kat")]
     mk_digests: Vec<[u8; 32]>,
@@ -477,6 +500,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             notified: BTreeSet::new(),
             receipt_timeout_ms: 0,
             app_rules: true,
+            succession: None,
             #[cfg(feature = "kat")]
             mk_digests: Vec::new(),
         }
@@ -532,21 +556,23 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// Announce a new identity (`KeyChange`, spec §7.7): 5390 bytes, always fragmented, signed by the old `IK_sig`; in
-    /// memory only (see [`Conversation::queue_pending`]).
+    /// memory only and outside the succession chain — test kit (Q245, as Q226); the product's `KeyChange`s are durable
+    /// ([`Conversation::queue_pending`]) and chained (Q244).
     ///
     /// # Errors
     /// [`SourceError`] without randomness for the message id or if the body does not encode.
+    #[cfg(any(test, feature = "kat"))]
     pub fn queue_key_change(&mut self, body: KeyChangeBody) -> Result<(), SourceError> {
         self.add_control(PendingControl::KeyChange(body), None)
     }
 
     /// Plan the pending control content stored at `ord` (Q210 c, Q222): planned as a `RouteUpdate`,
-    /// [`Conversation::queue_control`] or [`Conversation::queue_key_change`] plan it; its row lives until the last cell's
-    /// `OK_SEND` and goes at the next preparation. The host calls this after the commit that wrote the row, and on open
-    /// for every row.
+    /// [`Conversation::queue_control`] or `queue_key_change` plan it; its row lives until the last cell's `OK_SEND` and
+    /// goes at the next preparation. The host calls this after the commit that wrote the row, and on open for every row; a
+    /// `KeyChange` behind a live one waits for it (Q244).
     ///
     /// # Errors
-    /// [`SourceError`] as [`Conversation::queue_key_change`].
+    /// [`SourceError`] if the body does not encode (a failed plan keeps a durable content, Q240).
     pub fn queue_pending(&mut self, ord: i64, content: PendingControl) -> Result<(), SourceError> {
         self.add_control(content, Some(ord))
     }
@@ -557,6 +583,16 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     #[must_use]
     pub fn key_change_in_flight(&self) -> bool {
         self.controls.values().any(|e| is_key_change(&e.row))
+    }
+
+    /// How many `KeyChange`s of this conversation are live: the head of its succession chain and the links that wait behind
+    /// it (Q244, ADR-060 (4), (5)).
+    #[must_use]
+    pub fn successions_pending(&self) -> usize {
+        self.controls
+            .values()
+            .filter(|e| is_key_change(&e.row))
+            .count()
     }
 
     /// Keep `content` as a control content until its last `OK_SEND` and plan its first attempt (Q222 (1); spec §9.5,
@@ -587,6 +623,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 unknown: Vec::new(),
             },
         );
+        if !plannable(&self.controls, id) {
+            // Q244: a later link of the chain waits for the head (`settle_controls` plans it when the head is gone)
+            return Ok(());
+        }
         match self.plan_content(ControlRef { id, attempt: 0 }, content) {
             Ok(total) => {
                 if let Some(e) = self.controls.get_mut(&id) {
@@ -675,6 +715,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// or of a retired `RouteUpdate` (Q224) plans nothing; else every cell of the content is sealed anew under a new
     /// attempt, and a durable content whose row went writes it again (its cells wait until it is written, Q225).
     fn replan_control(&mut self, r: ControlRef) {
+        // a link that waits in its chain has nothing planned to plan again (Q244)
+        if !plannable(&self.controls, r.id) {
+            return;
+        }
         let Some(entry) = self.controls.get_mut(&r.id) else {
             return;
         };
@@ -720,15 +764,6 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// queue. Its row then goes, and the entry with it — so a restart before that re-reads the row (one more copy, a no-op at
     /// the peer, ADR-058), and a restart after it re-sends nothing.
     fn settle_controls(&mut self) {
-        let unplanned: Vec<u64> = self
-            .controls
-            .iter()
-            .filter(|(_, e)| e.total == 0 && !e.retired)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in unplanned {
-            self.plan_unplanned(id);
-        }
         let by_cell = &self.by_cell;
         let windowed = |id: u64, e: &ControlEntry| {
             by_cell.values().any(
@@ -764,6 +799,32 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 !e.done || e.ord.is_some() || windowed(*id, e) || e.marked()
             }
         });
+        // after the drop above, so the next link of a chain whose head just went is planned for this very slot (Q244)
+        let unplanned: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|(id, e)| e.total == 0 && !e.retired && plannable(&self.controls, **id))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in unplanned {
+            self.plan_unplanned(id);
+        }
+    }
+
+    /// Q246 (ADR-060 (6)): raise [`SessionEvent::SuccessionPending`] once when a succession has been pending for
+    /// [`SUCCESSION_WARN_MS`] since the first preparation that saw it, or when two or more are pending; reset once no
+    /// `KeyChange` is left. Nothing else changes.
+    fn note_succession(&mut self, now_ms: u64) {
+        let pending = self.successions_pending();
+        if pending == 0 {
+            self.succession = None;
+            return;
+        }
+        let (since, warned) = self.succession.get_or_insert((now_ms, false));
+        if !*warned && (pending >= 2 || now_ms.saturating_sub(*since) >= SUCCESSION_WARN_MS) {
+            *warned = true;
+            self.events.push(SessionEvent::SuccessionPending);
+        }
     }
 
     fn plan_key_change(&mut self, body: KeyChangeBody, owner: Owner) -> Result<u16, SourceError> {
@@ -1453,6 +1514,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.last_now_ms = self.last_now_ms.max(now_ms);
         self.outbox.expire(now_ms);
         self.note_unconfirmed(now_ms);
+        self.note_succession(now_ms);
         // an initiator's handshake cells go first, as persisted (they are already sealed and durable, §6.5)
         if let Some(bytes) = self.handshake_out.pop_front() {
             let cell = Cell::from_bytes(&bytes).map_err(|_| SourceError)?;

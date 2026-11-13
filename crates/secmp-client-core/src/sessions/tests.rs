@@ -3381,3 +3381,252 @@ fn late_eviction_rewrites_the_control_row() -> R {
         Ok(())
     })
 }
+
+/// The host after two identity rotations through one core, opened again from its rows: contact 1 has two `KeyChange`
+/// rows, KC1 (signed by the first identity) and KC2 (signed by the identity KC1 announced), in this `ord` order.
+#[cfg(feature = "kat")]
+fn rotated_twice(
+    label: &str,
+    seed: u64,
+) -> Result<(Fixture, StoreConversation<Fixed>, StoreConversation<Fixed>), E> {
+    use crate::api::{Core, Request, Response};
+
+    let World { host, h, g, .. } = established(label, seed)?;
+    drop(h);
+    // an odd base: the open and the two rotations take the streams base + 1, + 2, + 3, and `entropy` makes 2k and 2k + 1 one
+    // stream, so the two new identities differ
+    let mut core = Core::with_profile(
+        host.profile.clone(),
+        host.clock.clone(),
+        core_sources(seed | 1),
+    )?;
+    let Response::IdentityRotated(fp1) = core.handle(Request::RotateIdentity)? else {
+        return Err("first rotation".into());
+    };
+    let Response::IdentityRotated(fp2) = core.handle(Request::RotateIdentity)? else {
+        return Err("Q244: a live KeyChange refuses no rotation".into());
+    };
+    assert_ne!(fp1, fp2);
+    drop(core);
+    let h = open_conversation(
+        &host.profile.store(),
+        ContactId(1),
+        Fixed(entropy(seed.wrapping_add(2))),
+        T0,
+    )?;
+    assert_eq!(control_rows(&host.profile.store())?, 2);
+    Ok((host, h, g))
+}
+
+/// The `KeyChanged` events among `g`'s events, and whether there was any other.
+#[cfg(feature = "kat")]
+fn key_changes(g: &mut StoreConversation<Fixed>) -> (usize, bool) {
+    let events = g.take_events();
+    let changed = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::KeyChanged(_)))
+        .count();
+    (changed, changed != events.len())
+}
+
+/// SE-85 (Q244, ADR-060 (4), (5); ADR-058): after two rotations only the head of contact 1's chain (KC1) is planned. While
+/// KC1 is in its eviction window the following cells are dummies — KC2 is not sent; the preparation after KC1's window
+/// has passed (`OK_SEND` id 4 + 256 + 1) deletes KC1's row and seals KC2's first cell, and the peer accepts KC2 under the
+/// identity KC1 announced (two `KeyChanged`, never frozen).
+#[cfg(feature = "kat")]
+#[test]
+fn later_key_change_waits_for_the_head() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_twice("q244-chain", 721)?;
+        let store = host.profile.store();
+        let total = key_change_cells()?;
+        assert_eq!(h.successions_pending(), 2);
+        for i in 0..total {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(key_changes(&mut g), (1, false), "KC1 reaches the peer");
+        for i in 0..total {
+            let p = h.prepare_direct(ms(110 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 5 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (0, false),
+            "Q244: KC2 waits while KC1 is in its window"
+        );
+        assert_eq!(control_rows(&store)?, 2);
+        let p = h.prepare_direct(ms(120)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 4 + 256);
+        deliver(&mut g, &p.cell)?;
+        assert_eq!(h.successions_pending(), 2, "4 + 256 is still in the window");
+        let p = h.prepare_direct(ms(121)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 4 + 257);
+        deliver(&mut g, &p.cell)?;
+        assert_eq!(key_changes(&mut g), (0, false));
+        for i in 0..total {
+            let p = h.prepare_direct(ms(130 + i)).map_err(|_| "prepare")?;
+            if i == 0 {
+                assert_eq!(control_rows(&store)?, 1, "KC1's row went before KC2's seal");
+                assert_eq!(h.successions_pending(), 1);
+            }
+            h.relayed_direct(p.token, 262 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (1, false),
+            "KC2 verifies under the identity KC1 announced"
+        );
+        assert_eq!(g.trust(), Trust::KeyChanged, "never frozen");
+        Ok(())
+    })
+}
+
+/// SE-86 (Q244): a send-queue switch and the loss of the queue re-plan the head of the chain only: KC2 stays unplanned
+/// behind KC1, so the peer gets KC1 once (one `KeyChanged`) and then dummies.
+#[cfg(feature = "kat")]
+#[test]
+fn switch_and_loss_leave_the_waiting_link_unplanned() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (_host, mut h, mut g) = rotated_twice("q244-replan", 723)?;
+        let total = key_change_cells()?;
+        h.switch_send_queue(QueueId(9));
+        h.lost_direct();
+        for i in 0..2 * total {
+            deliver(&mut g, &next(&mut h, ms(100 + i))?)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (1, false),
+            "Q244: only the head is planned again"
+        );
+        assert_eq!(h.successions_pending(), 2);
+        Ok(())
+    })
+}
+
+/// SE-87 (Q244, ADR-060 (5); OPEN-M7-B-12): the chain order survives restarts. A restart after two of KC1's cells plans
+/// KC1 again (head) and leaves KC2 waiting; the peer gets KC1, then dummies. A restart inside KC1's window sends KC1 once
+/// more — a no-op at the peer (ADR-058) — and KC2 still waits; after KC1's window KC2 follows and is accepted.
+#[cfg(feature = "kat")]
+#[test]
+fn chain_order_survives_restarts() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_twice("q244-restart", 725)?;
+        let store = host.profile.store();
+        let total = key_change_cells()?;
+        for i in 0..2 {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        drop(h);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(726)), T0)?;
+        assert_eq!(h.successions_pending(), 2, "both rows come back, in order");
+        for i in 0..2 * total {
+            let p = h.prepare_direct(ms(200 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 3 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(key_changes(&mut g), (1, false), "KC1 first, then dummies");
+        drop(h);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(727)), T0)?;
+        assert_eq!(h.successions_pending(), 2);
+        for i in 0..2 * total {
+            let p = h.prepare_direct(ms(300 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 11 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (0, false),
+            "ADR-058: KC1 again is a no-op; KC2 still waits"
+        );
+        assert_eq!(g.trust(), Trust::KeyChanged, "not frozen");
+        let p = h.prepare_direct(ms(320)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 14 + 257);
+        deliver(&mut g, &p.cell)?;
+        for i in 0..total {
+            deliver(&mut g, &next(&mut h, ms(330 + i))?)?;
+        }
+        assert_eq!(key_changes(&mut g), (1, false), "KC2 after KC1's window");
+        assert_eq!(g.trust(), Trust::KeyChanged);
+        assert_eq!(control_rows(&store)?, 1);
+        Ok(())
+    })
+}
+
+/// SE-88 (Q246, ADR-060 (6)): `SuccessionPending` is raised once, at the first preparation `SUCCESSION_WARN_MS` after the
+/// first one that saw the pending `KeyChange` (none at + `SUCCESSION_WARN_MS` − 1, none again later); once the
+/// `KeyChange` has left, a new one is timed from its own first preparation (a pending `Control` beside it counts as no
+/// succession). Two pending successions raise it at once, and only once. Monotonic test times only (no wall clock).
+#[cfg(feature = "kat")]
+#[test]
+fn succession_pending_is_raised_once_at_its_time() -> R {
+    use crate::sessions::actor::SUCCESSION_WARN_MS;
+    use secmp_proto::prekeys::IdentityKeys;
+    use secmp_proto::tr::content::key_change_body;
+
+    // 24 h written out: a test in terms of the constant would follow a mutated one
+    assert_eq!(SUCCESSION_WARN_MS, 86_400_000);
+    big(|| {
+        let (host, mut h, _g) = rotated_host("q246-warn", 729)?;
+        let warned = |h: &mut StoreConversation<Fixed>| {
+            h.take_events()
+                .iter()
+                .filter(|e| matches!(e, SessionEvent::SuccessionPending))
+                .count()
+        };
+        let t0 = ms(100);
+        let total = key_change_cells()?;
+        let mut tokens = Vec::new();
+        for i in 0..total {
+            tokens.push(h.prepare_direct(t0 + i).map_err(|_| "prepare")?.token);
+        }
+        assert_eq!(warned(&mut h), 0);
+        next(&mut h, t0 + SUCCESSION_WARN_MS - 1)?;
+        assert_eq!(warned(&mut h), 0, "not before T");
+        next(&mut h, t0 + SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h), 1, "at T");
+        next(&mut h, t0 + 2 * SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h), 0, "once");
+        for (i, token) in (1..).zip(tokens) {
+            h.relayed_direct(token, i);
+        }
+        let p = h
+            .prepare_direct(t0 + 2 * SUCCESSION_WARN_MS + 1)
+            .map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 4 + 257);
+        next(&mut h, t0 + 2 * SUCCESSION_WARN_MS + 2)?;
+        assert_eq!(h.successions_pending(), 0);
+        // a control content other than a `KeyChange` is no succession
+        h.queue_control(secmp_proto::wire::cell::ControlCode::SessionResetRequest);
+        assert_eq!(h.successions_pending(), 0, "a Control is no succession");
+        // a new succession is timed from its own first preparation
+        let t1 = t0 + 3 * SUCCESSION_WARN_MS;
+        let new = IdentityKeys::generate(&mut entropy(730))?;
+        let body = key_change_body(&host.profile.signing_key()?, new.public())?;
+        h.queue_key_change(body.clone()).map_err(|_| "queue")?;
+        next(&mut h, t1)?;
+        next(&mut h, t1 + SUCCESSION_WARN_MS - 1)?;
+        assert_eq!(warned(&mut h), 0, "re-armed, not raised at once");
+        next(&mut h, t1 + SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h), 1, "the new one at its own T");
+        // two pending successions: at once, once
+        let (_host, mut h2, _g2) = rotated_twice("q246-two", 731)?;
+        next(&mut h2, t0)?;
+        assert_eq!(warned(&mut h2), 1, "two pending: at the first preparation");
+        next(&mut h2, t0 + SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h2), 0, "and only once");
+        Ok(())
+    })
+}

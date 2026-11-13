@@ -1,0 +1,74 @@
+head 64650f63fc515e3b72e088ecd253351c42562314
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index cb2032d..0d4c1f3 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -821,7 +821,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+             return;
+         }
+         let (since, warned) = self.succession.get_or_insert((now_ms, false));
+-        if !*warned && (pending >= 2 || now_ms.saturating_sub(*since) >= SUCCESSION_WARN_MS) {
++        if !*warned && (pending >= 3 || now_ms.saturating_sub(*since) >= SUCCESSION_WARN_MS) {
+             *warned = true;
+             self.events.push(SessionEvent::SuccessionPending);
+         }
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s
+────────────
+ Nextest run ID 43bca856-cbb4-4119-a84c-7eba80832968 with nextest profile: default
+    Starting 8 tests across 1 binary (246 tests skipped)
+        PASS [   1.863s] (1/8) secmp-client-core api::tests::restart_in_the_window_keeps_the_chain
+        PASS [   1.872s] (2/8) secmp-client-core api::tests::second_rotation_waits_behind_the_live_key_change
+        PASS [   2.007s] (3/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+        PASS [   2.106s] (4/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+        PASS [   2.123s] (5/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+        PASS [   2.429s] (6/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+        FAIL [   2.806s] (7/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+  stdout ───
+
+    running 1 test
+    test api::tests::rotation_is_not_held_back_by_a_pending_contact ... FAILED
+
+    failures:
+
+    failures:
+        api::tests::rotation_is_not_held_back_by_a_pending_contact
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 2.80s
+
+  stderr ───
+
+    thread '<unnamed>' (3908468) panicked at crates/secmp-client-core/src/api.rs:2009:13:
+    assertion `left == right` failed
+      left: []
+     right: [ContactId(1)]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   3.679s] (8/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+  stdout ───
+
+    running 1 test
+    test sessions::tests::succession_pending_is_raised_once_at_its_time ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::succession_pending_is_raised_once_at_its_time
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 3.67s
+
+  stderr ───
+
+    thread '<unnamed>' (3908463) panicked at crates/secmp-client-core/src/sessions/tests.rs:3627:9:
+    assertion `left == right` failed: two pending: at the first preparation
+      left: 0
+     right: 1
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+────────────
+     Summary [   3.680s] 8 tests run: 6 passed, 2 failed, 246 skipped
+        FAIL [   2.806s] (7/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+        FAIL [   3.679s] (8/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+error: test run failed

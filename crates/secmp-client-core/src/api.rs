@@ -181,6 +181,9 @@ pub enum Event {
     },
     /// A view-once queued by an earlier run was lost with it (it was in memory only, ST-17).
     ViewOnceLost([u8; 16]),
+    /// An identity succession towards the contact has been pending for 24 h, or two or more are pending (ADR-060 (6),
+    /// Q246): the contact has not fetched the earlier `KeyChange` yet. Nothing is skipped or given up.
+    SuccessionPending(ContactId),
 }
 
 impl core::fmt::Debug for Event {
@@ -199,6 +202,7 @@ impl core::fmt::Debug for Event {
             Self::ResetRequested(_) => "ResetRequested",
             Self::NotConfirmed { .. } => "NotConfirmed",
             Self::ViewOnceLost(_) => "ViewOnceLost",
+            Self::SuccessionPending(_) => "SuccessionPending",
         })
     }
 }
@@ -280,8 +284,8 @@ pub enum Request {
         /// The relay whose pool provides the new queue.
         relay: u32,
     },
-    /// Rotate the user's identity (spec §7.7); [`Error::Unavailable`] while a `KeyChange` of an earlier rotation is live
-    /// in any conversation (OPEN-M7-B-12).
+    /// Rotate the user's identity (spec §7.7). Never refused because of another contact (ADR-060 (4), Q244): towards a
+    /// contact whose earlier `KeyChange` is still live the new one waits behind it ([`Event::SuccessionPending`]).
     RotateIdentity,
     /// Ask a contact for a new session (spec §7.8).
     ResetSession {
@@ -722,6 +726,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 contact,
                 msg_id: *msg_id,
             },
+            SessionEvent::SuccessionPending => Event::SuccessionPending(contact),
         })
     }
 
@@ -908,16 +913,9 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     }
 
     fn rotate_identity(&mut self) -> Result<Response, Error> {
-        // no second succession while a `KeyChange` is in flight (Q222, OPEN-M7-B-12): a re-sent older one would freeze the
-        // peer (ADR-058 covers only the repeat of the last accepted one); its row lives as long, so an open rebuilds this
-        // (Q240), and a row whose plan fails is kept and guarded (Q240, OPEN-M7-B-19)
-        if self.index.values().any(|at| {
-            self.convs
-                .get(*at)
-                .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight)
-        }) {
-            return Err(Error::Unavailable);
-        }
+        // no profile-wide refusal (ADR-060 (4), Q244, OPEN-M7-B-17): each contact gets its `KeyChange`, signed now by the
+        // current identity, and a conversation plans only the head of its chain — a link waits while a copy of the one
+        // before it may still reach the peer (ADR-058: one previous identity), so one stuck contact holds back only itself
         let mut source = (self.make_source)();
         let ready: Vec<(i64, usize)> = self.index.iter().map(|(c, i)| (*c, *i)).collect();
         let sessions: Vec<i64> = ready.iter().map(|(c, _)| *c).collect();
@@ -1833,12 +1831,13 @@ mod tests {
         })
     }
 
-    /// SE-34 (Q222, OPEN-M7-B-12): a second identity rotation is refused (`Unavailable`, nothing changes) while the
-    /// `KeyChange` of the first is in flight — planned, on the way, or relayed and in the eviction window of its cells;
-    /// once it has left that window, a rotation is taken again.
+    /// SE-34 (re-dictated by Q244, ADR-060 (4); was Q222, OPEN-M7-B-12): a second identity rotation while the
+    /// `KeyChange` of the first is in flight is taken (`IdentityRotated`, a new fingerprint, a second row) and its
+    /// `KeyChange` waits behind the first; once the first has left its eviction window, its row is gone, the second is the
+    /// head, and a third rotation adds a row again.
     #[cfg(feature = "kat")]
     #[test]
-    fn second_rotation_refused_while_key_change_in_flight() -> R {
+    fn second_rotation_waits_behind_the_live_key_change() -> R {
         big(|| {
             let w = world("api-kc-guard", 941)?;
             let host = w.host;
@@ -1848,23 +1847,14 @@ mod tests {
             let Response::IdentityRotated(fp1) = core.handle(Request::RotateIdentity)? else {
                 return Err("rotated".into());
             };
-            assert_eq!(
-                core.handle(Request::RotateIdentity).err(),
-                Some(Error::Unavailable),
-                "OPEN-M7-B-12: no second succession while a KeyChange is in flight"
-            );
-            assert_eq!(host.profile.fingerprint()?, fp1);
-            let rows = |host: &crate::testutil::Fixture| -> Result<usize, E> {
-                Ok(host
-                    .profile
-                    .store()
-                    .lock()
-                    .map_err(|_| "lock")?
-                    .pending_controls(1)?
-                    .len())
+            let Response::IdentityRotated(fp2) = core.handle(Request::RotateIdentity)? else {
+                return Err("Q244: a live KeyChange refuses no rotation".into());
             };
-            assert_eq!(rows(&host)?, 1);
+            assert_ne!(fp1, fp2);
+            assert_eq!(host.profile.fingerprint()?, fp2);
+            assert_eq!(control_rows(&host)?, 2);
             let conv = core.convs.get_mut(0).ok_or("conversation")?;
+            assert_eq!(conv.successions_pending(), 2);
             for i in 0..4_u64 {
                 let p = conv.prepare_direct(ms(10 + i)).map_err(|_| "prepare")?;
                 conv.relayed_direct(p.token, 1 + i);
@@ -1872,10 +1862,13 @@ mod tests {
             let dummy = conv.prepare_direct(ms(20)).map_err(|_| "prepare")?;
             conv.relayed_direct(dummy.token, 300);
             conv.prepare_direct(ms(21)).map_err(|_| "prepare")?;
+            assert_eq!(conv.successions_pending(), 1, "the first has left");
+            assert_eq!(control_rows(&host)?, 1);
             assert!(matches!(
                 core.handle(Request::RotateIdentity)?,
                 Response::IdentityRotated(_)
             ));
+            assert_eq!(control_rows(&host)?, 2);
             Ok(())
         })
     }
@@ -1892,12 +1885,12 @@ mod tests {
             .len())
     }
 
-    /// SE-69 (Q240, EXT2c-1): a restart after the `KeyChange`'s last `OK_SEND` but inside its eviction window keeps the
-    /// rotation guard: the row is still there, and the core opened again refuses a second rotation (`Unavailable`, the
-    /// fingerprint unchanged).
+    /// SE-69 (re-dictated by Q244; was Q240, EXT2c-1): a restart after the `KeyChange`'s last `OK_SEND` but inside its
+    /// eviction window keeps its row; the core opened again takes a second rotation, whose `KeyChange` waits behind the
+    /// first one read back from its row (two pending, the fingerprint the new one).
     #[cfg(feature = "kat")]
     #[test]
-    fn restart_in_the_window_keeps_the_rotation_guard() -> R {
+    fn restart_in_the_window_keeps_the_chain() -> R {
         big(|| {
             let w = world("api-kc-q240", 943)?;
             let host = w.host;
@@ -1921,12 +1914,99 @@ mod tests {
             drop(core);
             let mut again =
                 Core::with_profile(host.profile.clone(), host.clock.clone(), sources(944))?;
+            let Response::IdentityRotated(fp2) = again.handle(Request::RotateIdentity)? else {
+                return Err("Q244: rotated after the restart".into());
+            };
+            assert_ne!(fp1, fp2);
             assert_eq!(
-                again.handle(Request::RotateIdentity).err(),
-                Some(Error::Unavailable),
-                "Q240: the guard holds across a restart"
+                again
+                    .convs
+                    .get(0)
+                    .map(crate::sessions::actor::Conversation::successions_pending),
+                Some(2),
+                "Q244: the second waits behind the first, read back from its row"
             );
-            assert_eq!(host.profile.fingerprint()?, fp1);
+            Ok(())
+        })
+    }
+
+    /// SE-89 (Q244, ADR-060 (4); EXT2c-6, OPEN-M7-B-17): a contact whose `KeyChange` is still live (contact 1: nothing
+    /// sent) does not hold back the profile: a second rotation is taken, contact 2 — whose first `KeyChange` has left its
+    /// window — gets the second at once, and its peer accepts it under the identity of the first (two `KeyChanged`);
+    /// contact 1 keeps both, in order, and the core raises `SuccessionPending` for contact 1 only.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn rotation_is_not_held_back_by_a_pending_contact() -> R {
+        use crate::sessions::tests::{connect, party};
+
+        big(|| {
+            let w = world("api-chain-1", 947)?;
+            let host = w.host;
+            drop((w.h, w.g, w.guest));
+            let other = party("api-chain-2", 951)?;
+            let link = connect(&host, &other, 953)?;
+            assert_eq!(link.contact, ContactId(2));
+            let mut g2 = link.g;
+            drop(link.h);
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(956))?;
+            let (one, two) = (
+                *core.index.get(&1).ok_or("contact 1")?,
+                *core.index.get(&2).ok_or("contact 2")?,
+            );
+            let Response::IdentityRotated(fp1) = core.handle(Request::RotateIdentity)? else {
+                return Err("rotated".into());
+            };
+            let changed = |g: &mut crate::sessions::StoreConversation<Fixed>| {
+                g.take_events()
+                    .iter()
+                    .filter(|e| matches!(e, crate::sessions::actor::SessionEvent::KeyChanged(_)))
+                    .count()
+            };
+            let conv = core.convs.get_mut(two).ok_or("conversation 2")?;
+            for i in 0..4_u64 {
+                let p = conv.prepare_direct(ms(10 + i)).map_err(|_| "prepare")?;
+                conv.relayed_direct(p.token, 1 + i);
+                deliver(&mut g2, &p.cell)?;
+            }
+            let dummy = conv.prepare_direct(ms(20)).map_err(|_| "prepare")?;
+            conv.relayed_direct(dummy.token, 300);
+            deliver(&mut g2, &dummy.cell)?;
+            deliver(&mut g2, &next(conv, ms(21))?)?;
+            assert_eq!(conv.successions_pending(), 0);
+            assert_eq!(changed(&mut g2), 1);
+            assert!(
+                core.convs
+                    .get(one)
+                    .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight)
+            );
+            let Response::IdentityRotated(fp2) = core.handle(Request::RotateIdentity)? else {
+                return Err("Q244: contact 1 holds back no rotation".into());
+            };
+            assert_ne!(fp1, fp2);
+            let conv = core.convs.get_mut(two).ok_or("conversation 2")?;
+            for i in 0..4_u64 {
+                deliver(&mut g2, &next(conv, ms(30 + i))?)?;
+            }
+            assert_eq!(changed(&mut g2), 1, "contact 2 gets the second at once");
+            assert_eq!(
+                g2.trust(),
+                secmp_proto::tr::content::Trust::KeyChanged,
+                "not frozen"
+            );
+            let conv = core.convs.get_mut(one).ok_or("conversation 1")?;
+            assert_eq!(conv.successions_pending(), 2);
+            next(conv, ms(40))?;
+            core.pump()?;
+            let warned: Vec<ContactId> = core
+                .take_events()
+                .iter()
+                .filter_map(|e| match e.event {
+                    Event::SuccessionPending(c) => Some(c),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(warned, [ContactId(1)]);
             Ok(())
         })
     }

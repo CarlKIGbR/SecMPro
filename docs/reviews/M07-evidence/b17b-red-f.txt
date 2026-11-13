@@ -1,0 +1,60 @@
+head 64650f63fc515e3b72e088ecd253351c42562314
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index cb2032d..b38f594 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -1049,7 +1049,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+                 })
+                 .collect();
+             for (id, cell_id) in cells {
+-                self.mark_stranded(id, old, cell_id);
++                self.mark_stranded(id, new, cell_id);
+             }
+         }
+         for id in &ids {
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+warning: unused variable: `old`
+    --> crates/secmp-client-core/src/sessions/actor.rs:1042:21
+     |
+1042 |         if let Some(old) = previous.filter(|old| *old != new) {
+     |                     ^^^ help: if this is intentional, prefix it with an underscore: `_old`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `secmp-client-core` (lib) generated 1 warning (run `cargo fix --lib -p secmp-client-core` to apply 1 suggestion)
+warning: `secmp-client-core` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.90s
+────────────
+ Nextest run ID e1f91c3f-cd7a-4b95-ae3b-e862706367ab with nextest profile: default
+    Starting 8 tests across 1 binary (246 tests skipped)
+        PASS [   1.868s] (1/8) secmp-client-core api::tests::restart_in_the_window_keeps_the_chain
+        PASS [   1.918s] (2/8) secmp-client-core api::tests::second_rotation_waits_behind_the_live_key_change
+        PASS [   1.981s] (3/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+        PASS [   2.079s] (4/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+        FAIL [   2.107s] (5/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+  stdout ───
+
+    running 1 test
+    test hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 2.10s
+
+  stderr ───
+
+    thread '<unnamed>' (3909701) panicked at crates/secmp-client-core/src/hub.rs:1969:13:
+    B's 132 alone releases: nothing on C
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.470s] (6/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+        PASS [   2.855s] (7/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+        PASS [   3.687s] (8/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+────────────
+     Summary [   3.688s] 8 tests run: 7 passed, 1 failed, 246 skipped
+        FAIL [   2.107s] (5/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+error: test run failed

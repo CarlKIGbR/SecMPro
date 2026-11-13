@@ -1908,6 +1908,69 @@ mod tests {
         })
     }
 
+    /// SE-90 (B22-delta D-03, D-B78; Q241, Q242, Q244): the invitee's `KeyChange` relayed on B (ids 1–4), then the routes
+    /// C (`sid` 7) and D (`sid` 5) in one pump — two switches, no cell on C. The copy on B is marked on B and nothing is
+    /// marked on C: after the new copy on D has left its window, B's id 131 releases nothing, and B's id 132 alone — no
+    /// `OK_SEND` on C at all — releases the `KeyChange` (its row goes at the next preparation).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn two_routes_in_one_pump_keep_the_mark_on_the_sent_queue() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-kc-cd", 113)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let b = *hub.send_ids.get(&contact.0).ok_or("B")?;
+            assert!(matches!(
+                hub.core_mut().handle(Request::RotateIdentity)?,
+                Response::IdentityRotated(_)
+            ));
+            let on = |hub: &mut Hub<ManualClock, Fixed>, q: QueueId, now: u64, id: u64| -> R {
+                let p = hub
+                    .prepare_cell(q, now)
+                    .map_err(|_| "prepare")?
+                    .ok_or("cell")?;
+                hub.relayed(q, p.token, id);
+                Ok(())
+            };
+            for i in 0..4_u64 {
+                on(hub, b, ms(60 + i), 1 + i)?;
+            }
+            send_route(&mut sc, 7, ms(70))?;
+            send_route(&mut sc, 5, ms(80))?;
+            let hub = &mut sc.invitee;
+            hub.pump()?;
+            let added = add_sends(hub);
+            let (c, d) = (
+                queue_of(&added, 7).ok_or("C")?,
+                queue_of(&added, 5).ok_or("D")?,
+            );
+            assert_eq!(
+                hub.sends_of(contact),
+                Some((c, d)),
+                "two switches in one pump"
+            );
+            for i in 0..4_u64 {
+                on(hub, d, ms(90 + i), 1 + i)?;
+            }
+            on(hub, d, ms(100), 261)?;
+            on(hub, d, ms(101), 262)?;
+            let live = |hub: &Hub<ManualClock, Fixed>| {
+                hub.core
+                    .convs
+                    .get(at)
+                    .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight)
+            };
+            assert!(live(hub), "the copy on B may still be fetched");
+            on(hub, b, ms(104), 131)?;
+            on(hub, d, ms(105), 264)?;
+            assert!(live(hub), "B's 131 is not enough");
+            on(hub, b, ms(106), 132)?;
+            on(hub, d, ms(107), 265)?;
+            assert!(!live(hub), "B's 132 alone releases: nothing on C");
+            Ok(())
+        })
+    }
+
     /// C1-8 a (SE-13b, Q210 d): `register_route` sets `T_RS` of the conversation from the period of the queue it sends to. The
     /// timeout is set to 0 first (every `PERIODS` value gives the minimum of 24 h, which `open_session` has set already, so
     /// only a 0 → 24 h change is observable); after a `RouteUpdate` with period `S80` it is `receipt_timeout_ms(80_000)`, and

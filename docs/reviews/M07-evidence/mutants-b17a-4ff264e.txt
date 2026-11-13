@@ -1,0 +1,139 @@
+head 4ff264ed6a710990315ec43eba9223a4f78b5b8a
+git diff d0ea52d9823d0c22582cc7c774b857d951e5fdc6 -- crates/secmp-client-core/src/sessions/actor.rs > target/m7-b17a-mutants.diff
+timeout 14400 cargo mutants --no-shuffle -j 2 --output target/m7-b17a-mutants --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --file crates/secmp-client-core/src/sessions/actor.rs --in-diff target/m7-b17a-mutants.diff --test-tool nextest --timeout 900 > target/m7-b17a-mutants.log 2>&1
+--- log ---
+Found 64 mutants to test
+ok       Unmutated baseline in 108s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:194:9: replace ControlEntry::marked -> bool with true in 2s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:194:9: replace ControlEntry::marked -> bool with false in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:194:35: replace || with && in ControlEntry::marked in 2s build + 32s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:194:9: delete ! in ControlEntry::marked in 2s build + 15s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:194:38: delete ! in ControlEntry::marked in 2s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:200:5: replace is_key_change -> bool with true in 2s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:200:5: replace is_key_change -> bool with false in 2s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:200:17: replace == with != in is_key_change in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:559:9: replace Conversation<O, P, S>::key_change_in_flight -> bool with true in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:559:9: replace Conversation<O, P, S>::key_change_in_flight -> bool with false in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:569:9: replace Conversation<O, P, S>::add_control -> Result<(), SourceError> with Ok(()) in 3s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:597:23: replace match guard ord.is_some() with true in Conversation<O, P, S>::add_control in 3s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:597:23: replace match guard ord.is_some() with false in Conversation<O, P, S>::add_control in 2s build + 25s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:612:9: replace Conversation<O, P, S>::plan_unplanned with () in 2s build + 25s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:620:13: replace && with || in Conversation<O, P, S>::plan_unplanned in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:678:9: replace Conversation<O, P, S>::replan_control with () in 3s build + 25s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:699:25: delete ! in Conversation<O, P, S>::replan_control in 2s build + 35s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:723:9: replace Conversation<O, P, S>::settle_controls with () in 3s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:726:43: replace && with || in Conversation<O, P, S>::settle_controls in 3s build + 11s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:726:38: replace == with != in Conversation<O, P, S>::settle_controls in 2s build + 12s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:726:46: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 38s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:739:63: replace && with || in Conversation<O, P, S>::settle_controls in 3s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:739:83: replace || with && in Conversation<O, P, S>::settle_controls in 2s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:740:68: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 18s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:17: replace || with && in Conversation<O, P, S>::settle_controls in 2s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:44: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:28: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:31: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:47: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 17s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:61: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 60s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:753:78: replace == with != in Conversation<O, P, S>::settle_controls in 2s build + 40s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:764:44: replace || with && in Conversation<O, P, S>::settle_controls in 5s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:764:25: replace || with && in Conversation<O, P, S>::settle_controls in 2s build + 17s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:764:17: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:953:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 0 in 4s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:953:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 1 in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:981:55: replace != with == in Conversation<O, P, S>::switch_send_queue in 4s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:764:64: replace || with && in Conversation<O, P, S>::settle_controls in 119s build + 17s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:986:21: delete match arm Owner::Control(c) in Conversation<O, P, S>::switch_send_queue in 2s build + 14s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1025:13: replace && with || in Conversation<O, P, S>::mark_stranded in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1024:9: replace Conversation<O, P, S>::mark_stranded with () in 2s build + 17s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1035:9: replace Conversation<O, P, S>::on_overlap_relayed with () in 3s build + 16s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1051:9: replace Conversation<O, P, S>::count_stranded with () in 2s build + 18s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1054:51: replace || with && in Conversation<O, P, S>::count_stranded in 3s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1054:42: replace != with == in Conversation<O, P, S>::count_stranded in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1054:57: replace >= with < in Conversation<O, P, S>::count_stranded in 2s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1055:32: replace < with == in Conversation<O, P, S>::count_stranded in 2s build + 20s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1055:32: replace < with > in Conversation<O, P, S>::count_stranded in 2s build + 18s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1055:32: replace < with <= in Conversation<O, P, S>::count_stranded in 2s build + 21s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1059:53: replace || with && in Conversation<O, P, S>::count_stranded in 2s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1059:44: replace != with == in Conversation<O, P, S>::count_stranded in 2s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1059:64: replace < with == in Conversation<O, P, S>::count_stranded in 2s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1059:64: replace < with > in Conversation<O, P, S>::count_stranded in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1059:64: replace < with <= in Conversation<O, P, S>::count_stranded in 2s build + 22s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1072:13: replace && with || in Conversation<O, P, S>::on_unknown_send in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1071:13: replace && with || in Conversation<O, P, S>::on_unknown_send in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1067:9: replace Conversation<O, P, S>::on_unknown_send with () in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1081:9: replace Conversation<O, P, S>::on_overlap_lost with () in 3s build + 32s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1082:43: replace != with == in Conversation<O, P, S>::on_overlap_lost in 2s build + 21s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1559:9: replace Conversation<O, P, S>::on_relayed with () in 3s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1083:42: replace != with == in Conversation<O, P, S>::on_overlap_lost in 2s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:2041:9: replace <impl CellSource for Conversations<O, P, S>>::relayed with () in 3s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:2055:9: replace <impl CellSource for Conversations<O, P, S>>::send_failed with () in 3s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:2078:9: replace <impl CellSource for Conversations<O, P, S>>::queue_lost with () in 2s build + 6s test
+64 mutants tested in 28m: 60 caught, 4 unviable
+--- caught.txt ---
+crates/secmp-client-core/src/sessions/actor.rs:194:9: replace ControlEntry::marked -> bool with true
+crates/secmp-client-core/src/sessions/actor.rs:194:9: replace ControlEntry::marked -> bool with false
+crates/secmp-client-core/src/sessions/actor.rs:194:35: replace || with && in ControlEntry::marked
+crates/secmp-client-core/src/sessions/actor.rs:194:9: delete ! in ControlEntry::marked
+crates/secmp-client-core/src/sessions/actor.rs:194:38: delete ! in ControlEntry::marked
+crates/secmp-client-core/src/sessions/actor.rs:200:5: replace is_key_change -> bool with true
+crates/secmp-client-core/src/sessions/actor.rs:200:5: replace is_key_change -> bool with false
+crates/secmp-client-core/src/sessions/actor.rs:200:17: replace == with != in is_key_change
+crates/secmp-client-core/src/sessions/actor.rs:559:9: replace Conversation<O, P, S>::key_change_in_flight -> bool with true
+crates/secmp-client-core/src/sessions/actor.rs:559:9: replace Conversation<O, P, S>::key_change_in_flight -> bool with false
+crates/secmp-client-core/src/sessions/actor.rs:569:9: replace Conversation<O, P, S>::add_control -> Result<(), SourceError> with Ok(())
+crates/secmp-client-core/src/sessions/actor.rs:597:23: replace match guard ord.is_some() with true in Conversation<O, P, S>::add_control
+crates/secmp-client-core/src/sessions/actor.rs:597:23: replace match guard ord.is_some() with false in Conversation<O, P, S>::add_control
+crates/secmp-client-core/src/sessions/actor.rs:612:9: replace Conversation<O, P, S>::plan_unplanned with ()
+crates/secmp-client-core/src/sessions/actor.rs:678:9: replace Conversation<O, P, S>::replan_control with ()
+crates/secmp-client-core/src/sessions/actor.rs:699:25: delete ! in Conversation<O, P, S>::replan_control
+crates/secmp-client-core/src/sessions/actor.rs:723:9: replace Conversation<O, P, S>::settle_controls with ()
+crates/secmp-client-core/src/sessions/actor.rs:726:43: replace && with || in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:726:38: replace == with != in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:726:46: delete ! in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:739:63: replace && with || in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:739:83: replace || with && in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:740:68: replace && with || in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:17: replace || with && in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:44: replace && with || in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:28: replace && with || in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:31: delete ! in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:47: delete ! in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:61: replace && with || in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:753:78: replace == with != in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:764:44: replace || with && in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:764:25: replace || with && in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:764:17: delete ! in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:953:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 0
+crates/secmp-client-core/src/sessions/actor.rs:953:9: replace Conversation<O, P, S>::switch_send_queue -> usize with 1
+crates/secmp-client-core/src/sessions/actor.rs:981:55: replace != with == in Conversation<O, P, S>::switch_send_queue
+crates/secmp-client-core/src/sessions/actor.rs:764:64: replace || with && in Conversation<O, P, S>::settle_controls
+crates/secmp-client-core/src/sessions/actor.rs:986:21: delete match arm Owner::Control(c) in Conversation<O, P, S>::switch_send_queue
+crates/secmp-client-core/src/sessions/actor.rs:1024:9: replace Conversation<O, P, S>::mark_stranded with ()
+crates/secmp-client-core/src/sessions/actor.rs:1035:9: replace Conversation<O, P, S>::on_overlap_relayed with ()
+crates/secmp-client-core/src/sessions/actor.rs:1051:9: replace Conversation<O, P, S>::count_stranded with ()
+crates/secmp-client-core/src/sessions/actor.rs:1054:51: replace || with && in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1054:42: replace != with == in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1054:57: replace >= with < in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1055:32: replace < with == in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1055:32: replace < with > in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1055:32: replace < with <= in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1059:53: replace || with && in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1059:44: replace != with == in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1059:64: replace < with == in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1059:64: replace < with > in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1059:64: replace < with <= in Conversation<O, P, S>::count_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1067:9: replace Conversation<O, P, S>::on_unknown_send with ()
+crates/secmp-client-core/src/sessions/actor.rs:1081:9: replace Conversation<O, P, S>::on_overlap_lost with ()
+crates/secmp-client-core/src/sessions/actor.rs:1082:43: replace != with == in Conversation<O, P, S>::on_overlap_lost
+crates/secmp-client-core/src/sessions/actor.rs:1559:9: replace Conversation<O, P, S>::on_relayed with ()
+crates/secmp-client-core/src/sessions/actor.rs:1083:42: replace != with == in Conversation<O, P, S>::on_overlap_lost
+crates/secmp-client-core/src/sessions/actor.rs:2041:9: replace <impl CellSource for Conversations<O, P, S>>::relayed with ()
+crates/secmp-client-core/src/sessions/actor.rs:2055:9: replace <impl CellSource for Conversations<O, P, S>>::send_failed with ()
+crates/secmp-client-core/src/sessions/actor.rs:2078:9: replace <impl CellSource for Conversations<O, P, S>>::queue_lost with ()
+--- missed.txt ---
+--- unviable.txt ---
+crates/secmp-client-core/src/sessions/actor.rs:620:13: replace && with || in Conversation<O, P, S>::plan_unplanned
+crates/secmp-client-core/src/sessions/actor.rs:1025:13: replace && with || in Conversation<O, P, S>::mark_stranded
+crates/secmp-client-core/src/sessions/actor.rs:1072:13: replace && with || in Conversation<O, P, S>::on_unknown_send
+crates/secmp-client-core/src/sessions/actor.rs:1071:13: replace && with || in Conversation<O, P, S>::on_unknown_send
+--- timeout.txt ---

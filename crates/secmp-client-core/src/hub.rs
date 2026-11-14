@@ -354,6 +354,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             conversation.set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(
                 u64::from(route.period_s.seconds()).saturating_mul(1_000),
             ));
+            // the physical queue a `KeyChange`'s marker names (Q248)
+            conversation.set_send_sid(queue, route.sid);
             match previous {
                 Some(_) => {
                     conversation.switch_send_queue(queue);
@@ -1967,6 +1969,83 @@ mod tests {
             on(hub, b, ms(106), 132)?;
             on(hub, d, ms(107), 265)?;
             assert!(!live(hub), "B's 132 alone releases: nothing on C");
+            Ok(())
+        })
+    }
+
+    /// SE-95 (Q248, Q249; D-B73): through the hub, the first `KeyChange` cell on B (`sid` 4) is sealed after its marker
+    /// names B. A restart (the profile opened again from its files) registered on B again reads the marker back on the
+    /// queue it names: the re-read copy leaving its window releases the `KeyChange` and its markers. When the peer's
+    /// `RouteUpdate` C (`sid` 7) was committed before the restart (no pump), the restart registers C and B's copy is held
+    /// for good: C's window releases nothing, both markers stay.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_reads_the_marker_of_the_sent_queue() -> R {
+        use crate::sessions::tests::control_tags;
+
+        big(|| {
+            let mut out = Vec::new();
+            for (label, seed, moved) in
+                [("hub-mk-same", 131_u64, false), ("hub-mk-moved", 137, true)]
+            {
+                let (mut sc, guest, contact) = on_b(label, seed)?;
+                let hub = &mut sc.invitee;
+                let b = *hub.send_ids.get(&contact.0).ok_or("B")?;
+                assert!(matches!(
+                    hub.core_mut().handle(Request::RotateIdentity)?,
+                    Response::IdentityRotated(_)
+                ));
+                let on = |hub: &mut Hub<ManualClock, Fixed>, q: QueueId, now: u64, id: u64| -> R {
+                    let p = hub
+                        .prepare_cell(q, now)
+                        .map_err(|_| "prepare")?
+                        .ok_or("cell")?;
+                    hub.relayed(q, p.token, id);
+                    Ok(())
+                };
+                on(hub, b, ms(60), 1)?;
+                assert_eq!(
+                    control_tags(&hub.profile_store(), contact.0)?,
+                    (vec![3, 4], vec![[4_u8; 16]]),
+                    "{label}: the marker names B"
+                );
+                for i in 1..4_u64 {
+                    on(hub, b, ms(60 + i), 1 + i)?;
+                }
+                if moved {
+                    send_route(&mut sc, 7, ms(70))?;
+                }
+                drop(sc);
+                let guest = guest.reopen()?;
+                let mut again = hub_over(&guest, "guest", 900)?;
+                let [(q, sid)] = add_sends(&mut again)[..] else {
+                    return Err("one send queue".into());
+                };
+                let at = *again.core.index.get(&contact.0).ok_or("index")?;
+                for i in 0..4_u64 {
+                    on(&mut again, q, ms(200 + i), 1 + i)?;
+                }
+                for id in [261_u64, 262, 263] {
+                    on(&mut again, q, ms(300 + id), id)?;
+                }
+                out.push((
+                    sid,
+                    again
+                        .core
+                        .convs
+                        .get(at)
+                        .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight),
+                    control_tags(&again.profile_store(), contact.0)?.1,
+                ));
+            }
+            assert_eq!(
+                out,
+                [
+                    ([4_u8; 16], false, vec![]),
+                    ([7; 16], true, vec![[4; 16], [7; 16]])
+                ],
+                "Q249: same queue released by its window; moved: held by B's marker"
+            );
             Ok(())
         })
     }

@@ -2,8 +2,8 @@
 # SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
 # The first four jobs below are the required checks of the `main-protection` ruleset (`expect::REQUIRED_JOBS`); the
 # jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, `proverif-hx` (M4),
-# `proverif-link` (M5), `kani` (M6) and `fuzz` (M6-CI) — are pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required
-# checks once the owner adds `ct`, `mutants`, `proverif-hx`, `proverif-link`, `kani` and `fuzz` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
+# `proverif-link` (M5), `kani` (M6), `fuzz` (M6-CI) and `harness` (M7, also delegated by `linux-fast`) — are pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required
+# checks once the owner adds `ct`, `mutants`, `proverif-hx`, `proverif-link`, `kani`, `fuzz` and `harness` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
 # (M2 review C2): a dispatch would add `skipped` check runs under them, which count as passing. On-demand runs use
 # `ci-dispatch.yml`.
 # Checked by `cargo xtask policy` (`workflow_findings`, `workflow_token_findings`, `workflows`) as an accident guard
@@ -71,8 +71,8 @@ jobs:
         with:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: ci-fast (steps 1–5)
-        run: cargo xtask ci-fast --strict
+      - name: ci-fast (steps 1–5; the harness binary in job harness)
+        run: cargo xtask ci-fast --strict --delegated harness
       - name: SBOM (step 13) and systemd exposure (step 14)
         run: cargo xtask step --strict sbom systemd
       - name: Upload SBOMs
@@ -85,7 +85,7 @@ jobs:
   # The Windows gate for M0–M8 (Amendment A1 §2): native MSVC build, clippy, tests, KATs, hello-world binaries.
   windows-native:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -124,7 +124,7 @@ jobs:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Windows gate
-        run: cargo xtask step --strict clippy nextest doctest kat hello
+        run: cargo xtask step --strict clippy nextest doctest kat harness hello
 
   # docs/06 §5 step 11: cargo-xwin cross-build, a compile-compatibility check only (ADR-034; Windows release
   # builds are native). A hard gate since M1 (M0 review, condition C1).
@@ -161,6 +161,39 @@ jobs:
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Cross-build for x86_64-pc-windows-msvc
         run: cargo xtask step --strict windows-cross
+
+  # TEST-SPEC-M7 G7-07 (OPEN-M7-18 A, ADR-045 Amendment 12): the testkit `harness` binary (the in-process harness, the
+  # virtual-time and loopback simulations) as its own job; in `linux-fast` it took 36–63 min (ADR-045 Amendment 10).
+  # `linux-fast` and `linux-full` delegate the step here (`--delegated harness`); on every event, like `linux-fast`.
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-fast-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools
+        run: cargo xtask install-tools --set fast
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Harness binary (step 5 harness)
+        run: cargo xtask step --strict harness
 
   # docs/06 §5 steps 1–14 (ci-full): nightly on main and on every pull request (the gate before a milestone report);
   # on demand through `ci-dispatch.yml`. The Windows steps are covered by the two jobs above.
@@ -214,7 +247,7 @@ jobs:
       # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1), step 9
       # `kani` in the `kani` job (WEISUNG M6-11)
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr
 
   # docs/06 §5 step 9 `kani` as its own job (WEISUNG M6-11, VD-M6-A-23): on main the step took 66.8 min inside
   # `linux-full`; with the seven `secmp-client-core` harnesses of M6 (9.8 min on the runner) `linux-full` passed its
@@ -326,11 +359,12 @@ jobs:
             target/ct-bench.log
           if-no-files-found: error
 
-  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) outside `linux-full` (ADR-047), as 12 shards and
-  # a merge (ADR-047 Amendment 1, M4 review C-3): the two-crate run needs an estimated 7–26 h, more than any job. Each
-  # shard runs every twelfth mutant (round-robin) with `-j 3` under the step budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`
-  # (280 min) and records its verdict in `mutants.out`, which with the step log are kept as an artefact in every
-  # case. Same events as `linux-full`.
+  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) outside `linux-full` (ADR-047), as 24 shards and
+  # a merge (ADR-047 Amendment 1, M4 review C-3; 24 since Amendment 11, Q234): the two-crate run needs an estimated
+  # 7–26 h, more than any job. Each shard runs every 24th mutant (round-robin) with `-j 3` under the step budget
+  # `expect::MUTANTS_STEP_TIMEOUT_SECONDS` (280 min) and records its verdict in `mutants.out`, which with the step log
+  # are kept as an artefact in every case. The matrix is 0…23 = `expect::MUTANT_SHARDS` (policy step). Same events as
+  # `linux-full`.
   mutants-shard:
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -351,6 +385,18 @@ jobs:
           - 9
           - 10
           - 11
+          - 12
+          - 13
+          - 14
+          - 15
+          - 16
+          - 17
+          - 18
+          - 19
+          - 20
+          - 21
+          - 22
+          - 23
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -375,8 +421,8 @@ jobs:
         with:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: Mutation testing, one shard of 12 (step 8, `-j 3`)
-        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12
+      - name: Mutation testing, one shard of 24 (step 8, `-j 3`)
+        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24
       - name: Upload the shard's mutants evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -388,7 +434,7 @@ jobs:
           if-no-files-found: error
 
   # The verdict of step 8 (ADR-047 Amendment 1 (2), Amendment 2): runs after the shards whatever their outcome,
-  # downloads their results, reports every shard and package, and fails unless all 12 passed, every survivor is
+  # downloads their results, reports every shard and package, and fails unless all 24 passed, every survivor is
   # documented in `docs/mutants-accepted.md` and each package has caught at least 50 % of its mutants
   # (`expect::MUTANT_MIN_CAUGHT_PERCENT`); an unviable share above 35 % is a warning. The merged outcomes and the
   # per-package counts are kept as an artefact. Same events as `linux-full`.
@@ -408,7 +454,7 @@ jobs:
         with:
           pattern: mutants-*-${{ github.run_attempt }}
           path: target/mutants-shards
-      - name: Mutation verdict over the 12 shards (step 8)
+      - name: Mutation verdict over the 24 shards (step 8)
         run: cargo xtask step --strict mutants-merge
       - name: Upload the merged mutants evidence
         if: always()
@@ -542,6 +588,7 @@ jobs:
       - proverif-link
       - kani
       - fuzz
+      - harness
     if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')
     runs-on: ubuntu-latest
     timeout-minutes: 15

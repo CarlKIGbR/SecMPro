@@ -1,0 +1,324 @@
+=== A4-1-01 k_db_never_outside_a_locked_page exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+────────────
+ Nextest run ID 9e726170-e6b0-4dac-8a2e-66c6b7925540 with nextest profile: default
+    Starting 1 test across 1 binary (55 tests skipped)
+        FAIL [   0.006s] (1/1) secmp-store store::tests::k_db_never_outside_a_locked_page
+  stdout ───
+
+    running 1 test
+    test store::tests::k_db_never_outside_a_locked_page ... FAILED
+
+    failures:
+
+    failures:
+        store::tests::k_db_never_outside_a_locked_page
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 55 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'store::tests::k_db_never_outside_a_locked_page' (4147824) panicked at crates/secmp-store/src/store.rs:478:13:
+    assertion `left == right` failed: Zeroizing<[u8; 32]>
+      left: 1
+     right: 0
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.007s] 1 test run: 0 passed, 1 failed, 55 skipped
+        FAIL [   0.006s] (1/1) secmp-store store::tests::k_db_never_outside_a_locked_page
+error: test run failed
+
+=== A4-1-08 locked_memory_failure_is_unavailable exit 100
+   Compiling secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto)
+   Compiling secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto)
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.57s
+────────────
+ Nextest run ID f697963b-9a38-40c1-9bea-aabaccc0c28a with nextest profile: default
+    Starting 1 test across 1 binary (56 tests skipped)
+        FAIL [   0.006s] (1/1) secmp-store wrap::tests::locked_memory_failure_is_unavailable
+  stdout ───
+
+    running 1 test
+    test wrap::tests::locked_memory_failure_is_unavailable ... FAILED
+
+    failures:
+
+    failures:
+        wrap::tests::locked_memory_failure_is_unavailable
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 56 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'wrap::tests::locked_memory_failure_is_unavailable' (4148645) panicked at crates/secmp-store/src/wrap.rs:339:9:
+    assertion `left == right` failed
+      left: Unlock
+     right: Unavailable
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.007s] 1 test run: 0 passed, 1 failed, 56 skipped
+        FAIL [   0.006s] (1/1) secmp-store wrap::tests::locked_memory_failure_is_unavailable
+error: test run failed
+
+=== A4-1-02 create_is_durable_and_refuses_existing exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+────────────
+ Nextest run ID e7d08e28-804b-4708-a305-0ff12a752f5e with nextest profile: default
+    Starting 1 test across 1 binary (57 tests skipped)
+        FAIL [   0.006s] (1/1) secmp-store wrap::tests::create_is_durable_and_refuses_existing
+  stdout ───
+
+    running 1 test
+    test wrap::tests::create_is_durable_and_refuses_existing ... FAILED
+
+    failures:
+
+    failures:
+        wrap::tests::create_is_durable_and_refuses_existing
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'wrap::tests::create_is_durable_and_refuses_existing' (4152600) panicked at crates/secmp-store/src/wrap.rs:351:9:
+    assertion `left == right` failed
+      left: 0
+     right: 2
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.007s] 1 test run: 0 passed, 1 failed, 57 skipped
+        FAIL [   0.006s] (1/1) secmp-store wrap::tests::create_is_durable_and_refuses_existing
+error: test run failed
+
+=== A4-1-03 ad_vector_* (one wrong byte each) exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.87s
+────────────
+ Nextest run ID 10c021ed-d4ea-4b66-8bf8-55ec850c388c with nextest profile: default
+    Starting 6 tests across 1 binary (61 tests skipped)
+        FAIL [   0.084s] (1/6) secmp-store seal::tests::ad_vector_sessions
+  stdout ───
+
+    running 1 test
+    test seal::tests::ad_vector_sessions ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::ad_vector_sessions
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.08s
+
+  stderr ───
+    Error: Rejected
+
+  Cancelling due to test failure: 5 tests still running
+        FAIL [   0.084s] (2/6) secmp-store seal::tests::ad_vector_outbox
+  stdout ───
+
+    running 1 test
+    test seal::tests::ad_vector_outbox ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::ad_vector_outbox
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.08s
+
+  stderr ───
+    Error: Rejected
+
+        FAIL [   0.089s] (3/6) secmp-store seal::tests::ad_vector_identity
+  stdout ───
+
+    running 1 test
+    test seal::tests::ad_vector_identity ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::ad_vector_identity
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.08s
+
+  stderr ───
+    Error: Rejected
+
+        FAIL [   0.089s] (4/6) secmp-store seal::tests::ad_vector_relays
+  stdout ───
+
+    running 1 test
+    test seal::tests::ad_vector_relays ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::ad_vector_relays
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.08s
+
+  stderr ───
+    Error: Rejected
+
+        FAIL [   0.089s] (5/6) secmp-store seal::tests::ad_vector_prekeys
+  stdout ───
+
+    running 1 test
+    test seal::tests::ad_vector_prekeys ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::ad_vector_prekeys
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.08s
+
+  stderr ───
+    Error: Rejected
+
+        FAIL [   0.090s] (6/6) secmp-store seal::tests::ad_vector_invitations
+  stdout ───
+
+    running 1 test
+    test seal::tests::ad_vector_invitations ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::ad_vector_invitations
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.08s
+
+  stderr ───
+    Error: Rejected
+
+────────────
+     Summary [   0.090s] 6 tests run: 0 passed, 6 failed, 61 skipped
+        FAIL [   0.084s] (1/6) secmp-store seal::tests::ad_vector_sessions
+        FAIL [   0.084s] (2/6) secmp-store seal::tests::ad_vector_outbox
+        FAIL [   0.089s] (3/6) secmp-store seal::tests::ad_vector_identity
+        FAIL [   0.089s] (4/6) secmp-store seal::tests::ad_vector_relays
+        FAIL [   0.089s] (5/6) secmp-store seal::tests::ad_vector_prekeys
+        FAIL [   0.090s] (6/6) secmp-store seal::tests::ad_vector_invitations
+error: test run failed
+
+=== A4-1-04/05/06 settings_allowlist_pinned, import_refuses_any_nonempty_table, export_path_hardening exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.08s
+────────────
+ Nextest run ID 3f44c728-cb2e-4062-b9ac-5cd0296ffd6c with nextest profile: default
+    Starting 3 tests across 1 binary (67 tests skipped)
+        FAIL [   0.145s] (1/3) secmp-store backup::tests::settings_allowlist_pinned
+  stdout ───
+
+    running 1 test
+    test backup::tests::settings_allowlist_pinned ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::settings_allowlist_pinned
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.14s
+
+  stderr ───
+
+    thread 'backup::tests::settings_allowlist_pinned' (4156681) panicked at crates/secmp-store/src/backup.rs:1417:9:
+    assertion `left == right` failed
+      left: ["retention", "retention_days", "theme"]
+     right: ["retention_days"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 2 tests still running
+        FAIL [   0.317s] (2/3) secmp-store backup::tests::import_refuses_any_nonempty_table
+  stdout ───
+
+    running 1 test
+    test backup::tests::import_refuses_any_nonempty_table ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::import_refuses_any_nonempty_table
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.31s
+
+  stderr ───
+
+    thread 'backup::tests::import_refuses_any_nonempty_table' (4156683) panicked at crates/secmp-store/src/backup.rs:1478:13:
+    assertion `left == right` failed: prekeys
+      left: Ok(())
+     right: Err(Unavailable)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.594s] (3/3) secmp-store backup::tests::export_path_hardening
+  stdout ───
+
+    running 1 test
+    test backup::tests::export_path_hardening ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::export_path_hardening
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.59s
+
+  stderr ───
+
+    thread 'backup::tests::export_path_hardening' (4156682) panicked at crates/secmp-store/src/backup.rs:1499:13:
+    assertion `left == right` failed: OneDrive - X
+      left: Ok(())
+     right: Err(CloudFolder)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.594s] 3 tests run: 0 passed, 3 failed, 67 skipped
+        FAIL [   0.145s] (1/3) secmp-store backup::tests::settings_allowlist_pinned
+        FAIL [   0.317s] (2/3) secmp-store backup::tests::import_refuses_any_nonempty_table
+        FAIL [   0.594s] (3/3) secmp-store backup::tests::export_path_hardening
+error: test run failed
+
+=== A4-1-09 short_skipped_entry_refused exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.75s
+────────────
+ Nextest run ID d605f122-cc27-435b-be3d-1ab7a573c581 with nextest profile: default
+    Starting 1 test across 1 binary (70 tests skipped)
+        FAIL [   0.059s] (1/1) secmp-store sessions::tests::short_skipped_entry_refused
+  stdout ───
+
+    running 1 test
+    test sessions::tests::short_skipped_entry_refused ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::short_skipped_entry_refused
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 70 filtered out; finished in 0.05s
+
+  stderr ───
+
+    thread 'sessions::tests::short_skipped_entry_refused' (4161540) panicked at crates/secmp-store/src/sessions.rs:268:9:
+    assertion `left == right` failed
+      left: Ok(())
+     right: Err(Unavailable)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.060s] 1 test run: 0 passed, 1 failed, 70 skipped
+        FAIL [   0.059s] (1/1) secmp-store sessions::tests::short_skipped_entry_refused
+error: test run failed
+

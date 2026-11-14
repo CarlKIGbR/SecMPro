@@ -1,0 +1,5 @@
+head bf56f3f (code bffafe4): the SE-19 table written by harness::m7_activity::store_backed_source_activity_independent during cargo xtask step coverage (2026-11-02 20:26 UTC); refused.removed counts the sends to the contact that sent Control{1} (Q212 (8))
+
+Strict: frames C2R 18203 / R2C 51461, max |Δt| C2R 0 ms / R2C 0 ms; messages sent 204; refused: Refused { frozen: 41, reset: 22, blocked: 19, removed: 11, reinvite: 160 }
+Balanced: frames C2R 4310 / R2C 19388, max |Δt| C2R 0 ms / R2C 0 ms; messages sent 227; refused: Refused { frozen: 34, reset: 16, blocked: 17, removed: 7, reinvite: 154 }
+LowBw: frames C2R 1438 / R2C 6464, max |Δt| C2R 0 ms / R2C 0 ms; messages sent 239; refused: Refused { frozen: 34, reset: 14, blocked: 12, removed: 8, reinvite: 161 }

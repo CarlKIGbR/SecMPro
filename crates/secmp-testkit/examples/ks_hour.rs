@@ -25,8 +25,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use secmp_client_core::clock::{Clock as _, SystemClock, TokioClock};
-use secmp_client_core::scheduler::conversation::OsSource;
 use secmp_client_core::scheduler::params::Mode;
+use secmp_client_core::sessions::actor::OsSource;
 use secmp_testkit::harness::cert::{FixtureKey, VALID, self_signed};
 use secmp_testkit::harness::{Dir, DirectRelay, RelayLimits};
 use secmp_testkit::ks::{self, Frame};

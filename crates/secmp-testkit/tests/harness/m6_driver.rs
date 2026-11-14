@@ -741,6 +741,7 @@ fn driver_flushes_due_writes_before_work() {
             prepare_real: 300,
             prepare_dummy: 200,
             receive: 100,
+            jitter: 0,
         },
         30,
         11,
@@ -798,6 +799,7 @@ fn driver_reports_late_preparation_as_overrun() {
             prepare_real: 12_000,
             prepare_dummy: 12_000,
             receive: 0,
+            jitter: 0,
         },
         5,
         12,
@@ -807,7 +809,7 @@ fn driver_reports_late_preparation_as_overrun() {
     assert!(
         events
             .iter()
-            .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Overrun))),
+            .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun))),
         "{events:?}"
     );
     // the work's end is the clock's reading right after it (no virtual time passes inside `work`)
@@ -844,7 +846,7 @@ fn driver_resolves_every_connect() {
             .connects
             .iter()
             .filter_map(|(_, p, _)| match p {
-                secmp_client_core::scheduler::run::Purpose::Link(l) => Some(*l),
+                secmp_client_core::scheduler::run::Purpose::Link(l, _) => Some(*l),
                 secmp_client_core::scheduler::run::Purpose::Control(_) => None,
             })
             .collect();
@@ -860,7 +862,7 @@ fn driver_resolves_every_connect() {
         assert!(
             log.events
                 .iter()
-                .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::ClosedBeforeRelayInfo)))
+                .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, _, Reason::ClosedBeforeRelayInfo)))
         );
         // the hanging connect was given up after the timeout, not later; the others at once
         let delays: Vec<u64> = log
@@ -871,7 +873,7 @@ fn driver_resolves_every_connect() {
                 let started = log
                     .connects
                     .iter()
-                    .find(|(_, p, _)| *p == secmp_client_core::scheduler::run::Purpose::Link(*l))
+                    .find(|(_, p, _)| matches!(p, secmp_client_core::scheduler::run::Purpose::Link(x, _) if x == l))
                     .unwrap()
                     .0;
                 t.saturating_sub(started)
@@ -886,7 +888,7 @@ fn driver_resolves_every_connect() {
         let ups = log
             .events
             .iter()
-            .filter(|(_, e)| matches!(e, LinkEvent::Up(_)))
+            .filter(|(_, e)| matches!(e, LinkEvent::Up(_, _)))
             .count();
         assert!(ups >= 4, "{ups}");
         assert!(
@@ -956,6 +958,7 @@ fn driver_slow_work_does_not_delay_other_links() {
             prepare_real: 900,
             prepare_dummy: 900,
             receive: 400,
+            jitter: 0,
         },
         30,
         15,
@@ -986,7 +989,7 @@ fn blocking_worker_runs_jobs_on_the_blocking_pool() {
     use secmp_client_core::scheduler::types::{CellToken, QueueId, SendFailure};
     runtime().block_on(async {
         let convs: secmp_testkit::harness::Convs =
-            secmp_client_core::scheduler::conversation::Conversations::new();
+            secmp_client_core::sessions::actor::Conversations::new();
         let mut w = BlockingWorker::new(convs);
         let prepared = w
             .run(Job::Prepare {
@@ -1004,6 +1007,7 @@ fn blocking_worker_runs_jobs_on_the_blocking_pool() {
         let delivered = w
             .run(Job::Deliver {
                 queue: QueueId(9),
+                generation: 0,
                 cell_id: 1,
                 cell: cell(1),
             })
@@ -1041,6 +1045,7 @@ fn blocking_worker_runs_jobs_on_the_blocking_pool() {
         assert!(matches!(failed, JobDone::Prepared { cell: Err(_), .. }));
         let failed = Job::Deliver {
             queue: QueueId(1),
+            generation: 0,
             cell_id: 2,
             cell: cell(2),
         }

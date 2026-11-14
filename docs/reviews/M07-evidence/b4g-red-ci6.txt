@@ -1,0 +1,17 @@
+head c94767fe22e6fd85b451ffa04c0437081cca9c45
+command: cargo test --locked -p xtask -- --test-threads=1 mutants_merge mutants_inventory
+temporary edits:
+  sed -i '2182s#} else if read#} else if false && read#' xtask/src/gates.rs
+  sed -i '2190s#Err(e) => Some(format!("no mutant inventory: {}", e.0)),#Err(_) => None,#' xtask/src/gates.rs
+  sed -i '2209s#if merged.failures.is_empty()#if false && merged.failures.is_empty()#' xtask/src/gates.rs
+10:test gates::tests::mutants_merge_needs_one_inventory_in_every_shard ... FAILED
+12:test gates::tests::mutants_merge_refuses_an_empty_shard ... FAILED
+13:test gates::tests::mutants_merge_refuses_an_incomplete_or_substituted_union ... FAILED
+14:test gates::tests::mutants_merge_refuses_overlapping_shards ... FAILED
+21:thread 'gates::tests::mutants_merge_needs_one_inventory_in_every_shard' panicked at xtask/src/gates.rs:11424:9:
+27:thread 'gates::tests::mutants_merge_refuses_an_empty_shard' panicked at xtask/src/gates.rs:11313:9:
+   left: []  right: 23 lines "shard K/24: no mutant outcomes (an empty shard)"
+34:thread 'gates::tests::mutants_merge_refuses_an_incomplete_or_substituted_union' panicked at xtask/src/gates.rs:11375:9:
+41:thread 'gates::tests::mutants_merge_refuses_overlapping_shards' panicked at xtask/src/gates.rs:11337:9:
+53:test result: FAILED. 6 passed; 4 failed; 0 ignored; 0 measured; 314 filtered out; finished in 0.12s
+cause: with the empty-shard, inventory-read and failure-report checks disabled, the merge accepts empty, overlapping, incomplete or inventory-less shards.

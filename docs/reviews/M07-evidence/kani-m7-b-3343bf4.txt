@@ -1,0 +1,370 @@
+head 3343bf4 (clean tree): cargo xtask step --strict kani, 2026-11-01, nproc 32, alone on the machine; PASS 57/57, wall 4796 s; expect::JOB_BUDGETS ("kani", 150) min; modell=claude-sonnet-5-5.
+
+Peak cbmc RSS per harness (limit KANI_CBMC_RSS_LIMIT_KIB 14160156, 90 % = 12744140 KiB): the largest is kani_proofs::kani_persist_contract_abstract at 12466332 KiB = 88.0 %; none above 90 %. The gate prints a peak for 47 harnesses; the 10 others ran too briefly to be sampled (verification times below).
+
+| harness | peak cbmc RSS (KiB) | % of the limit | verification time (s) |
+|---|---|---|---|
+| `kani_proofs::kani_persist_contract_abstract` | 12466332 | 88.0 % | 748.618 |
+| `kani_proofs::kani_accept_opk_delete_only_on_success` | 12311184 | 86.9 % | 418.6461 |
+| `kani_proofs::request_link_get` | 9440152 | 66.7 % | 54.55906 |
+| `kani_proofs::kani_frame_pad_total` | 9064136 | 64.0 % | 371.33594 |
+| `kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch` | 8168900 | 57.7 % | 56.39198 |
+| `kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi` | 8163844 | 57.7 % | 58.19151 |
+| `kani_proofs::response_frame` | 8093312 | 57.2 % | 50.813736 |
+| `kani_proofs::kani_outer_unpad_total` | 7780036 | 54.9 % | 50.511696 |
+| `kani_proofs::kani_paired_executions` | 7323792 | 51.7 % | 233.51375 |
+| `kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2` | 6228412 | 44.0 % | 121.40113 |
+| `kani_proofs::kani_hx_grouping` | 5916908 | 41.8 % | 337.1702 |
+| `kani_proofs::kani_commit_accept_atomic_record_names_opk1` | 5600844 | 39.6 % | 146.23523 |
+| (the other 35 sampled harnesses) | each below 5428108 | below 38.3 % | |
+| `kani_proofs::kani_backoff_cap` | not sampled | — | 0.13633569 |
+| `kani_proofs::kani_cont_assembly` | not sampled | — | 0.9020277 |
+| `kani_proofs::kani_evicted_range` | not sampled | — | 0.06661197 |
+| `kani_proofs::kani_hx_chunk_bounds` | not sampled | — | 0.11916614 |
+| `kani_proofs::kani_in_flight_bound` | not sampled | — | 0.13339749 |
+| `kani_proofs::kani_prepare_link_send_before_fetch` | not sampled | — | 0.12961732 |
+| `kani_proofs::request_ping` | not sampled | — | 0.38874322 |
+| `kani_proofs::request_skey` | not sampled | — | 0.3370291 |
+| `kani_proofs::tr_eviction` | not sampled | — | 0.21753849 |
+| `kani_proofs::tr_skip_plan` | not sampled | — | 0.2597716 |
+
+New in this step: `kani_prepare_link_send_before_fetch` (OPEN-M7-B-2; alone run `kani-m7-b4-sc-kani_prepare_link_send_before_fetch.txt`).
+
+   Compiling xtask v0.0.0 (/work/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.78s
+     Running `target/debug/xtask step --strict kani`
+
+=== [9] kani ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-client-core > /work/SecMPro/target/kani-secmp-client-core.log
+  Checking harness kani_proofs::kani_prepare_link_send_before_fetch...
+   ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.12961732s
+  Checking harness kani_proofs::kani_retention_bound_24...
+   ** 4 of 4 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 38.45449s
+  Checking harness kani_proofs::kani_paired_executions...
+   ** 4 of 4 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 233.51375s
+  Checking harness kani_proofs::kani_persist_contract_abstract...
+   ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 748.618s
+  Checking harness kani_proofs::kani_queue_generations...
+   ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 80.79107s
+  Checking harness kani_proofs::kani_in_flight_over_transitions...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 36.362583s
+  Checking harness kani_proofs::kani_unwritten_bound...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 6.794197s
+  Checking harness kani_proofs::kani_deadline_arithmetic_checked...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 779.11176s
+  Checking harness kani_proofs::kani_tick_hands_out_without_commit...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.429735s
+  Checking harness kani_proofs::kani_teardown_keeps_the_committed_rr...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 37.609993s
+  Checking harness kani_proofs::kani_frame_written_commits_fifo...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 57.74122s
+  Checking harness kani_proofs::kani_reservation_is_schedule_only...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 51.466858s
+  Checking harness kani_proofs::kani_evicted_range...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.06661197s
+  Checking harness kani_proofs::kani_rate_bound_integer_form...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 364.2001s
+  Checking harness kani_proofs::kani_backoff_cap...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.13633569s
+  Checking harness kani_proofs::kani_uniform_draw_in_range...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.145654s
+  Checking harness kani_proofs::kani_tick_time_checked...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.2509985s
+  Checking harness kani_proofs::kani_in_flight_bound...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.13339749s
+  Checking harness kani_proofs::kani_balanced_rr_selects_due_or_ping...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 12.769312s
+  Complete - 19 successfully verified harnesses, 0 failures, 19 total.
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-proto -Z stubbing > /work/SecMPro/target/kani-secmp-proto.log
+  Checking harness kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 58.19151s
+  Checking harness kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 56.39198s
+  Checking harness kani_proofs::kani_q_frame_plaintext_exact_fit_request...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 12.1229925s
+  Checking harness kani_proofs::kani_cont_assembly...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.9020277s
+  Checking harness kani_proofs::kani_link_counter_checked_add...
+   ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 23.487318s
+  Checking harness kani_proofs::kani_link_counter_strict_plus_one...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 27.311655s
+  Checking harness kani_proofs::kani_frame_pad_total...
+   ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 371.33594s
+  Checking harness kani_proofs::kani_cell_plaintext_decode_total...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 63.88174s
+  Checking harness kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 121.40113s
+  Checking harness kani_proofs::kani_commit_accept_atomic_record_names_opk1...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 146.23523s
+  Checking harness kani_proofs::kani_accept_opk_delete_only_on_success...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 418.6461s
+  Checking harness kani_proofs::kani_hx_grouping...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 337.1702s
+  Checking harness kani_proofs::kani_outer_unpad_total...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 50.511696s
+  Checking harness kani_proofs::kani_hx_chunk_bounds...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.11916614s
+  Checking harness kani_proofs::tr_eviction...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.21753849s
+  Checking harness kani_proofs::tr_skip_plan...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.2597716s
+  Checking harness kani_proofs::tr_header_selection_k4...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.218776s
+  Checking harness kani_proofs::tr_header_selection_k3...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 10.259755s
+  Checking harness kani_proofs::tr_header_selection_k0_2...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.570392s
+  Checking harness kani_proofs::response_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 50.813736s
+  Checking harness kani_proofs::request_fetch_multi...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 68.30757s
+  Checking harness kani_proofs::request_cont...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 2.7136807s
+  Checking harness kani_proofs::request_link_get...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 54.55906s
+  Checking harness kani_proofs::request_queue_del...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 3.9981222s
+  Checking harness kani_proofs::request_fetch...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.518312s
+  Checking harness kani_proofs::request_queue_new...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 5.709175s
+  Checking harness kani_proofs::request_ping...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.38874322s
+  Checking harness kani_proofs::request_link_put...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 19.867764s
+  Checking harness kani_proofs::request_skey...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.3370291s
+  Checking harness kani_proofs::request_send...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 5.7100134s
+  Checking harness kani_proofs::request_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 10.948267s
+  Checking harness kani_proofs::padding...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 58.271885s
+  Checking harness kani_proofs::header_v1_reencodes...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 61.9673s
+  Checking harness kani_proofs::header_v1...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 11.007212s
+  Checking harness kani_proofs::cell...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.852137s
+  Complete - 35 successfully verified harnesses, 0 failures, 35 total.
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-relay > /work/SecMPro/target/kani-secmp-relay.log
+  Checking harness kani_proofs::kani_executor_response_count...
+   ** 6 of 6 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 128.92874s
+  Checking harness kani_proofs::kani_queue_eviction_bounds...
+   ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 34.770386s
+  Checking harness kani_proofs::kani_cmd_seq_monotone...
+   ** 5 of 5 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 2.5270982s
+  Complete - 3 successfully verified harnesses, 0 failures, 3 total.
+  kani-rss kani_proofs::kani_retention_bound_24: peak cbmc RSS 380532 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_paired_executions: peak cbmc RSS 7323792 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_persist_contract_abstract: peak cbmc RSS 12466332 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_queue_generations: peak cbmc RSS 3203844 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_in_flight_over_transitions: peak cbmc RSS 1409676 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_unwritten_bound: peak cbmc RSS 589880 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_deadline_arithmetic_checked: peak cbmc RSS 90888 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_tick_hands_out_without_commit: peak cbmc RSS 1959464 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_teardown_keeps_the_committed_rr: peak cbmc RSS 4272996 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_frame_written_commits_fifo: peak cbmc RSS 5428108 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_reservation_is_schedule_only: peak cbmc RSS 4786172 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_rate_bound_integer_form: peak cbmc RSS 2993288 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_uniform_draw_in_range: peak cbmc RSS 66920 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_tick_time_checked: peak cbmc RSS 29968 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_balanced_rr_selects_due_or_ping: peak cbmc RSS 465484 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi: peak cbmc RSS 8163844 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch: peak cbmc RSS 8168900 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_q_frame_plaintext_exact_fit_request: peak cbmc RSS 950040 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_link_counter_checked_add: peak cbmc RSS 1858672 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_link_counter_strict_plus_one: peak cbmc RSS 888748 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_frame_pad_total: peak cbmc RSS 9064136 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_cell_plaintext_decode_total: peak cbmc RSS 3289848 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2: peak cbmc RSS 6228412 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_commit_accept_atomic_record_names_opk1: peak cbmc RSS 5600844 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_accept_opk_delete_only_on_success: peak cbmc RSS 12311184 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_hx_grouping: peak cbmc RSS 5916908 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_outer_unpad_total: peak cbmc RSS 7780036 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::tr_header_selection_k4: peak cbmc RSS 1015180 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::tr_header_selection_k3: peak cbmc RSS 756024 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::tr_header_selection_k0_2: peak cbmc RSS 782512 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::response_frame: peak cbmc RSS 8093312 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_fetch_multi: peak cbmc RSS 3832252 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_cont: peak cbmc RSS 234404 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_link_get: peak cbmc RSS 9440152 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_queue_del: peak cbmc RSS 1167660 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_fetch: peak cbmc RSS 1077276 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_queue_new: peak cbmc RSS 1284084 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_link_put: peak cbmc RSS 2472788 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_send: peak cbmc RSS 1253308 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::request_frame: peak cbmc RSS 1067396 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::padding: peak cbmc RSS 1735672 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::header_v1_reencodes: peak cbmc RSS 3613000 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::header_v1: peak cbmc RSS 1906520 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::cell: peak cbmc RSS 366536 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_executor_response_count: peak cbmc RSS 4135084 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_queue_eviction_bounds: peak cbmc RSS 2522712 KiB (limit 14160156 KiB)
+  kani-rss kani_proofs::kani_cmd_seq_monotone: peak cbmc RSS 65704 KiB (limit 14160156 KiB)
+  cover kani_proofs::kani_prepare_link_send_before_fetch: 3 of 3 satisfied
+  cover kani_proofs::kani_retention_bound_24: 4 of 4 satisfied
+  cover kani_proofs::kani_paired_executions: 4 of 4 satisfied
+  cover kani_proofs::kani_persist_contract_abstract: 3 of 3 satisfied
+  cover kani_proofs::kani_queue_generations: 3 of 3 satisfied
+  cover kani_proofs::kani_in_flight_over_transitions: 2 of 2 satisfied
+  cover kani_proofs::kani_unwritten_bound: 1 of 1 satisfied
+  cover kani_proofs::kani_deadline_arithmetic_checked: 1 of 1 satisfied
+  cover kani_proofs::kani_tick_hands_out_without_commit: 1 of 1 satisfied
+  cover kani_proofs::kani_teardown_keeps_the_committed_rr: 1 of 1 satisfied
+  cover kani_proofs::kani_frame_written_commits_fifo: 1 of 1 satisfied
+  cover kani_proofs::kani_reservation_is_schedule_only: 1 of 1 satisfied
+  cover kani_proofs::kani_evicted_range: 2 of 2 satisfied
+  cover kani_proofs::kani_rate_bound_integer_form: 2 of 2 satisfied
+  cover kani_proofs::kani_backoff_cap: 2 of 2 satisfied
+  cover kani_proofs::kani_uniform_draw_in_range: 1 of 1 satisfied
+  cover kani_proofs::kani_tick_time_checked: 2 of 2 satisfied
+  cover kani_proofs::kani_in_flight_bound: 1 of 1 satisfied
+  cover kani_proofs::kani_balanced_rr_selects_due_or_ping: 2 of 2 satisfied
+  cover kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi: 1 of 1 satisfied
+  cover kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch: 1 of 1 satisfied
+  cover kani_proofs::kani_q_frame_plaintext_exact_fit_request: 1 of 1 satisfied
+  cover kani_proofs::kani_cont_assembly: 1 of 1 satisfied
+  cover kani_proofs::kani_link_counter_checked_add: 3 of 3 satisfied
+  cover kani_proofs::kani_link_counter_strict_plus_one: 2 of 2 satisfied
+  cover kani_proofs::kani_frame_pad_total: 2 of 2 satisfied
+  cover kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2: 1 of 1 satisfied
+  cover kani_proofs::kani_commit_accept_atomic_record_names_opk1: 1 of 1 satisfied
+  cover kani_proofs::kani_accept_opk_delete_only_on_success: 1 of 1 satisfied
+  cover kani_proofs::kani_executor_response_count: 6 of 6 satisfied
+  cover kani_proofs::kani_queue_eviction_bounds: 3 of 3 satisfied
+  cover kani_proofs::kani_cmd_seq_monotone: 5 of 5 satisfied
+### gate `kani`
+
+| item | verdict |
+|---|---|
+| status | PASS (4796 s) |
+| line 1 | Kani 0.68.0: harness packages secmp-client-core, secmp-proto, secmp-relay (expected set matches) |
+| line 2 | 57/57 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::kani_accept_opk_delete_only_on_success, kani_proofs::kani_backoff_cap, kani_proofs::kani_balanced_rr_selects_due_or_ping, kani_proofs::kani_cell_plaintext_decode_total, kani_proofs::kani_cmd_seq_monotone, kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2, kani_proofs::kani_commit_accept_atomic_record_names_opk1, kani_proofs::kani_cont_assembly, kani_proofs::kani_deadline_arithmetic_checked, kani_proofs::kani_evicted_range, kani_proofs::kani_executor_response_count, kani_proofs::kani_frame_pad_total, kani_proofs::kani_frame_written_commits_fifo, kani_proofs::kani_hx_chunk_bounds, kani_proofs::kani_hx_grouping, kani_proofs::kani_in_flight_bound, kani_proofs::kani_in_flight_over_transitions, kani_proofs::kani_link_counter_checked_add, kani_proofs::kani_link_counter_strict_plus_one, kani_proofs::kani_outer_unpad_total, kani_proofs::kani_paired_executions, kani_proofs::kani_persist_contract_abstract, kani_proofs::kani_prepare_link_send_before_fetch, kani_proofs::kani_q_frame_plaintext_exact_fit_request, kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch, kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi, kani_proofs::kani_queue_eviction_bounds, kani_proofs::kani_queue_generations, kani_proofs::kani_rate_bound_integer_form, kani_proofs::kani_reservation_is_schedule_only, kani_proofs::kani_retention_bound_24, kani_proofs::kani_teardown_keeps_the_committed_rr, kani_proofs::kani_tick_hands_out_without_commit, kani_proofs::kani_tick_time_checked, kani_proofs::kani_uniform_draw_in_range, kani_proofs::kani_unwritten_bound, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection_k0_2, kani_proofs::tr_header_selection_k3, kani_proofs::tr_header_selection_k4, kani_proofs::tr_skip_plan |
+| line 3 | every cover satisfied: kani_proofs::kani_prepare_link_send_before_fetch: 3 of 3 satisfied |
+| line 4 | kani_proofs::kani_retention_bound_24: 4 of 4 satisfied |
+| line 5 | kani_proofs::kani_paired_executions: 4 of 4 satisfied |
+| line 6 | kani_proofs::kani_persist_contract_abstract: 3 of 3 satisfied |
+| line 7 | kani_proofs::kani_queue_generations: 3 of 3 satisfied |
+| line 8 | kani_proofs::kani_in_flight_over_transitions: 2 of 2 satisfied |
+| line 9 | kani_proofs::kani_unwritten_bound: 1 of 1 satisfied |
+| line 10 | kani_proofs::kani_deadline_arithmetic_checked: 1 of 1 satisfied |
+| line 11 | kani_proofs::kani_tick_hands_out_without_commit: 1 of 1 satisfied |
+| line 12 | kani_proofs::kani_teardown_keeps_the_committed_rr: 1 of 1 satisfied |
+| line 13 | kani_proofs::kani_frame_written_commits_fifo: 1 of 1 satisfied |
+| line 14 | kani_proofs::kani_reservation_is_schedule_only: 1 of 1 satisfied |
+| line 15 | kani_proofs::kani_evicted_range: 2 of 2 satisfied |
+| line 16 | kani_proofs::kani_rate_bound_integer_form: 2 of 2 satisfied |
+| line 17 | kani_proofs::kani_backoff_cap: 2 of 2 satisfied |
+| line 18 | kani_proofs::kani_uniform_draw_in_range: 1 of 1 satisfied |
+| line 19 | kani_proofs::kani_tick_time_checked: 2 of 2 satisfied |
+| line 20 | kani_proofs::kani_in_flight_bound: 1 of 1 satisfied |
+| line 21 | kani_proofs::kani_balanced_rr_selects_due_or_ping: 2 of 2 satisfied |
+| line 22 | kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi: 1 of 1 satisfied |
+| line 23 | kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch: 1 of 1 satisfied |
+| line 24 | kani_proofs::kani_q_frame_plaintext_exact_fit_request: 1 of 1 satisfied |
+| line 25 | kani_proofs::kani_cont_assembly: 1 of 1 satisfied |
+| line 26 | kani_proofs::kani_link_counter_checked_add: 3 of 3 satisfied |
+| line 27 | kani_proofs::kani_link_counter_strict_plus_one: 2 of 2 satisfied |
+| line 28 | kani_proofs::kani_frame_pad_total: 2 of 2 satisfied |
+| line 29 | kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2: 1 of 1 satisfied |
+| line 30 | kani_proofs::kani_commit_accept_atomic_record_names_opk1: 1 of 1 satisfied |
+| line 31 | kani_proofs::kani_accept_opk_delete_only_on_success: 1 of 1 satisfied |
+| line 32 | kani_proofs::kani_executor_response_count: 6 of 6 satisfied |
+| line 33 | kani_proofs::kani_queue_eviction_bounds: 3 of 3 satisfied |
+| line 34 | kani_proofs::kani_cmd_seq_monotone: 5 of 5 satisfied |
+
+
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   9 kani            PASS       4796s  Kani 0.68.0: harness packages secmp-client-core, secmp-proto, secmp-relay (expected set matches); 57/57 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::kani_accept_opk_delete_only_on_success, kani_proofs::kani_backoff_cap, kani_proofs::kani_balanced_rr_selects_due_or_ping, kani_proofs::kani_cell_plaintext_decode_total, kani_proofs::kani_cmd_seq_monotone, kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2, kani_proofs::kani_commit_accept_atomic_record_names_opk1, kani_proofs::kani_cont_assembly, kani_proofs::kani_deadline_arithmetic_checked, kani_proofs::kani_evicted_range, kani_proofs::kani_executor_response_count, kani_proofs::kani_frame_pad_total, kani_proofs::kani_frame_written_commits_fifo, kani_proofs::kani_hx_chunk_bounds, kani_proofs::kani_hx_grouping, kani_proofs::kani_in_flight_bound, kani_proofs::kani_in_flight_over_transitions, kani_proofs::kani_link_counter_checked_add, kani_proofs::kani_link_counter_strict_plus_one, kani_proofs::kani_outer_unpad_total, kani_proofs::kani_paired_executions, kani_proofs::kani_persist_contract_abstract, kani_proofs::kani_prepare_link_send_before_fetch, kani_proofs::kani_q_frame_plaintext_exact_fit_request, kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch, kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi, kani_proofs::kani_queue_eviction_bounds, kani_proofs::kani_queue_generations, kani_proofs::kani_rate_bound_integer_form, kani_proofs::kani_reservation_is_schedule_only, kani_proofs::kani_retention_bound_24, kani_proofs::kani_teardown_keeps_the_committed_rr, kani_proofs::kani_tick_hands_out_without_commit, kani_proofs::kani_tick_time_checked, kani_proofs::kani_uniform_draw_in_range, kani_proofs::kani_unwritten_bound, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection_k0_2, kani_proofs::tr_header_selection_k3, kani_proofs::tr_header_selection_k4, kani_proofs::tr_skip_plan; every cover satisfied: kani_proofs::kani_prepare_link_send_before_fetch: 3 of 3 satisfied; kani_proofs::kani_retention_bound_24: 4 of 4 satisfied; kani_proofs::kani_paired_executions: 4 of 4 satisfied; kani_proofs::kani_persist_contract_abstract: 3 of 3 satisfied; kani_proofs::kani_queue_generations: 3 of 3 satisfied; kani_proofs::kani_in_flight_over_transitions: 2 of 2 satisfied; kani_proofs::kani_unwritten_bound: 1 of 1 satisfied; kani_proofs::kani_deadline_arithmetic_checked: 1 of 1 satisfied; kani_proofs::kani_tick_hands_out_without_commit: 1 of 1 satisfied; kani_proofs::kani_teardown_keeps_the_committed_rr: 1 of 1 satisfied; kani_proofs::kani_frame_written_commits_fifo: 1 of 1 satisfied; kani_proofs::kani_reservation_is_schedule_only: 1 of 1 satisfied; kani_proofs::kani_evicted_range: 2 of 2 satisfied; kani_proofs::kani_rate_bound_integer_form: 2 of 2 satisfied; kani_proofs::kani_backoff_cap: 2 of 2 satisfied; kani_proofs::kani_uniform_draw_in_range: 1 of 1 satisfied; kani_proofs::kani_tick_time_checked: 2 of 2 satisfied; kani_proofs::kani_in_flight_bound: 1 of 1 satisfied; kani_proofs::kani_balanced_rr_selects_due_or_ping: 2 of 2 satisfied; kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi: 1 of 1 satisfied; kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch: 1 of 1 satisfied; kani_proofs::kani_q_frame_plaintext_exact_fit_request: 1 of 1 satisfied; kani_proofs::kani_cont_assembly: 1 of 1 satisfied; kani_proofs::kani_link_counter_checked_add: 3 of 3 satisfied; kani_proofs::kani_link_counter_strict_plus_one: 2 of 2 satisfied; kani_proofs::kani_frame_pad_total: 2 of 2 satisfied; kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2: 1 of 1 satisfied; kani_proofs::kani_commit_accept_atomic_record_names_opk1: 1 of 1 satisfied; kani_proofs::kani_accept_opk_delete_only_on_success: 1 of 1 satisfied; kani_proofs::kani_executor_response_count: 6 of 6 satisfied; kani_proofs::kani_queue_eviction_bounds: 3 of 3 satisfied; kani_proofs::kani_cmd_seq_monotone: 5 of 5 satisfied
+step: PASS

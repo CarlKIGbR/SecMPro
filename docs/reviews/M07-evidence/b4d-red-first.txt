@@ -1,0 +1,96 @@
+head 331723c
+
+## Q213 hub::tests::retiring_invitation_queue_is_rearmed_after_a_restart
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(retiring_invitation_queue_is_rearmed_after_a_restart)'
+    thread '<unnamed>' (1473880) panicked at crates/secmp-client-core/src/hub.rs:1287:13:
+    assertion `left == right` failed
+      left: [AfterEmptyFetchFrom(QueueId(1), 544165666)]
+     right: [AfterEmptyFetch(QueueId(1))]
+
+## C1-3 invitations::tests::queue_deleted_keeps_consumed_row_without_retiring_entry
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(queue_deleted_keeps_consumed)'
+    thread 'invitations::tests::queue_deleted_keeps_consumed_row_without_retiring_entry' (1474486) panicked at crates/secmp-client-core/src/invitations_tests.rs:2165:5:
+    assertion failed: !invitations.queue_deleted(record.relay, record.queue)?
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+## Q214 harness::m7_restart::queue_new_without_sender_seed_fails_closed (fixed tree with the driver.rs arm Some((recv, None)) => (recv, zero seed), the HEAD behaviour)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(queue_new_without_sender_seed)'
+    thread 'm7_restart::queue_new_without_sender_seed_fails_closed' (1526055) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:238:5:
+    no QUEUE_NEW without a sender seed
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+## Q215 invitations::tests::stored_encode_reserves_exact_capacity (unfixed encode body, TRAILER_LEN kept)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(stored_encode_reserves)'
+    thread 'invitations::tests::stored_encode_reserves_exact_capacity' (1549095) panicked at crates/secmp-client-core/src/invitations_tests.rs:2188:9:
+    assertion `left == right` failed
+      left: 856
+     right: 472
+
+## B4b-6/hub-errors harness::m7_restart::queue_deleted_failure_reaches_hub_errors (driver.rs hub-error edit stashed)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(hub_errors) | test(relay_restart_with_store)'
+    thread 'm7_restart::queue_deleted_failure_reaches_hub_errors' (1575158) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:304:5:
+    the refused write of queue_deleted is reported
+
+
+## hub-errors harness::m7_restart::hub_step_error_reaches_hub_errors (driver.rs hub-error edit stashed)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(hub_step_error)'
+    thread 'm7_restart::hub_step_error_reaches_hub_errors' (1578958) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:340:5:
+    Hub::pump failed on the ContactRemoved control: []
+
+## B4b-8 harness::m7_restart::queue_del_on_a_gone_queue_completes (compiling mutation driver.rs: Ok(()) | Err(TransportError::NoQueue) => {} replaced by Ok(()) => {}, reverted)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(queue_del_on_a_gone)'
+    thread 'm7_restart::queue_del_on_a_gone_queue_completes' (1584173) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:400:5:
+    the QUEUE_DEL completed on ERR_NOQUEUE
+
+## C1-4a api::tests::verify_without_session_keeps_stored_frozen (contacts.rs fix hunk stashed)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(verify_without_session)'
+    thread '<unnamed>' (1629050) panicked at crates/secmp-client-core/src/api.rs:1573:13:
+    assertion `left == right` failed
+      left: None
+     right: Some(Frozen)
+
+## C1-4c sessions::actor::tests::unloadable_new_ik_sig_freezes (compiling mutation actor.rs admit_key_change_with: Err(_) => (Delivery::KeyChange(iks), None), reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(unloadable_new_ik_sig)'
+    thread 'sessions::actor::tests::unloadable_new_ik_sig_freezes' (1632001) panicked at crates/secmp-client-core/src/sessions/actor.rs:2212:9:
+    assertion failed: matches!(delivery, Delivery::KeyChangeRefused)
+
+## C1-4b sessions::tests::second_key_change_verifies_under_the_new_key (proof, compiling mutation actor.rs apply_delivery KeyChange arm: if let Some(peer) = new_peer {..} replaced by let _ = new_peer;, reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(second_key_change_verifies)'
+    thread '<unnamed>' (1632566) panicked at crates/secmp-client-core/src/sessions/tests.rs:1583:9:
+    the second key change is accepted under the first new key
+
+## C1-6a scheduler::core::tests::empty_fetch_not_armed_on_error_or_starved_queue (compiling mutation: had_dummy = frames < self.params.f_m restored in the fixed tree, reverted; the test's by-value cells / Refusing source need the fix to compile)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(empty_fetch_not_armed)'
+    thread 'scheduler::core::tests::empty_fetch_not_armed_on_error_or_starved_queue' (1657699) panicked at crates/secmp-client-core/src/scheduler/core/mod.rs:2756:13:
+    assertion `left == right` failed: mine 0, others 8, error false, F_M 16
+      left: true
+     right: false
+
+## B4b-1 invitations::tests::killers_rounds_and_contact (compiling mutation invitations.rs encode_queues: QueueEntry { send_seed: None, ..stored.entry()? }, reverted; KAT test seed)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(killers_rounds_and_contact)'
+    thread 'invitations::tests::killers_rounds_and_contact' (1683267) panicked at crates/secmp-client-core/src/invitations_tests.rs:1282:9:
+    assertion `left == right` failed
+      left: None
+     right: Some([210, 221, 42, 229, 249, 21, 160, 63, 53, 248, 38, 160, 195, 104, 230, 181, 20, 239, 112, 100, 240, 180, 27, 0, 132, 131, 38, 228, 186, 12, 141, 174])
+
+## C1-8a hub::tests::register_route_sets_t_rs (compiling mutation: the set_receipt_timeout_ms call in register_route deleted, reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(register_route_sets_t_rs)'
+    thread '<unnamed>' (1685022) panicked at crates/secmp-client-core/src/hub.rs:1349:13:
+    assertion `left == right` failed
+      left: Some(0)
+     right: Some(86400000)
+
+## C1-8b harness::m7_scheduled::expired_invitation_queue_del_end_to_end (compiling mutation: Hub::tick does not call maintain, reverted)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(expired_invitation_queue_del_end_to_end)'
+    thread 'm7_scheduled::expired_invitation_queue_del_end_to_end' (1688600) panicked at crates/secmp-testkit/tests/harness/m7_scheduled.rs:173:5:
+    assertion `left == right` failed: exactly one QUEUE_DEL: []
+      left: 0
+     right: 1
+
+## C2-4 harness::m7_activity::store_backed_source_activity_independent (compiling mutation contacts.rs check_send: ContactState::Removed => Err(Error::Unavailable), reverted; the one-line mutation ContactState::Removed => Ok(()) stays green because the session's block (Refusal::Removed) refuses too, defence in depth)
+cmd: cargo nextest run -p secmp-testkit --features kat -E 'test(store_backed_source_activity_independent)'
+    thread '<unnamed>' (1691977) panicked at crates/secmp-testkit/tests/harness/m7_activity.rs:278:21:
+    assertion `left == right` failed: a send to a Removed contact is refused
+      left: Err(Unavailable)
+     right: Err(Blocked)

@@ -1,0 +1,67 @@
+# A0 probe (ADR-055): edit the scratch copy of the workspace under target/a0/ws only.
+import sys
+root = sys.argv[1]
+def edit(p, pairs):
+    p = root + '/' + p
+    d = open(p).read()
+    for old, new in pairs:
+        assert d.count(old) == 1, (p, old)
+        d = d.replace(old, new)
+    open(p, 'w').write(d)
+
+edit('Cargo.toml', [(
+'''# Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).''',
+'''# A0 probe (ADR-055 items 1 and 2), scratch only.
+rusqlite = { version = "=0.39.0", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+secmp-store = { path = "crates/secmp-store" }
+
+# Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).''')])
+
+edit('crates/secmp-store/Cargo.toml', [(
+'''[lints]
+workspace = true''',
+'''[dependencies]
+rusqlite.workspace = true
+secmp-crypto.workspace = true
+secmp-proto.workspace = true
+
+[lints]
+workspace = true''')])
+
+edit('crates/secmp-store/src/lib.rs', [(
+'''#![forbid(unsafe_code)]''',
+'''#![forbid(unsafe_code)]
+
+/// A0 probe: the bundled SQLCipher version (`PRAGMA cipher_version`) of an in-memory database opened with a key.
+pub fn probe_cipher_version() -> rusqlite::Result<String> {
+    let c = rusqlite::Connection::open_in_memory()?;
+    c.pragma_update(None, "key", "x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'")?;
+    c.query_row("PRAGMA cipher_version", [], |r| r.get(0))
+}''')])
+
+edit('crates/secmp-crypto/Cargo.toml', [(
+'''getrandom.workspace = true
+
+# Pure Rust only''',
+'''getrandom.workspace = true
+argon2.workspace = true
+
+# Pure Rust only''')])
+
+edit('crates/secmp-client-core/Cargo.toml', [(
+'''[dependencies]
+secmp-crypto.workspace = true''',
+'''[target.'cfg(not(kani))'.dependencies]
+secmp-store.workspace = true
+
+[dependencies]
+secmp-crypto.workspace = true''')])
+
+edit('crates/secmp-testkit/Cargo.toml', [(
+'''[target.'cfg(not(miri))'.dependencies]
+secmp-client-core.workspace = true''',
+'''[target.'cfg(not(miri))'.dependencies]
+secmp-store.workspace = true
+secmp-client-core.workspace = true''')])
+print('ok')

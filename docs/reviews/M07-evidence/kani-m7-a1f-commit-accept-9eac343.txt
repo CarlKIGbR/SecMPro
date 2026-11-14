@@ -1,0 +1,11 @@
+# Real output of `cargo kani -p secmp-proto -Z stubbing --harness <name>` (foreground, 2026-10-28), filtered to the lines
+# the `kani` step prints (Checking harness / cover summary / VERIFICATION / Verification Time). Run on HEAD 9eac343 plus the
+# uncommitted A1e/A1f working tree. Complete - 1 successfully verified harnesses, 0 failures, 1 total (each).
+  Checking harness kani_proofs::kani_commit_accept_atomic_record_names_opk1...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 92.0803s
+  Checking harness kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2...
+   ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 116.59998s

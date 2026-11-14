@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Windows backend of `SecretPage` (docs/04 CS-2.2): one `VirtualAlloc` allocation of three `PAGE_NOACCESS`
 //! pages; the middle (data) page is made read-write and `VirtualLock`ed. When the lock quota (the minimum working
-//! set) is exhausted, the working set is enlarged once and the lock retried.
+//! set) is exhausted, the working set is enlarged in doubling steps up to a bound and the lock retried after each
+//! (`grow::lock_with_growth`); every lock and every enlargement of this crate runs under one process-wide lock
+//! (ADR-061).
 
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
+use std::sync::{Mutex, PoisonError};
 
 use windows_sys::Win32::Foundation::{ERROR_WORKING_SET_QUOTA, GetLastError};
 use windows_sys::Win32::System::Memory::{
@@ -17,10 +20,12 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
 };
 
+use super::grow::{Growth, LockError, lock_with_growth};
 use super::{Backend, Error};
 
-/// Pages added to the working-set minimum and maximum when `VirtualLock` runs out of quota.
-const WORKING_SET_STEP_PAGES: usize = 64;
+/// Serialises every `VirtualLock` of a data page and every working-set change of this crate, so that a step one
+/// thread takes cannot be lost to another thread's read-modify-write of the sizes. It guards no data.
+static GROW: Mutex<()> = Mutex::new(());
 
 /// The system page size.
 pub(super) fn page_size() -> Result<usize, Error> {
@@ -96,45 +101,46 @@ impl Drop for Mapping {
     }
 }
 
-/// Lock the data page; on `ERROR_WORKING_SET_QUOTA` enlarge the working set once and retry.
+/// Lock the data page; on `ERROR_WORKING_SET_QUOTA` enlarge the working set in bounded steps and retry
+/// (`grow::lock_with_growth`), all under [`GROW`].
 fn lock(data: *const c_void, page: usize) -> Result<(), Error> {
-    // SAFETY: locks the committed read-write data page of our own allocation; its contents are not accessed.
-    if unsafe { VirtualLock(data, page) } != 0 {
-        return Ok(());
-    }
-    // SAFETY: reads the calling thread's last-error value; no preconditions.
-    if unsafe { GetLastError() } != ERROR_WORKING_SET_QUOTA {
-        return Err(Error::new());
-    }
-    grow_working_set(page)?;
-    // SAFETY: as above.
-    if unsafe { VirtualLock(data, page) } != 0 {
-        Ok(())
-    } else {
-        Err(Error::new())
-    }
-}
-
-/// Raise the working-set minimum and maximum of this process by `WORKING_SET_STEP_PAGES` pages (the number of
-/// lockable pages is bounded by the minimum working set).
-fn grow_working_set(page: usize) -> Result<(), Error> {
-    let step = page
-        .checked_mul(WORKING_SET_STEP_PAGES)
-        .ok_or(Error::new())?;
+    let growth = Growth::working_set(page)?;
+    // A panic of another holder leaves nothing inconsistent: `GROW` guards no data and every step re-reads the sizes.
+    let _serial = GROW.lock().unwrap_or_else(PoisonError::into_inner);
     // SAFETY: returns the pseudo-handle of the current process; no preconditions.
     let process = unsafe { GetCurrentProcess() };
-    let (mut min, mut max) = (0_usize, 0_usize);
-    // SAFETY: the current-process pseudo-handle has full access; `min` and `max` are valid out-pointers.
-    if unsafe { GetProcessWorkingSetSize(process, &raw mut min, &raw mut max) } == 0 {
-        return Err(Error::new());
-    }
-    let min = min.checked_add(step).ok_or(Error::new())?;
-    let max = max.checked_add(step).ok_or(Error::new())?;
-    // SAFETY: the current-process pseudo-handle has `PROCESS_SET_QUOTA`; both sizes grow.
-    if unsafe { SetProcessWorkingSetSize(process, min, max) } == 0 {
-        return Err(Error::new());
-    }
-    Ok(())
+    lock_with_growth(
+        || {
+            // SAFETY: locks the committed read-write data page of our own allocation; its contents are not accessed.
+            if unsafe { VirtualLock(data, page) } != 0 {
+                return Ok(());
+            }
+            // SAFETY: reads the calling thread's last-error value, right after the failed call; no preconditions.
+            if unsafe { GetLastError() } == ERROR_WORKING_SET_QUOTA {
+                Err(LockError::Quota)
+            } else {
+                Err(LockError::Other)
+            }
+        },
+        || {
+            let (mut min, mut max) = (0_usize, 0_usize);
+            // SAFETY: the current-process pseudo-handle has full access; `min` and `max` are valid out-pointers.
+            if unsafe { GetProcessWorkingSetSize(process, &raw mut min, &raw mut max) } == 0 {
+                return Err(Error::new());
+            }
+            Ok((min, max))
+        },
+        |min, max| {
+            // SAFETY: the current-process pseudo-handle has `PROCESS_SET_QUOTA`; `lock_with_growth` only raises both
+            // sizes, the minimum at most to its cap.
+            if unsafe { SetProcessWorkingSetSize(process, min, max) } == 0 {
+                Err(Error::new())
+            } else {
+                Ok(())
+            }
+        },
+        growth,
+    )
 }
 
 #[cfg(test)]
@@ -172,4 +178,96 @@ pub(super) fn assert_protected(data: *mut u8, backend: Backend) {
     assert_eq!(m.State, MEM_COMMIT);
     assert_eq!(m.Protect, PAGE_READWRITE);
     assert_eq!(backend, Backend::VirtualLock);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::thread;
+    use std::time::Duration;
+
+    use super::super::SecretPage;
+    use super::*;
+
+    /// 8 threads lock 64 pages each at once, far more than the default minimum working set lets a process lock (about
+    /// 50 pages): every lock succeeds through the bounded growth, and every page is released afterwards.
+    #[test]
+    fn concurrent_locks_beyond_the_default_quota_all_succeed() -> Result<(), Error> {
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let mut workers = Vec::new();
+        for _ in 0..8 {
+            let start = Arc::clone(&start);
+            workers.push(thread::spawn(move || -> Result<Vec<usize>, Error> {
+                start.wait();
+                let mut pages = Vec::new();
+                for i in 0..64_u8 {
+                    let mut p = SecretPage::<32>::new()?;
+                    p.get_mut().fill(i);
+                    pages.push(p);
+                }
+                for (i, p) in (0..64_u8).zip(&pages) {
+                    assert!(p.get().iter().all(|b| *b == i));
+                    assert_protected(p.map.data(), p.backend());
+                }
+                let released = pages.iter().map(|p| p.map.data().addr()).collect();
+                // The lock evidence: `VirtualUnlock` succeeds only on a locked page (it leaves each page unlocked
+                // until its drop, whose own `VirtualUnlock` then fails and is ignored).
+                for p in &pages {
+                    assert!(unlocks(p.map.data(), p.map.page), "page was not locked");
+                }
+                Ok(released)
+            }));
+        }
+        let mut released = Vec::new();
+        for w in workers {
+            released.extend(w.join().map_err(|_| Error::new())??);
+        }
+        assert_eq!(released.len(), 512);
+        for addr in released {
+            assert_eq!(
+                query(ptr::without_provenance(addr)).State,
+                windows_sys::Win32::System::Memory::MEM_FREE,
+                "page released"
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether `VirtualUnlock` of the page at `data` succeeds, i.e. whether it was locked.
+    fn unlocks(data: *mut u8, page: usize) -> bool {
+        // SAFETY: unlocks a data page of a live `SecretPage` of this test; its contents are not accessed, and the
+        // page stays committed and read-write until the `SecretPage` is dropped.
+        unsafe { VirtualUnlock(data.cast::<c_void>().cast_const(), page) != 0 }
+    }
+
+    /// Every lock of a data page waits for [`GROW`]: while the test holds it, an allocation on another thread does not
+    /// complete; once it is released, the allocation succeeds. No assertion on time: the wait only gives a lock that
+    /// bypassed `GROW` the chance to show itself.
+    #[test]
+    fn every_lock_waits_for_the_growth_lock() -> Result<(), Error> {
+        let done = Arc::new(AtomicBool::new(false));
+        let (started, wait_started) = mpsc::channel();
+        let held = GROW.lock().unwrap_or_else(PoisonError::into_inner);
+        let worker = {
+            let done = Arc::clone(&done);
+            thread::spawn(move || -> Result<(), Error> {
+                started.send(()).map_err(|_| Error::new())?;
+                let p = SecretPage::<32>::new()?;
+                done.store(true, Ordering::SeqCst);
+                drop(p);
+                Ok(())
+            })
+        };
+        wait_started.recv().map_err(|_| Error::new())?;
+        thread::sleep(Duration::from_millis(200));
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "a page was locked while GROW was held"
+        );
+        drop(held);
+        worker.join().map_err(|_| Error::new())??;
+        assert!(done.load(Ordering::SeqCst));
+        Ok(())
+    }
 }

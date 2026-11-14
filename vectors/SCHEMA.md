@@ -1,4 +1,8 @@
-# Test-vector schema — revision 7 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+# Test-vector schema — revision 9 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`/`secmp-store`)
+
+Revision 9 (2026-11-12, Weisungen REF-M7-store4 and M7-B16) adds the ADR-053 Amendment 4 rejects `store-0027` and `store-0028` to §4.12 (`store.json` is re-frozen with 28 cases; cases `store-0001`…`-0026` and the header are unchanged, its `"schema"` stays 8 and its `"spec"` stays "SecMP/1 rev 2.7"; Q235). The other twelve files are unchanged.
+
+Revision 8 (2026-11-11, Weisungen REF-M7-store, REF-M7-store3 and M7-VEC1) adds §4.12 `store` (ADR-053 items 1–6, Amendments 1–3; its case table is `SCHEMA-4.12-store.md`), the suite tag `store` (§3) and the `"schema": 8` shapes (§1). The M1–M5 files are unchanged.
 
 Revision 7 (2026-10-07, Weisung REF-M5-2) adds the R-66 cases, RF-1 and the derived `inv_sid` to §4.10 (`hx.json` is re-frozen for spec rev 2.6; its `"schema"` stays 5).
 
@@ -32,6 +36,7 @@ Revision 2 (2026-09-28) answers the reference implementation's questions SQ-01�
 - **`"schema": 4`** is the header of `tr.json` (§4.9). Its cases carry case-level fields besides `id`, `op`, `inputs` and `outputs`: `party` (`"A"`, `"B"`, or `"AB"` for `init`), `msg` (`"m01"` … `"m40"`), `from` (the id of an earlier case), `manipulation` (ASCII strings) and `count` (a JSON number). Its `op` values are `init`, `send`, `recv`, `advance` and `recv-reject`. A `recv-reject` case carries both `"expect": "reject"` and `outputs` (the unchanged state digests). The cases are in event order, so the `recv-reject` cases are interleaved with the others. Every `inputs`/`outputs` value is a byte string.
 - **`"schema": 5`** is the header of `hx.json` (§4.10). Its cases carry the case-level field `party` (`"I"`, the initiator/invitee, or `"R"`, the responder/inviter) and, on the rejections, `manipulation` (an ASCII string) and `"expect": "reject"`. Its `op` values are `keys-R`, `keys-I`, `invite`, `linkdata`, `invitee-accept`, `initiate`, `respond`, `respond-garbage`, `invitee-reject` and `respond-reject`. An `invitee-reject` case has no `outputs`; a `respond-reject` case carries both `"expect": "reject"` and `outputs` (`opks_post`). Every `inputs`/`outputs` value is a byte string except `uri` (an ASCII string), `accept` (a boolean), `opks_post` (an array of numbers, ascending) and `fetched` and `routes` (arrays of byte strings, in order).
 - **`"schema": 6`** is the header of `link.json` (§4.11). Its cases carry the case-level fields `party` (`"C"`, the client; `"R"`, the relay; or `"CR"`, a request/response round trip on the link), `from` (the id of the earlier case whose state the case starts from; every case except `link-0001` and X1), `cmd_seq` (a JSON number: the `cmd_seq` of the first request frame of every round trip), `count` (a JSON number, on `send-fill`), `cases` (on X1 instead of `from`: an array of arrays of case ids), `manipulation` (an ASCII string) and `expect` (`"reject"`). Its `op` values are `relay-keys`, `relayinfo-accept`, `hs1`, `hs2`, `hs2-accept`, `queue-new`, `send`, `ping`, `fetch`, `fetch-multi`, `send-fill`, `queue-del`, `link-put`, `link-get`, `skey`, `indist`, `relayinfo-reject`, `hs1-reject`, `hs2-reject` and `frame-reject`. A command-error case carries `manipulation` and `outputs` and no `expect`. A `relayinfo-reject`, `hs1-reject` or `hs2-reject` case carries `"expect": "reject"` and no `outputs`, except the `hs1-reject` case S10, which carries both, as does every `frame-reject` case (`outputs` = {`link_post`}). Every `inputs`/`outputs` value is a byte string except `accept` (a boolean); `req`, `resp`, `req_frames` and `resp_frames` (arrays of byte strings, in frame order); `link_post` (an object {`c2r`, `r2c`, `cmd_seq`} of numbers); `store_post` (an object {`queues`, `linkdata`}: `queues` an array, ascending by `rid`, of {`rid`, `sid`, `cell_ids` (an array of numbers), `next_cell_id`}, and `linkdata` an array, ascending by `ld_id`, of {`ld_id`, `one_time`, `expires_bucket`, `present`, `consumed`}, numbers except the byte strings `rid`, `sid` and `ld_id`); `resp_counts` (an array of arrays of numbers) and `frame_len` (a number).
+- **`"schema": 8`** is the header of `store.json` (§4.12): case-level `from` (every `seal` case and every reject), `manipulation` and `"expect": "reject"` (rejects carry no `outputs`); `op` `keys`, `wrap`, `seal`, `backup`, `wrap-reject`, `seal-reject`, `backup-reject`; every `inputs`/`outputs` value is a byte string except `label` and `column` (ASCII strings) and `row_key_parts` (an array, in primary-key order, of {`int`: a number} or {`bytes`: a byte string}).
 - Every case has `id`, `op`, `inputs`, and either `outputs` or `"expect": "reject"`. Cases are ordered by `id`; the index starts at `0001`; negative cases continue the same sequence after the positive ones.
 - Files are written canonically: keys sorted by code point at every level, `separators=(",", ":")`, ASCII only, no trailing newline. **Comparison is structural**: both files are parsed, `generator` is removed, and the resulting JSON values must be equal. No case-folding of any string. A validator additionally checks that every byte-string field matches `^([0-9a-f]{2})*$`.
 - Rejected cases MUST be rejected with the implementation's single uniform error for that construction.
@@ -62,6 +67,7 @@ Key material derived from the stream: an X25519 secret is 32 raw stream bytes (c
 | `tr` | `tr` |
 | `hx` | `hx` |
 | `link` | `link` |
+| `store` | `store` |
 
 ## 4. M1 suites — inputs, outputs and case tables
 
@@ -225,9 +231,13 @@ The case shape, the constants, the obligations per op, the positive run, the inv
 
 The case shape, the constants, the obligations per op, the positive run, the command-error cases E1–E23, the indistinguishability case X1, the RelayInfo cases I1–I8, `hs1-reject` (H1, S1–S10), `hs2-reject` (T1–T4) and `frame-reject` (F1–F12) are in `SCHEMA-4.11-link.md` (decided by the reviewer for brief REF-M5; generated from `ref/secmp_ref/link_cases.py`).
 
+### 4.12 `store` — the local-store constructions (ADR-053)
+
+The constants, obligations per op, stream layouts and the case table are in `SCHEMA-4.12-store.md` (decided by the reviewer for Weisungen REF-M7-store, REF-M7-store3 and REF-M7-store4; generated from `ref/secmp_ref/store_cases.py`).
+
 ## 5. Later suites
 
-None. The M5 suite `link` (Appendix C: "LINK handshake + first three frames each direction") is §4.11.
+The M5 suite `link` (Appendix C: "LINK handshake + first three frames each direction") is §4.11. The M7 suite `store` (ADR-053 item 8) is §4.12.
 
 ## 6. Library independence
 

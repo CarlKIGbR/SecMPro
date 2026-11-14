@@ -18,11 +18,12 @@ SCHEMA = 2
 # arrays and the ASCII fields `structure`/`context`; the M1 files keep 2. Brief REF-M3: tr.json is
 # "schema": 4, for its case-level fields (SCHEMA §4.9). Brief REF-M4: hx.json is "schema": 5 (SCHEMA §4.10).
 # Brief REF-M5: link.json is "schema": 6 (SCHEMA §4.11).
-SUITE_SCHEMA = {"encodings": 3, "tr": 4, "hx": 5, "link": 6}
+# Weisung REF-M7-store: store.json is "schema": 8 (SCHEMA-4.12-store.md).
+SUITE_SCHEMA = {"encodings": 3, "tr": 4, "hx": 5, "link": 6, "store": 8}
 SPEC = "SecMP/1 rev 2.2"
 # Weisung REF-M2-3: encodings.json names spec rev 2.3 (ADR-039); the M1 files keep rev 2.2.
 SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3", "tr": "SecMP/1 rev 2.3", "hx": "SecMP/1 rev 2.6",
-              "link": "SecMP/1 rev 2.3"}
+              "link": "SecMP/1 rev 2.3", "store": "SecMP/1 rev 2.7"}
 GENERATOR = "ref-python"
 
 
@@ -47,6 +48,7 @@ SUITE_TAGS = {
     "tr": "tr",                              # brief REF-M3 / proposal SCHEMA-4.9-tr.md
     "hx": "hx",                              # brief REF-M4 / proposal SCHEMA-4.10-hx.md
     "link": "link",                          # brief REF-M5 / SCHEMA-4.11-link.md
+    "store": "store",                        # Weisung REF-M7-store / SCHEMA-4.12-store.md
 }
 
 # SCHEMA §1 / SQ-04: the operation names (encode/decode: proposal SCHEMA-4.8).
@@ -404,13 +406,60 @@ def _validate_link_case(case: dict, earlier_ids: set) -> None:
         _check_link_field(cid, name, value)
 
 
+# SCHEMA §4.12 (store, "schema": 8): per op the case-level keys and the output keys.
+STORE_OUTPUTS = {
+    "keys": {f"k_{t}" for t in ("identity", "prekeys", "relays", "contacts", "sessions", "outbox", "messages",
+                                "invitations", "settings", "db")},
+    "wrap": {"kek", "wrap"},
+    "seal": {"row_key", "ad", "rec"},
+    "backup": {"kek_bk", "bwrap", "k_bk", "header", "body", "file"},
+}
+STORE_REJECT_OPS = {"wrap-reject", "seal-reject", "backup-reject"}
+STORE_ASCII = {"label", "column", "manipulation"}
+
+
+def _store_parts_ok(v) -> bool:
+    """row_key_parts: a non-empty list of {"int": n} (any JSON integer) or {"bytes": hex}."""
+    return isinstance(v, list) and len(v) > 0 and all(
+        isinstance(p, dict) and len(p) == 1 and (
+            ("int" in p and isinstance(p["int"], int) and not isinstance(p["int"], bool))
+            or ("bytes" in p and _hex(p["bytes"]))) for p in v)
+
+
+def _validate_store_case(case: dict, earlier_ids: set) -> None:
+    op, cid = case.get("op"), case["id"]
+    if op not in STORE_OUTPUTS and op not in STORE_REJECT_OPS:
+        raise ValueError(f"{cid}: op {op!r}")
+    reject = op in STORE_REJECT_OPS
+    keys = {"id", "op", "inputs"} | ({"from", "manipulation", "expect"} if reject else {"outputs"})
+    if op == "seal":
+        keys |= {"from"}
+    if set(case) != keys:
+        raise ValueError(f"{cid}: keys {sorted(case)}")
+    if "from" in case and case["from"] not in earlier_ids:
+        raise ValueError(f"{cid}: from {case['from']!r} is not an earlier case")
+    if reject and (case["expect"] != "reject" or not case["manipulation"] or not case["manipulation"].isascii()):
+        raise ValueError(f"{cid}: a rejection carries `manipulation` and \"expect\": \"reject\"")
+    if not reject and set(case["outputs"]) != STORE_OUTPUTS[op]:
+        raise ValueError(f"{cid}: output keys {sorted(case['outputs'])}")
+    for name, value in [*case["inputs"].items(), *case.get("outputs", {}).items()]:
+        if name in STORE_ASCII:
+            ok = isinstance(value, str) and value.isascii() and value != ""
+        elif name == "row_key_parts":
+            ok = _store_parts_ok(value)
+        else:
+            ok = _hex(value)
+        if not ok:
+            raise ValueError(f"{cid}: field {name!r}: bad value {value!r}")
+
+
 def validate_document(doc: dict) -> None:
     """Raises ValueError unless doc has the SCHEMA §1 shape."""
     if set(doc) != {"schema", "suite", "spec", "generator", "cases"}:
         raise ValueError(f"top-level keys {sorted(doc)}")
     if doc["suite"] not in SUITE_TAGS or doc["schema"] != schema_of(doc["suite"]):
         raise ValueError("schema or suite")
-    if doc["suite"] in ("tr", "hx", "link"):
+    if doc["suite"] in ("tr", "hx", "link", "store"):
         seen = set()
         for n, case in enumerate(doc["cases"], start=1):
             if case.get("id") != case_id(doc["suite"], n):
@@ -419,6 +468,8 @@ def validate_document(doc: dict) -> None:
                 _validate_tr_case(case, seen)
             elif doc["suite"] == "hx":
                 _validate_hx_case(case)
+            elif doc["suite"] == "store":
+                _validate_store_case(case, seen)
             else:
                 _validate_link_case(case, seen)
             seen.add(case["id"])

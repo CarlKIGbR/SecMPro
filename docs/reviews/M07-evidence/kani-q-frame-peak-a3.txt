@@ -1,0 +1,15 @@
+# kani_proofs::kani_q_frame_plaintext_exact_fit — peak memory, WEISUNG M7-A3 STOP rule (Kani peak > 90 % of
+# KANI_CBMC_RSS_LIMIT_KIB = 14160156 KiB), 2026-10-29, nproc 32
+#
+# ci-full on 1f3129c (code 365a3da), the kani step's sampled cbmc RSS (ci-full-a3-1f3129c.txt line 53):
+#   13467828 KiB = 95.1 %   (A1e on 9eac343: 12121336 KiB = 85.6 %)
+#   tr_header_selection 13415900 KiB = 94.7 % (known case); kani_accept_opk_delete_only_on_success 12411440 KiB = 87.7 %
+#
+# Re-measured alone, `cargo kani --package secmp-proto -Z stubbing --harness kani_q_frame_plaintext_exact_fit`, peak RSS of the
+# largest child from getrusage(RUSAGE_CHILDREN).ru_maxrss (python3 wrapper target/m7draft/kani_one.py; no /proc access):
+#   tree at 1f3129c (A-3 code):                                   exit 0, 227 s, 12910628 KiB = 91.2 %;
+#                                                                 "** 2 of 2 cover properties satisfied", VERIFICATION:- SUCCESSFUL
+#   the three A-3-changed files of secmp-proto (src/lib.rs, src/tr/mod.rs, src/tr/state.rs) checked out at ba1dce6 for the
+#   run and restored afterwards (pre-A-3 secmp-proto):            exit 0, 227 s, 12936468 KiB = 91.4 %
+#
+# The harness (frame decode, K-08) reaches no code A-3 changed; its peak is above 90 % with and without A-3.

@@ -23,7 +23,7 @@ from secmp_ref import hybridkem, labels, primitives, sizes, vectorfile
 from secmp_ref.cases import TableMismatch
 from secmp_ref.errors import Reject
 
-SCHEMA_4_8 = pathlib.Path(__file__).resolve().parent.parent.parent / "SCHEMA-4.8-encodings.md"
+SCHEMA_4_8 = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.8-encodings.md"
 
 
 @pytest.fixture(scope="module")

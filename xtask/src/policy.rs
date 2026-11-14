@@ -719,7 +719,8 @@ fn quoted_value(line: &str, key: &str) -> Option<String> {
 }
 
 /// The normal (shipped) dependency closure of `secmp-crypto`/`secmp-proto` (ADR-036, docs/06 §3): normal edges
-/// only (`cargo tree -e normal`), taken on every target of `expect::VET_CLOSURE_TARGETS` and united, so a crate
+/// only (`cargo metadata --filter-platform`, which also counts optional dependencies that are lock-only), taken on every
+/// target of `expect::VET_CLOSURE_TARGETS` and united, so a crate
 /// compiled for any shipped target or the development host is inside. Build- and dev-dependencies and
 /// dependencies of other platforms or unset `cfg`s are outside and may be tracked exemptions.
 pub(crate) fn zero_exemption_closure(ws: &Workspace) -> Result<BTreeSet<(String, String)>> {
@@ -1710,6 +1711,7 @@ mod tests {
             "secmp-transport",
             "secmp-client-core",
             "secmp-testkit",
+            "secmp-store",
             "secmp-crypto",
             "secmp-proto",
         ];
@@ -2451,6 +2453,27 @@ mod tests {
             ),
             ("secmp-client-core", &["tokio"]),
             ("secmp-testkit", &["serde_json", "tokio"]),
+            // ADR-055
+            ("secmp-store", &["rusqlite"]),
+            (
+                "secmp-crypto",
+                &[
+                    "argon2",
+                    "chacha20",
+                    "chacha20poly1305",
+                    "ed25519-dalek",
+                    "getrandom",
+                    "hkdf",
+                    "hmac",
+                    "libcrux-ml-kem",
+                    "ml-dsa",
+                    "sha2",
+                    "sha3",
+                    "subtle",
+                    "x25519-dalek",
+                    "zeroize",
+                ],
+            ),
         ];
         for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
             let third: Vec<&str> = allowed
@@ -2932,6 +2955,338 @@ mod tests {
         let ws = Workspace::load()?;
         let summary = check_vet_closure(&ws)?;
         assert!(summary.contains(", 0 exempted;"), "{summary}");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-05 (OPEN-M7-04 A, ADR-034 Amendment 1): the cargo-xwin cross-build of the job `xwin-cross` leaves
+    /// out exactly the store-dependent packages, each a workspace member, and builds every other one with all targets;
+    /// `windows-native` (and its dispatch twin) runs its gate steps over the whole workspace, with no package restriction.
+    #[test]
+    fn xwin_scope_excludes_sqlcipher_crates() -> Result<()> {
+        assert_eq!(
+            expect::XWIN_EXCLUDE,
+            &[
+                "secmp-store",
+                "secmp-client-core",
+                "secmp-cli",
+                "secmp-testkit",
+                "secmp-ui"
+            ]
+        );
+        let ws = Workspace::load()?;
+        for p in expect::XWIN_EXCLUDE {
+            assert!(ws.member(p).is_some(), "{p} is no workspace member");
+        }
+        assert_eq!(expect::XWIN_LIB_ONLY, &["secmp-crypto", "secmp-transport"]);
+        for p in expect::XWIN_LIB_ONLY {
+            assert!(ws.member(p).is_some(), "{p} is no workspace member");
+        }
+        // the two invocations, verbatim (Q127)
+        let words = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_owned).collect() };
+        let want_all = words(
+            "xwin build --workspace --all-targets --locked --target x86_64-pc-windows-msvc \
+             --exclude secmp-store --exclude secmp-client-core --exclude secmp-cli --exclude secmp-testkit \
+             --exclude secmp-ui --exclude secmp-crypto --exclude secmp-transport",
+        );
+        let want_roots = words(
+            "xwin build --lib --bins --locked --target x86_64-pc-windows-msvc \
+             -p secmp-crypto -p secmp-transport",
+        );
+        assert_eq!(
+            crate::gates::windows_cross_args(),
+            vec![want_all, want_roots]
+        );
+        // the jobs: xwin-cross runs the step, windows-native and dispatch-windows the native gate without restriction
+        let ci = repo_file(".github/workflows/ci.yml")?;
+        let dispatch = repo_file(".github/workflows/ci-dispatch.yml")?;
+        assert_eq!(
+            crate::gates::job_gate_lines(&ci, "xwin-cross"),
+            ["cargo xtask step --strict windows-cross"]
+        );
+        for (text, job) in [(&ci, "windows-native"), (&dispatch, "dispatch-windows")] {
+            let lines = crate::gates::job_gate_lines(text, job);
+            assert!(!lines.is_empty(), "{job}");
+            for l in &lines {
+                assert!(
+                    l.starts_with("cargo xtask step --strict ")
+                        && !l.contains("--exclude")
+                        && !l.contains("--package")
+                        && !l.contains(" -p "),
+                    "{job}: {l}"
+                );
+                for step in ["clippy", "nextest", "kat"] {
+                    assert!(l.split_whitespace().any(|w| w == step), "{job}: {step}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The lines (1-based) of a manifest's dev-dependency tables that name a package of `poison`: `[dev-dependencies]`,
+    /// `[target.<cfg or triple>.dev-dependencies]` (key lines `name = …` and `name.workspace = true`) and the dotted
+    /// tables `[dev-dependencies.<name>]` / `[target.<…>.dev-dependencies.<name>]` (the header line itself).
+    fn poison_dev_dependencies(manifest: &str, poison: &[&str]) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut in_dev = false;
+        for (n, line) in manifest.lines().enumerate() {
+            let t = line.trim();
+            if let Some(header) = t.strip_prefix('[') {
+                let header = header.trim_end_matches(']').trim();
+                in_dev = header == "dev-dependencies"
+                    || (header.starts_with("target.") && header.ends_with(".dev-dependencies"));
+                let dotted = header
+                    .rfind("dev-dependencies.")
+                    .filter(|i| *i == 0 || header.get(..*i).is_some_and(|b| b.ends_with('.')))
+                    .and_then(|i| header.get(i.saturating_add("dev-dependencies.".len())..))
+                    .map(|name| name.trim_matches(['"', '\'']));
+                if dotted.is_some_and(|name| poison.contains(&name)) {
+                    out.push(n.saturating_add(1));
+                }
+                continue;
+            }
+            let name = t.split(['=', '.', ' ']).next().unwrap_or_default();
+            if in_dev && poison.contains(&name) {
+                out.push(n.saturating_add(1));
+            }
+        }
+        out
+    }
+
+    /// WEISUNG M7-A1c §2 (G-02): the manifest scan of `xwin_full_roots_have_no_excluded_dev_dependency` sees a target-specific
+    /// table (`[target.'cfg(windows)'.dev-dependencies]`) and a dotted table, not only `[dev-dependencies]`.
+    #[test]
+    fn xwin_dev_dependency_scan_sees_target_tables() {
+        let poison = ["secmp-testkit"];
+        let manifest = "[dependencies]\nsecmp-testkit.workspace = true\n\n[target.'cfg(windows)'.dev-dependencies]\nsecmp-testkit = { workspace = true }\n\n[dev-dependencies.secmp-testkit]\nworkspace = true\n\n[dev-dependencies]\nserde_json.workspace = true\nsecmp-testkit.workspace = true\n";
+        assert_eq!(poison_dev_dependencies(manifest, &poison), vec![5, 7, 12]);
+        assert!(
+            poison_dev_dependencies("[dependencies]\nsecmp-testkit.workspace = true\n", &poison)
+                .is_empty()
+        );
+    }
+
+    /// The manifests of the `[workspace] members` of the root `Cargo.toml`.
+    fn workspace_member_manifests() -> Result<Vec<(String, String)>> {
+        let root = repo_file("Cargo.toml")?;
+        let list = root
+            .split_once("members = [")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(l, _)| l)
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for item in list.split(',') {
+            let path = item.trim().trim_matches('"');
+            if path.is_empty() {
+                continue;
+            }
+            let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+            out.push((name, repo_file(&format!("{path}/Cargo.toml"))?));
+        }
+        Ok(out)
+    }
+
+    /// WEISUNG M7-A1b §5, M7-A1c §1 (Q127, Q130; ADR-034 Amendment 1 rev. 2): no root of the all-targets cross-build
+    /// dev-depends on a crate of `XWIN_EXCLUDE` — a dev-dependency is compiled for the root's tests, examples and
+    /// benches, so an excluded `secmp-testkit` (which will pull the store and vendored OpenSSL) would come back through
+    /// it. Roots are the workspace members less `XWIN_EXCLUDE` and `XWIN_LIB_ONLY` (those are not roots of invocation 1);
+    /// the second invocation builds `--lib --bins` only, which compile no dev-dependency. A dev-dependency on a
+    /// `XWIN_LIB_ONLY` crate is harmless: Cargo builds a dependency's library, never its dev-dependencies.
+    #[test]
+    fn xwin_full_roots_have_no_excluded_dev_dependency() -> Result<()> {
+        let members = workspace_member_manifests()?;
+        assert!(members.len() >= 12, "{} members", members.len());
+        let mut bad = Vec::new();
+        for (name, text) in &members {
+            if expect::XWIN_EXCLUDE.contains(&name.as_str())
+                || expect::XWIN_LIB_ONLY.contains(&name.as_str())
+            {
+                continue;
+            }
+            for n in poison_dev_dependencies(&lf(text), expect::XWIN_EXCLUDE) {
+                bad.push(format!("{name}:{n}"));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "roots with an excluded dev-dependency: {bad:?}"
+        );
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-07 (OPEN-M7-18 A, ADR-045 Amendment 12): the testkit `harness` binary runs in the pinned job
+    /// `harness` (gate line, 150 min, every event) and its dispatch twin `dispatch-harness`; `linux-fast` and `linux-full`
+    /// delegate the step there, `windows-native` runs it by name; the job is in `PINNED_JOBS`, `CI_VERDICT_NEEDS`,
+    /// `DELEGATED_TO` and `REQUIRED_GATE_RUNS` (not yet a required check: G7-20 follows the owner's ruleset change) and
+    /// in the docs/06 §4 job table; the `kat` step no longer runs the binary, and the three runs together still cover
+    /// every test: the workspace run and the kat run of the testkit leave out exactly the binary the harness step selects.
+    #[test]
+    fn harness_job_is_pinned() -> Result<()> {
+        assert!(expect::PINNED_JOBS.contains(&"harness"));
+        assert!(expect::CI_VERDICT_NEEDS.contains(&"harness"));
+        assert!(!expect::REQUIRED_JOBS.contains(&"harness"));
+        assert!(expect::DELEGATED_TO.contains(&("harness", "harness")));
+        assert!(expect::REQUIRED_JOB_CONDITIONS.contains(&("harness", None)));
+        let runs = |job: &str| -> Vec<&str> {
+            expect::REQUIRED_GATE_RUNS
+                .iter()
+                .find(|(j, _)| *j == job)
+                .map(|(_, l)| l.to_vec())
+                .unwrap_or_default()
+        };
+        assert_eq!(runs("harness"), ["cargo xtask step --strict harness"]);
+        for job in ["linux-fast", "linux-full"] {
+            let first = runs(job).first().copied().unwrap_or_default();
+            assert!(
+                first
+                    .split(" --delegated ")
+                    .skip(1)
+                    .any(|d| d.split_whitespace().next() == Some("harness")),
+                "{job}: {first}"
+            );
+        }
+        assert!(
+            runs("windows-native")
+                .iter()
+                .any(|l| l.split_whitespace().any(|w| w == "harness"))
+        );
+        let ci = repo_file(".github/workflows/ci.yml")?;
+        let dispatch = repo_file(".github/workflows/ci-dispatch.yml")?;
+        for (text, id, cond) in [
+            (&ci, "harness", None),
+            (
+                &dispatch,
+                "dispatch-harness",
+                Some(
+                    "inputs.suite == 'all' || inputs.suite == 'fast' || inputs.suite == 'full'"
+                        .to_owned(),
+                ),
+            ),
+        ] {
+            assert_eq!(
+                crate::gates::job_gate_lines(text, id),
+                ["cargo xtask step --strict harness"],
+                "{id}"
+            );
+            assert_eq!(
+                crate::gates::job_prop(text, id, "timeout-minutes").as_deref(),
+                Some("150"),
+                "{id}"
+            );
+            assert_eq!(crate::gates::job_prop(text, id, "if"), cond, "{id}");
+        }
+        assert!(expect::DISPATCH_TWINS.contains(&("dispatch-harness", "harness")));
+        let standards = repo_file("docs/06-engineering-standards.md")?;
+        assert!(
+            standards
+                .lines()
+                .any(|l| l.starts_with("| `harness` |") && l.trim_end().ends_with("| 150 |")),
+            "docs/06 §4 job table"
+        );
+        // the three runs partition the testkit's tests
+        let ws_filter = crate::gates::NEXTEST_WORKSPACE_FILTER;
+        assert_eq!(ws_filter, "not binary(=harness)");
+        let packages: BTreeSet<String> = expect::KAT_PACKAGES
+            .iter()
+            .map(|p| (*p).to_owned())
+            .collect();
+        let kat = crate::testscan::kat_runs(&packages, None)?;
+        let testkit_kat: Vec<&crate::testscan::NextestRun> = kat
+            .iter()
+            .filter(|r| r.args.iter().any(|a| a == "secmp-testkit"))
+            .collect();
+        assert_eq!(testkit_kat.len(), 1);
+        assert_eq!(
+            testkit_kat
+                .first()
+                .and_then(|r| r.args.last())
+                .map(String::as_str),
+            Some("not binary(=harness)")
+        );
+        let harness = crate::testscan::harness_runs(None);
+        assert_eq!(
+            harness
+                .first()
+                .and_then(|r| r.args.last())
+                .map(String::as_str),
+            Some("binary(=harness)")
+        );
+        assert_eq!(
+            harness
+                .first()
+                .map(|r| r.args.get(..7).map(<[String]>::to_vec)),
+            testkit_kat
+                .first()
+                .map(|r| r.args.get(..7).map(<[String]>::to_vec)),
+            "the harness step reuses the testkit's kat build"
+        );
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-08 (OPEN-M7-18 A): `expect::JOB_BUDGETS` holds the `timeout-minutes` of every pinned job; the
+    /// real workflows match it, also in the dispatch twins; each mutation — a changed budget in `ci.yml` or in a twin, a
+    /// budget removed, a missing or extra entry, a missing job — is a finding.
+    #[test]
+    fn job_budgets_are_pinned() -> Result<()> {
+        let jobs: Vec<&str> = expect::JOB_BUDGETS.iter().map(|(j, _)| *j).collect();
+        let mut pinned = expect::PINNED_JOBS.to_vec();
+        let mut sorted = jobs.clone();
+        pinned.sort_unstable();
+        sorted.sort_unstable();
+        assert_eq!(sorted, pinned);
+        let ci = repo_file(".github/workflows/ci.yml")?;
+        let dispatch = repo_file(".github/workflows/ci-dispatch.yml")?;
+        let findings = |ci: &str, dispatch: &str, budgets: &[(&str, u64)]| {
+            crate::gates::job_budget_findings(ci, dispatch, budgets, expect::DISPATCH_TWINS)
+        };
+        assert_eq!(
+            findings(&ci, &dispatch, expect::JOB_BUDGETS),
+            Vec::<String>::new()
+        );
+        // a changed budget in ci.yml (the kani job) and in a twin (dispatch-kani)
+        let kani = "  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: ubuntu-latest\n    timeout-minutes: 150\n";
+        assert_eq!(ci.matches(kani).count(), 1);
+        let ci_long = ci.replacen(kani, &kani.replace("150", "200"), 1);
+        let found = findings(&ci_long, &dispatch, expect::JOB_BUDGETS);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found.iter().any(|f| f.contains("ci.yml `kani`")));
+        let twin = "  dispatch-kani:\n    if: inputs.suite == 'all' || inputs.suite == 'full'\n    runs-on: ubuntu-latest\n    timeout-minutes: 150\n";
+        assert_eq!(dispatch.matches(twin).count(), 1);
+        let dispatch_long = dispatch.replacen(twin, &twin.replace("150", "151"), 1);
+        let found = findings(&ci, &dispatch_long, expect::JOB_BUDGETS);
+        assert!(
+            found.len() == 1 && found.iter().any(|f| f.contains("`dispatch-kani`")),
+            "{found:?}"
+        );
+        // the budget removed from the harness job
+        let harness = "  harness:\n    runs-on: ubuntu-latest\n    timeout-minutes: 150\n";
+        assert_eq!(ci.matches(harness).count(), 1);
+        let unbounded = ci.replacen(harness, "  harness:\n    runs-on: ubuntu-latest\n", 1);
+        let found = findings(&unbounded, &dispatch, expect::JOB_BUDGETS);
+        assert!(
+            found.len() == 1 && found.iter().any(|f| f.contains("no numeric")),
+            "{found:?}"
+        );
+        // a pinned job without an entry, an entry that is no pinned job, a job missing from ci.yml
+        let fewer: Vec<(&str, u64)> = expect::JOB_BUDGETS
+            .iter()
+            .copied()
+            .filter(|(j, _)| *j != "fuzz")
+            .collect();
+        let found = findings(&ci, &dispatch, &fewer);
+        assert!(
+            found.len() == 1 && found.iter().any(|f| f.contains("`fuzz` has no entry")),
+            "{found:?}"
+        );
+        let mut more = expect::JOB_BUDGETS.to_vec();
+        more.push(("extra", 10));
+        let found = findings(&ci, &dispatch, &more);
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("`extra` of expect::JOB_BUDGETS is no pinned job"))
+                && found.iter().any(|f| f.contains("no job `extra` in ci.yml")),
+            "{found:?}"
+        );
         Ok(())
     }
 }

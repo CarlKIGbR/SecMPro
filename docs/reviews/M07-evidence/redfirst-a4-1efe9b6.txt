@@ -1,0 +1,30 @@
+measured on HEAD 1efe9b691c12968792dd0899b40071fe8289f07b (target/m7draft/redfirst.py: each case a temporary edit, one nextest run, then git checkout of the file)
+ST-09 kat_argon2_params_only_with_kat (A-3 expectation 0): exit 100
+  FAIL [   0.334s] (1/1) xtask::bin/xtask testscan::kat_argon2_params_only_with_kat
+  thread 'testscan::kat_argon2_params_only_with_kat' (3953440) panicked at xtask/src/testscan.rs:456:5:
+  assertion `left == right` failed: kat_small: 0 sites in A-3 (A-4)
+  left: 1
+  right: 0
+  FAIL [   0.334s] (1/1) xtask::bin/xtask testscan::kat_argon2_params_only_with_kat
+CT-05 ct_targets_m7 (CT_TARGETS without store_unlock_reject): exit 100
+  FAIL [   0.006s] (1/1) xtask::bin/xtask expect::ct_targets_m7
+  thread 'expect::ct_targets_m7' (3953831) panicked at xtask/src/expect.rs:2114:5:
+  assertion `left == right` failed
+  left: 26
+  right: 27
+  FAIL [   0.006s] (1/1) xtask::bin/xtask expect::ct_targets_m7
+G7-15a fuzz_targets_store (FUZZ_TARGETS without backup_import): exit 100
+  FAIL [   0.006s] (1/1) xtask::bin/xtask expect::tests::fuzz_targets_store
+  thread 'expect::tests::fuzz_targets_store' (3954229) panicked at xtask/src/expect.rs:2260:9:
+  assertion `left == right` failed
+  left: 34
+  right: 35
+  FAIL [   0.006s] (1/1) xtask::bin/xtask expect::tests::fuzz_targets_store
+CT-01 known_sites_equal_the_product_site_tags (store not walked): exit 100
+  FAIL [   0.023s] (1/1) xtask::bin/xtask gates::tests::known_sites_equal_the_product_site_tags
+  thread 'gates::tests::known_sites_equal_the_product_site_tags' (3954620) panicked at xtask/src/gates.rs:9766:9:
+  assertion `left == right` failed
+  left: {"blob open", "body MAC", "body decode", "bundle expired", "bundle signature", "cell length", "counter rule", "dh_pk", "expired", "fingerprint", "first_msg checks", "first_msg decrypt", "header decode", "header: no key opened", "inner checks", "inner open", "invitation decode", "kem constancy", "linkdata decode", "no complete group", "opk delete", "opk_present", "outer", "skipped: (hk, n) not stored", "uri", "x25519"}
+  right: {"blob open", "body MAC", "body decode", "bundle expired", "bundle signature", "cell length", "counter rule", "dh_pk", "expired", "fingerprint", "first_msg checks", "first_msg decrypt", "header decode", "header: no key opened", "inner checks", "inner open", "invitation decode", "kem constancy", "linkdata decode", "no complete group", "opk delete", "opk_present", "outer", "skipped: (hk, n) not stored", "uri", "wrap: open", "x25519"}
+  FAIL [   0.023s] (1/1) xtask::bin/xtask gates::tests::known_sites_equal_the_product_site_tags
+git status after restore: clean

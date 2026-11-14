@@ -259,7 +259,7 @@ fn m6_traffic_report_sections() -> Result<()> {
 }
 
 /// MR-06 (ADR-018, [O-22]): the Recommendation section has a row for each of `PERIODS`, `T_BALANCED`, `T_LOWBW`, `F`, `F_M`,
-/// `P_POOL` with a measured cost and the §10.1 check, and says that ADR-018 stays proposed; ADR-018 itself is not accepted.
+/// `P_POOL` with a measured cost and the §10.1 check, and says that ADR-018 stays proposed; ADR-018's status is pinned by `adr_018_status` (G7-19).
 #[test]
 fn recommendation_names_every_parameter() -> Result<()> {
     let report = read("docs/measurements/M6-traffic.md")?;
@@ -284,10 +284,23 @@ fn recommendation_names_every_parameter() -> Result<()> {
         );
     }
     assert!(section.contains("Proposed (owner decides after M6)"));
+    Ok(())
+}
+
+/// G7-19 (ADR-018 Amendment 1): the owner's acceptance of 2026-11-09 is the status of ADR-018.
+#[test]
+fn adr_018_status() -> Result<()> {
     let adr = read("docs/08-decisions.md")?;
     let adr018 = between(&adr, "### ADR-018 ", "### ADR-019 ")?;
-    assert!(adr018.contains("**Status.** Proposed (owner decides after M6)."));
-    assert!(!adr018.contains("Accepted"));
+    assert!(adr018.contains(
+        "**Status.** Accepted (Owner, 2026-11-09): provisional values of spec §4.2 are final"
+    ));
+    assert!(adr018.contains("RR-note"));
+    assert!(adr018.contains(
+        "**ADR-018 Amendment 1 — acceptance after M6. Status: Accepted (Owner, 2026-11-09"
+    ));
+    assert!(adr018.contains("Die Frage des Standardmodus (OQ-4) ist damit nicht entschieden."));
+    assert!(!adr018.contains("**Status.** Proposed"));
     Ok(())
 }
 

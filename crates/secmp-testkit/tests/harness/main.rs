@@ -35,6 +35,18 @@ mod m6_tokio;
 mod m6_tokio_ai;
 mod m6_tor;
 mod m6_two_clients;
+mod m7_accept;
+mod m7_activity;
+mod m7_boundary;
+mod m7_crash;
+mod m7_drain;
+mod m7_forensic;
+mod m7_links;
+mod m7_persist;
+mod m7_restart;
+mod m7_rotation;
+mod m7_scheduled;
+mod m7_world;
 mod scenarios;
 mod scripted;
 #[path = "../../../secmp-proto/tests/common/seed.rs"]

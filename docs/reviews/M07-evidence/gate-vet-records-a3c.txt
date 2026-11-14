@@ -1,0 +1,7 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+────────────
+ Nextest run ID d0046c96-98c9-45c7-96d0-c21f8bffd05f with nextest profile: default
+    Starting 1 test across 1 binary (299 tests skipped)
+        PASS [   2.034s] (1/1) xtask::bin/xtask gates::tests::vet_records_for_m7_closure
+────────────
+     Summary [   2.035s] 1 test run: 1 passed, 299 skipped

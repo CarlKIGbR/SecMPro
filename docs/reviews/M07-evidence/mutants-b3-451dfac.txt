@@ -1,0 +1,69 @@
+mutants for B-1…B-3: git diff b57ca46..HEAD (client-core src, store src); command form of mutants-a3b-core-proto-store-cdc3c0a.txt (lines :11 and :19) with --output/--in-diff/--file replaced
+== core, first run on a86e0eb^ (code head 8b0c5ba + store killer): 365 mutants tested in 48m: 49 missed, 216 caught, 100 unviable
+   missed (49):
+     crates/secmp-client-core/src/api.rs:84:13: delete match arm secmp_store::Error::ConfirmRequired in <impl From<secmp_store::Error> for Error>::from
+     crates/secmp-client-core/src/api.rs:85:13: delete match arm secmp_store::Error::CloudFolder in <impl From<secmp_store::Error> for Error>::from
+     crates/secmp-client-core/src/contacts.rs:46:13: delete match arm STATE_REINVITE_REQUIRED in ContactState::of
+     crates/secmp-client-core/src/invitations.rs:66:38: replace + with *
+     crates/secmp-client-core/src/invitations.rs:66:38: replace + with -
+     crates/secmp-client-core/src/invitations.rs:66:34: replace + with -
+     crates/secmp-client-core/src/invitations.rs:66:34: replace + with *
+     crates/secmp-client-core/src/invitations.rs:66:30: replace + with -
+     crates/secmp-client-core/src/invitations.rs:66:30: replace + with *
+     crates/secmp-client-core/src/invitations.rs:73:36: replace + with *
+     crates/secmp-client-core/src/invitations.rs:73:36: replace + with -
+     crates/secmp-client-core/src/invitations.rs:87:5: replace live_records_kat -> i64 with 0
+     crates/secmp-client-core/src/invitations.rs:95:5: replace live_records_peak_kat -> i64 with 1
+     crates/secmp-client-core/src/invitations.rs:101:5: replace reset_live_peak_kat with ()
+     crates/secmp-client-core/src/invitations.rs:276:9: replace Cursor<'a>::finish -> Result<(), Error> with Ok(())
+     crates/secmp-client-core/src/invitations.rs:387:18: replace > with >= in SparePool::fill
+     crates/secmp-client-core/src/invitations.rs:399:9: replace SparePool::len -> Result<usize, Error> with Ok(0)
+     crates/secmp-client-core/src/invitations.rs:399:9: replace SparePool::len -> Result<usize, Error> with Ok(1)
+     crates/secmp-client-core/src/invitations.rs:408:9: replace SparePool::is_empty -> Result<bool, Error> with Ok(true)
+     crates/secmp-client-core/src/invitations.rs:408:9: replace SparePool::is_empty -> Result<bool, Error> with Ok(false)
+     crates/secmp-client-core/src/invitations.rs:408:29: replace == with != in SparePool::is_empty
+     crates/secmp-client-core/src/invitations.rs:416:9: replace SparePool::take -> Result<Option<PoolQueue>, Error> with Ok(None)
+     crates/secmp-client-core/src/invitations.rs:442:5: replace link_data_n -> u32 with 0
+     crates/secmp-client-core/src/invitations.rs:442:5: replace link_data_n -> u32 with 1
+     crates/secmp-client-core/src/invitations.rs:618:40: replace && with || in Invitations::on_owner_status
+     crates/secmp-client-core/src/invitations.rs:619:18: replace || with && in Invitations::on_owner_status
+     crates/secmp-client-core/src/invitations.rs:732:48: replace == with != in issue_in
+     crates/secmp-client-core/src/invitations.rs:793:52: replace == with != in unreferenced_opk
+     crates/secmp-client-core/src/invitations.rs:822:19: replace == with != in signed_bundle
+     crates/secmp-client-core/src/invitations.rs:935:58: replace || with && in <impl PrekeyStore for StagedPrekeys>::commit_accept
+     crates/secmp-client-core/src/invitations.rs:987:21: delete field events from struct Round expression in Invitations::process_round
+     crates/secmp-client-core/src/invitations.rs:1019:24: replace > with == in Invitations::decide
+     crates/secmp-client-core/src/invitations.rs:1019:24: replace > with >= in Invitations::decide
+     crates/secmp-client-core/src/invitations.rs:1051:60: replace == with != in Invitations::decide
+     crates/secmp-client-core/src/invitations.rs:1116:5: replace encode_routes -> Result<Zeroizing<Vec<u8>>, Error> with Ok(Zeroizing::new(vec![1]))
+     crates/secmp-client-core/src/invitations.rs:1116:5: replace encode_routes -> Result<Zeroizing<Vec<u8>>, Error> with Ok(Zeroizing::from(vec![1]))
+     crates/secmp-client-core/src/invitations.rs:1128:5: replace encode_queues -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+     crates/secmp-client-core/src/invitations.rs:1128:5: replace encode_queues -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+     crates/secmp-client-core/src/invitations.rs:1128:5: replace encode_queues -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+     crates/secmp-client-core/src/invitations.rs:1128:5: replace encode_queues -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+     crates/secmp-client-core/src/invitations.rs:1128:5: replace encode_queues -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+     crates/secmp-client-core/src/invitations.rs:1128:5: replace encode_queues -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+     crates/secmp-client-core/src/invitations.rs:1148:22: replace match guard *ver != 1 with false in check_invitation
+     crates/secmp-client-core/src/profile.rs:84:28: replace || with && in keys_from_section
+     crates/secmp-client-core/src/profile.rs:277:44: replace > with >= in Profile::rotate_if_due
+     crates/secmp-client-core/src/profile.rs:383:38: replace && with || in Profile::retire
+     crates/secmp-client-core/src/retention.rs:42:15: replace < with <= in offer
+     crates/secmp-client-core/src/retention.rs:56:14: replace < with <= in offer
+     crates/secmp-client-core/src/retention.rs:56:29: replace < with <= in offer
+== core, rerun on a86e0eb (the killers commit): 359 mutants tested in 27m: 8 missed, 251 caught, 100 unviable
+   missed (8): the six rows added to docs/mutants-accepted.md (b5bb6e0) and two killed by 451dfac (reset_live_peak_kat, `>` to `>=` in decide)
+     crates/secmp-client-core/src/invitations.rs:100:5: replace reset_live_peak_kat with ()
+     crates/secmp-client-core/src/invitations.rs:817:19: replace == with != in signed_bundle
+     crates/secmp-client-core/src/invitations.rs:930:58: replace || with && in <impl PrekeyStore for StagedPrekeys>::commit_accept
+     crates/secmp-client-core/src/invitations.rs:1014:24: replace > with >= in Invitations::decide
+     crates/secmp-client-core/src/invitations.rs:1143:22: replace match guard *ver != 1 with false in check_invitation
+     crates/secmp-client-core/src/retention.rs:42:15: replace < with <= in offer
+     crates/secmp-client-core/src/retention.rs:56:14: replace < with <= in offer
+     crates/secmp-client-core/src/retention.rs:56:29: replace < with <= in offer
+== store, first run: 122 mutants tested in 8m: 4 missed, 94 caught, 24 unviable
+   missed (4, killer identity_fingerprint_column / 04b5249):
+     crates/secmp-store/src/profile.rs:410:9: replace Store::identity_fingerprint -> Result<Option<Vec<u8>>> with Ok(None)
+     crates/secmp-store/src/profile.rs:410:9: replace Store::identity_fingerprint -> Result<Option<Vec<u8>>> with Ok(Some(vec![]))
+     crates/secmp-store/src/profile.rs:410:9: replace Store::identity_fingerprint -> Result<Option<Vec<u8>>> with Ok(Some(vec![0]))
+     crates/secmp-store/src/profile.rs:410:9: replace Store::identity_fingerprint -> Result<Option<Vec<u8>>> with Ok(Some(vec![1]))
+== store, rerun on 451dfac: 122 mutants tested in 7m: 98 caught, 24 unviable

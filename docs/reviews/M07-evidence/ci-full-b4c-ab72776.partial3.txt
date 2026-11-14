@@ -1,0 +1,23 @@
+ab72776d22d5ac22720084a7d207725a32697ec2
+step-by-step fallback (B-4c3 s0.3), one head, groups appended in FULL order; two earlier attempts killed at the 4h cap: see the .partial-4h-cap and .partial2-4h-cap files
+2026-11-09T08:32:04Z
+# attempt 3 (B-4c3 fallback, step by step in groups): not the B-4b form (no --strict, no delegation flags, proverif --models all); unsharded mutants killed at the 4 h cap; windows-cross FAIL (proxy 403 for aka.ms)
+# gates that completed, from their "| status |" rows: fmt PASS (1 s); clippy PASS (0 s); policy PASS (1 s); deny PASS (1 s); vet PASS (1 s); audit PASS (2 s); cooldown PASS (24 s); nextest PASS (18 s); doctest PASS (1 s); hello PASS (0 s); kat PASS (102 s); harness PASS (929 s); fuzz-check PASS (0 s); perf PASS (0 s); ct PASS (5742 s); fuzz PASS (4382 s); coverage PASS (1006 s); miri PASS (2396 s); kani PASS (4780 s); proverif PASS (441 s); proverif-link PASS (861 s); windows-cross FAIL (7 s); windows-native SKIP (0 s); linux-target PASS (0 s); ref-vectors PASS (0 s); repro STUB (0 s); sbom PASS (15 s); systemd PASS (0 s)
+GROUP1 EXIT 0
+GROUP2 EXIT 0
+GROUP3 (step mutants, unsharded) killed by the harness 4h cap at 15:55:59 UTC, in secmp-transport mutants; no verdict. Continuing with the other steps; mutants disposition awaits the reviewer (B-4c3 report to user).
+GROUP4 EXIT 0
+Retrying MSVC CRT setup (attempt 2/4)
+Retrying MSVC CRT setup (attempt 3/4)
+Retrying MSVC CRT setup (attempt 4/4)
+Error: Failed to setup MSVC CRT
+Caused by:
+    0: HTTP GET request for https://aka.ms/vs/17/release/channel failed
+    1: CONNECT proxy failed: proxy server responded 403/403
+FAIL [11] windows-cross: `/work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo xwin build --workspace --all-targets --locked --target x86_64-pc-windows-msvc --exclude secmp-store --exclude secmp-client-core --exclude secmp-cli --exclude secmp-testkit --exclude secmp-ui --exclude secmp-crypto --exclude secmp-transport` failed with exit status: 1
+xtask: error: step: 1 step(s) failed
+GROUP5 EXIT 1
+# excerpt map (raw log target/fable/ci-full-raw/ci-full-b4c-ab72776.partial3.txt; every other line is a verbatim copy; the "gates that completed" line is assembled from the quoted status rows):
+#   raw first lines: 1..3
+#   raw status rows of the gates: 13,25,35,71,83,99,110,1696,1779,1792,3115,3520,3974,3994,4160,26104,27935,33482,33782,33950,34162,34267,34277,34287,34297,34308,34334,34346
+#   raw lines of the quoted evidence: 4345,27954,33074,33824,34254,34255,34256,34257,34259,34260,34261,34262,34363,34364

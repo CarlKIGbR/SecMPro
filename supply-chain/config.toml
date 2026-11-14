@@ -722,7 +722,7 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 [[exemptions.libsqlite3-sys]]
 version = "0.37.0"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency of rusqlite (secmp-store, ADR-055) and arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of rusqlite/arti-client."
 
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
@@ -818,6 +818,16 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): base version for the imported deltas up to the locked version; dependency of wasm-bindgen, compiled only for wasm32 targets; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.openssl-src]]
+version = "300.6.1+3.6.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): ADR-055 item 5, build input of the vendored OpenSSL pulled by rusqlite (secmp-store); C code not audited. Review at every release and at every bump of rusqlite/arti-client."
+
+[[exemptions.openssl-sys]]
+version = "0.9.117"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): ADR-055 item 5, build input of the vendored OpenSSL pulled by rusqlite (secmp-store); C code not audited. Review at every release and at every bump of rusqlite/arti-client."
 
 [[exemptions.ordered-float]]
 version = "2.10.1"
@@ -1026,11 +1036,6 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 
 [[exemptions.rsqlite-vfs]]
 version = "0.1.1"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.rusqlite]]
-version = "0.39.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 

@@ -13,6 +13,30 @@ use crate::sizes::{HASH_LEN, MLKEM1024_CT_LEN};
 use crate::wire::Id;
 use crate::wire::inv::IksPublic;
 
+#[cfg(feature = "kat")]
+std::thread_local! {
+    /// The last `K_id` [`k_id`] derived on this thread (feature `kat`, Q147).
+    static K_ID_KAT: core::cell::Cell<Option<[u8; 32]>> = const { core::cell::Cell::new(None) };
+    /// SHA-256 of the last `SK` [`session_key`] derived on this thread (feature `kat`, Q147).
+    static SK_DIGEST_KAT: core::cell::Cell<Option<[u8; 32]>> = const { core::cell::Cell::new(None) };
+}
+
+/// The last `K_id` derived on this thread by [`k_id`] — on either side of the handshake — or `None` before the first
+/// (feature `kat` only, Q147: the tests compare the two sides' keys; a shipped build has no such accessor).
+#[cfg(feature = "kat")]
+#[must_use]
+pub fn k_id_kat() -> Option<[u8; 32]> {
+    K_ID_KAT.get()
+}
+
+/// SHA-256 of the last `SK` derived on this thread by [`session_key`], or `None` before the first (feature `kat`
+/// only, Q147).
+#[cfg(feature = "kat")]
+#[must_use]
+pub fn sk_digest_kat() -> Option<[u8; 32]> {
+    SK_DIGEST_KAT.get()
+}
+
 /// The thirteen components of the transcript (§6.4), in the order of the formula.
 pub struct TranscriptInputs<'a> {
     /// `IKSPublic_R`.
@@ -106,7 +130,10 @@ pub fn session_key(s: &Shared, transcript: &[u8; HASH_LEN]) -> Result<SecretByte
     for part in [&s.dh1, &s.dh2, &s.dh3, &s.dh4, &s.ss_spk, &s.ss_opk] {
         ikm.extend_from_slice(part.expose_secret());
     }
-    Ok(hkdf::<32>(&[0; 32], &ikm, Label::HxSk, &[transcript])?)
+    let sk = hkdf::<32>(&[0; 32], &ikm, Label::HxSk, &[transcript])?;
+    #[cfg(feature = "kat")]
+    SK_DIGEST_KAT.set(Some(sha256(&[sk.expose_secret()])));
+    Ok(sk)
 }
 
 /// `K_id = HKDF-SHA-256(salt = ld_id, IKM = link_key ‖ DH3 ‖ ss_spk ‖ DH4 ‖ ss_opk, info = "SecMP-HX/1 idkey",
@@ -131,5 +158,8 @@ pub fn k_id(
     for part in [link_key, dh3, kem_signed, dh4, kem_onetime] {
         ikm.extend_from_slice(part.expose_secret());
     }
-    Ok(hkdf::<32>(ld_id, &ikm, Label::HxIdkey, &[])?)
+    let k_id = hkdf::<32>(ld_id, &ikm, Label::HxIdkey, &[])?;
+    #[cfg(feature = "kat")]
+    K_ID_KAT.set(Some(*k_id.expose_secret()));
+    Ok(k_id)
 }

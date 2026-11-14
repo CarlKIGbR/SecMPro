@@ -109,7 +109,7 @@ fn sim_latency_does_not_move_emission() {
                 .unwrap()
                 .events()
                 .iter()
-                .all(|(_, e)| !matches!(e, LinkEvent::TornDown(_, Reason::InFlight))),
+                .all(|(_, e)| !matches!(e, LinkEvent::TornDown(_, _, Reason::InFlight))),
             "client {idx}: an in-flight teardown with a round trip below P"
         );
     }
@@ -151,14 +151,14 @@ fn sim_slow_link_in_flight_teardown() {
         let ups: BTreeMap<u64, u64> = events
             .iter()
             .filter_map(|(t, e)| match e {
-                LinkEvent::Up(l) => Some((l.0, *t)),
+                LinkEvent::Up(l, _) => Some((l.0, *t)),
                 _ => None,
             })
             .collect();
         let downs: Vec<(u64, u64, Reason)> = events
             .iter()
             .filter_map(|(t, e)| match e {
-                LinkEvent::TornDown(l, why) => Some((l.0, *t, *why)),
+                LinkEvent::TornDown(l, _, why) => Some((l.0, *t, *why)),
                 _ => None,
             })
             .collect();

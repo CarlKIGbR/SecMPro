@@ -1,0 +1,66 @@
+head bffafe4 (the B-4c code head); every red below names the tree it ran on and was run with its fix hunk stashed (restored, git diff byte-identical, checked by the runner) or under the named mutation; modell=claude-opus-5-5
+
+Q204 xtask::ci::tests::fast_checks_fuzz_targets — base 9290e20 + step-0 tree, the FAST `fuzz-check` entry removed
+  $ cargo nextest run -p xtask fast_checks_fuzz_targets
+  thread 'ci::tests::fast_checks_fuzz_targets' panicked at xtask/src/ci.rs:395:9:
+  ci-fast steps ["fmt", "clippy", "policy", "deny", "vet", "audit", "cooldown", "nextest", "doctest", "hello", "kat", "harness"]
+Q205 sessions::tests::frozen_survives_verify_and_reopen — base 5b54779 (product files at HEAD, the test block appended to the HEAD tests.rs)
+  $ cargo nextest run -p secmp-client-core -p secmp-store --features kat -E 'test(frozen_survives_verify_and_reopen) | test(reset_request_survives_reopen)'
+  panicked at crates/secmp-client-core/src/sessions/tests.rs:1219:9:  left: Verified  right: Frozen
+Q210b sessions::tests::reset_request_survives_reopen — same run
+  panicked at crates/secmp-client-core/src/sessions/tests.rs:1272:9:  left: Ok(())  right: Err(Reset)
+Q206 api::tests::debug_redacts_secrets — base 53e7f36 (api.rs at HEAD, the test inserted into its `mod tests`)
+  $ cargo nextest run -p secmp-client-core -p secmp-store --features kat -E 'test(debug_redacts_secrets)'
+  panicked at crates/secmp-client-core/src/api.rs:1375:13:
+  Export { path: "/tmp/x", passphrase: Zeroizing([104, 117, 110, 116, 101, 114, 50]), confirm: true, force: false }
+Q206 xtask::testscan::no_derive_debug_on_secret_carriers — base 53e7f36 (api.rs at HEAD: the derives; the scan of the step-2 tree)
+  $ cargo nextest run -p xtask -E 'test(no_derive_debug_on_secret_carriers)'
+  panicked at xtask/src/testscan.rs:1027:5:
+  secret carriers derive Debug: ["api.rs: Request: #[non_exhaustive] #[derive(Debug)]", "api.rs: Response: #[non_exhaustive] #[derive(Debug)]", "api.rs: Event: #[non_exhaustive] #[derive(Clone, Debug, PartialEq, Eq)]"]
+Q207 invitations::tests::consumed_queue_survives_expiry_sweep — base 0565c29 + step-3 tree with both fix hunks stashed (the sweep's `routed` skip in profile.rs `retire_with`; the no-row `Unavailable` arm of `offer_state`, back to `Retired`); the `process_round` signature (the queue argument) kept
+  $ cargo nextest run --no-fail-fast -E 'test(consumed_queue_survives_expiry_sweep)' --features kat -p secmp-client-core
+  panicked at crates/secmp-client-core/src/invitations_tests.rs:1564:9:  left: (Some(11), [])  right: (None, [10, 11])
+  second case, only the `offer_state` hunk stashed:
+  panicked at crates/secmp-client-core/src/invitations_tests.rs:1572:9:  left: None  right: Some(Unavailable)
+Q208 hub::tests::identity_rotation_queue_del_reaches_scheduler, hub::tests::expired_invitation_queue_del_without_traffic — base a05db4e (hub.rs and invitations.rs at HEAD, the two tests and their helper appended to the HEAD `mod tests`)
+  $ cargo nextest run -p secmp-client-core -p secmp-store --features kat -E 'test(identity_rotation_queue_del_reaches_scheduler) | test(expired_invitation_queue_del_without_traffic)'
+  panicked at crates/secmp-client-core/src/hub.rs:1254:13:  left: 0  right: 1   (identity rotation: "one QUEUE_DEL of the invitation queue")
+  panicked at crates/secmp-client-core/src/hub.rs:1293:13:  left: 0  right: 1   (expired: "the expired invitation's QUEUE_DEL")
+Q209 scheduler::core::tests::empty_fetch_not_armed_on_error_or_starved_queue — base bb9a407 + step-5 tree with the fix stashed inside `World::fetched_multi` (each queue through `fetched`, which arms before the error loop; the after-the-loop note removed)
+  $ cargo nextest run --no-fail-fast -E 'test(empty_fetch_not_armed_on_error_or_starved_queue)' --features kat -p secmp-client-core
+  panicked at crates/secmp-client-core/src/scheduler/core/mod.rs:2666:13:
+  assertion `left == right` failed: mine 0, others 0, error true  left: true  right: false
+Q210a sessions::tests::key_change_identity_commits_with_receive — base ee331e8 + step-6 tree, the identity write of `persist::write_parts` stashed
+  $ cargo nextest run --no-fail-fast -E 'test(key_change_identity_commits_with_receive)' --features kat -p secmp-client-core
+  panicked at crates/secmp-client-core/src/sessions/tests.rs:767:9:  the receive commit of the completing cell writes the identity: the fault refuses it
+Q210c sessions::tests::pending_control_content_survives_restart — step-6 tree, the re-planning loop of `open_conversation` stashed
+  panicked at crates/secmp-client-core/src/sessions/tests.rs:859:13:  assertion `left == right` failed: the last cell's send commit took the row  left: 1  right: 0   (durable state: the row is still there, nothing was sent)
+Q210d api::tests::not_confirmed_fires_after_t_rs — step-6 tree, the `set_receipt_timeout_ms` of `Core::open_session` stashed
+  panicked at crates/secmp-client-core/src/api.rs:1485:13:  assertion `left == right` failed: at T_RS  left: 0  right: 1
+Q210e sessions::tests::planned_fragments_held_after_freeze — step-6 tree, the per-cell `hold_planned_real` of `prepare` stashed
+  panicked at crates/secmp-client-core/src/sessions/tests.rs:910:9:  nothing of the message after the change
+Q210e sessions::tests::control_content_waits_for_first_reply — step-6 tree, `prepare` pops the plan while awaiting the first reply
+  panicked at crates/secmp-client-core/src/sessions/tests.rs:935:9:  only dummies before the first reply
+Q211 xtask::testscan::no_plain_seed_returns — base a958780 (product at HEAD; the scan of the step-7 tree)
+  $ cargo nextest run -p xtask no_plain_seed_returns
+  panicked at xtask/src/testscan.rs:1156:5:
+  plain seed returns: ["crates/secmp-client-core/src/hub.rs:621: pub fn queue_material(&self, queue: QueueId) -> Option<([u8; 32], [u8; 32])> {", "crates/secmp-client-core/src/invitations.rs:316: pub type PoolSeeds = (QueueId, [u8; 32], [u8; 32]);", "crates/secmp-client-core/src/invitations.rs:423: pub fn seeds(&self, relay: RelayId) -> Result<Vec<PoolSeeds>, Error> {"]
+Q212(2) invitations::tests::expired_queue_del_after_empty_fetch (Q194) — base cf6eda4, a compiling mutation of `ControlOps::schedule` (`When::AfterEmptyFetch` scheduled as `When::Delayed`), restored
+  $ cargo nextest run --no-fail-fast -E 'test(expired_queue_del_after_empty_fetch)' --features kat -p secmp-client-core
+  panicked at crates/secmp-client-core/src/invitations_tests.rs:1577:5:  assertion failed: queue.awaits_empty_fetch(OpId(1))
+Q212(3) invitations::tests::decide_retired_acks — the mutant `delete field ack_through from struct Round expression in Invitations::decide` at crates/secmp-client-core/src/invitations.rs:1211:21 (the `Retired | Retiring` arm of `decide`; B-4's row `:1066:21`, B-4b's `:1160:21`) applied by hand, restored
+  $ cargo nextest run --no-fail-fast -E 'test(decide_retired_acks)' --features kat -p secmp-client-core
+  panicked at crates/secmp-client-core/src/invitations_tests.rs:1576:5:  assertion `left == right` failed  left: None  right: Some(3)   (green on the fixed tree)
+Q212(1) harness::m7_crash::receipt_effect_commits_with_receive_ratchet (SE-21) — base cf6eda4 + the step-8 harness, the `set_delivered` loop of `persist::write_parts` stashed (the receipt's effect outside the receive commit)
+  $ cargo nextest run --no-fail-fast -E 'test(receipt_effect_commits_with_receive_ratchet)' -p secmp-testkit
+  panicked at crates/secmp-testkit/tests/harness/m7_crash.rs:700:5:  assertion `left == right` failed: nothing of the receive is durable  (left: the committed fixed part, right: the one before)
+Q212(5) hand mutant 1 of VERIFY-B4 P2 (`pure.rs` `fetch_gate`: `!tear && (!send_missing || true) && fetch_missing`), restored
+  $ cargo nextest run --no-fail-fast -E 'test(/scheduler::/)' --features kat -p secmp-client-core
+  killed by scheduler::core::pure::tests::fetch_gate_truth_table: panicked at crates/secmp-client-core/src/scheduler/core/pure.rs:627:13:  tear false, send missing true, fetch missing true  left: true  right: false
+Q212(9) xtask::testscan::session_actor_owns_ratchet (SE-18, the `.to_bytes(` needle) — base bf56f3f, a `fn leak(s: &RatchetState) -> usize { s.to_bytes().len() }` planted in crates/secmp-client-core/src/hub.rs (product part), restored
+  $ cargo nextest run --no-fail-fast -E 'test(session_actor_owns_ratchet)' -p xtask
+  panicked at xtask/src/testscan.rs:761:5:  RatchetState used outside the actor: ["crates/secmp-client-core/src/hub.rs:655: s.to_bytes().len()"]
+Q210f hand mutant P1-M2 (the trust gate `else if !self.trust.may_send_real() { Err(Refusal::Trust) }` removed from `Conversation::may_send_real`), main tree, no gate running, restored (git diff identical)
+  $ cargo nextest run --no-fail-fast -E 'test(/^api::tests::/) | test(key_change_blocks_sending) | test(invalid_key_change_freezes)' --features kat -p secmp-client-core
+  killed by api::tests::send_refused_after_key_change: panicked at crates/secmp-client-core/src/api.rs:1535:17:  left: None  right: Some(Blocked)
+  and by SE-06 key_change_blocks_sending (tests.rs:596:9, left: Ok(()) right: Err(Trust)), SE-08 invalid_key_change_freezes (tests.rs:634:9); the other 11 api::tests pass

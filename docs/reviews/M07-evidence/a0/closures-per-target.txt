@@ -1,0 +1,8 @@
+x86_64-unknown-linux-gnu secmp-crypto: argon2 v0.6.0;base64ct v1.8.3;blake2 v0.11.0;cpufeatures v0.3.1;
+x86_64-unknown-linux-gnu secmp-store: argon2 v0.6.0;base64ct v1.8.3;blake2 v0.11.0;cpufeatures v0.3.1;libsqlite3-sys v0.37.0;openssl-sys v0.9.117;rusqlite v0.39.0;
+x86_64-pc-windows-msvc secmp-crypto: argon2 v0.6.0;base64ct v1.8.3;blake2 v0.11.0;cpufeatures v0.3.1;
+x86_64-pc-windows-msvc secmp-store: argon2 v0.6.0;base64ct v1.8.3;blake2 v0.11.0;cpufeatures v0.3.1;libsqlite3-sys v0.37.0;openssl-sys v0.9.117;rusqlite v0.39.0;
+aarch64-apple-darwin secmp-crypto: argon2 v0.6.0;base64ct v1.8.3;blake2 v0.11.0;cpufeatures v0.3.1;
+aarch64-apple-darwin secmp-store: argon2 v0.6.0;base64ct v1.8.3;blake2 v0.11.0;cpufeatures v0.3.1;libsqlite3-sys v0.37.0;openssl-sys v0.9.117;rusqlite v0.39.0;
+build-deps of secmp-store (linux):
+secmp-store v0.0.0 (/work/SecMPro/target/a0/ws/crates/secmp-store)

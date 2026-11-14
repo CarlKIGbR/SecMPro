@@ -1,0 +1,3 @@
+Strict: frames C2R 18203 / R2C 51461, max |Δt| C2R 0 ms / R2C 0 ms; messages sent 204; refused: Refused { frozen: 41, reset: 22, blocked: 29, reinvite: 159 }
+Balanced: frames C2R 4310 / R2C 19388, max |Δt| C2R 0 ms / R2C 0 ms; messages sent 227; refused: Refused { frozen: 34, reset: 16, blocked: 23, reinvite: 153 }
+LowBw: frames C2R 1438 / R2C 6464, max |Δt| C2R 0 ms / R2C 0 ms; messages sent 239; refused: Refused { frozen: 34, reset: 14, blocked: 19, reinvite: 160 }

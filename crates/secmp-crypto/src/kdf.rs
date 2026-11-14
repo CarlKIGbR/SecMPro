@@ -10,7 +10,7 @@ use sha2::Sha256;
 
 use crate::error::{Error, Result};
 use crate::label::Label;
-use crate::secret::SecretBytes;
+use crate::secret::{LockedSecret, SecretBytes};
 
 /// The largest HKDF-SHA-256 output (255 · 32 bytes, RFC 5869 §2.3).
 pub const HKDF_MAX_LEN: usize = 8160;
@@ -36,6 +36,23 @@ pub fn hkdf<const L: usize>(
 ) -> Result<SecretBytes<L>> {
     let hk = Hkdf::<Sha256>::new(Some(salt), ikm);
     let mut okm = SecretBytes::<L>::zero();
+    expand_into(&hk, label, context, okm.expose_secret_mut())?;
+    Ok(okm)
+}
+
+/// [`hkdf`] with the input keying material and the output in locked pages (CS-2.2): the same bytes, no copy of the key
+/// outside a [`LockedSecret`].
+///
+/// # Errors
+/// As [`hkdf`]; [`Error::Unavailable`] if locked memory is unavailable.
+pub fn hkdf_locked<const I: usize, const L: usize>(
+    salt: &[u8],
+    ikm: &LockedSecret<I>,
+    label: Label,
+    context: &[&[u8]],
+) -> Result<LockedSecret<L>> {
+    let hk = Hkdf::<Sha256>::new(Some(salt), ikm.expose_secret());
+    let mut okm = LockedSecret::<L>::zeroed()?;
     expand_into(&hk, label, context, okm.expose_secret_mut())?;
     Ok(okm)
 }
@@ -143,5 +160,17 @@ mod tests {
             Some(Error::Rejected)
         );
         assert!(hkdf_expand::<64>(&[0; 32], Label::Commit, &[&[0; 24]]).is_ok());
+    }
+
+    /// A-4 §2 (extra test): the locked-page form returns the bytes of [`hkdf`] for the same input.
+    #[test]
+    fn hkdf_locked_equals_hkdf() -> Result<()> {
+        let ikm = LockedSecret::<32>::from_slice(&[0x4d; 32])?;
+        let plain = hkdf::<32>(&[0; 32], &[0x4d; 32], Label::StoreDb, &[])?;
+        let locked = hkdf_locked::<32, 32>(&[0; 32], &ikm, Label::StoreDb, &[])?;
+        assert_eq!(plain.expose_secret(), locked.expose_secret());
+        let other = hkdf_locked::<32, 32>(&[0; 32], &ikm, Label::StoreWrap, &[])?;
+        assert_ne!(other.expose_secret(), locked.expose_secret());
+        Ok(())
     }
 }

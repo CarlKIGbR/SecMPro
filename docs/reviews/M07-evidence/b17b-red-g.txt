@@ -1,0 +1,49 @@
+head 64650f63fc515e3b72e088ecd253351c42562314
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index cb2032d..6ff7591 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -1076,7 +1076,6 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+             self.replan_control(r);
+         }
+         // the new queue numbers its cells from 1
+-        self.by_cell.clear();
+         ids.len()
+     }
+ 
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+────────────
+ Nextest run ID 5feab8c2-5a6e-44cd-af75-ad8e9e507ba0 with nextest profile: default
+    Starting 8 tests across 1 binary (246 tests skipped)
+        PASS [   1.886s] (1/8) secmp-client-core api::tests::second_rotation_waits_behind_the_live_key_change
+        PASS [   1.891s] (2/8) secmp-client-core api::tests::restart_in_the_window_keeps_the_chain
+        PASS [   2.050s] (3/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+        PASS [   2.077s] (4/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+        FAIL [   2.146s] (5/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+  stdout ───
+
+    running 1 test
+    test hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 2.14s
+
+  stderr ───
+
+    thread '<unnamed>' (3910301) panicked at crates/secmp-client-core/src/hub.rs:1969:13:
+    B's 132 alone releases: nothing on C
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.477s] (6/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+        PASS [   2.863s] (7/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+        PASS [   3.729s] (8/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+────────────
+     Summary [   3.730s] 8 tests run: 7 passed, 1 failed, 246 skipped
+        FAIL [   2.146s] (5/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+error: test run failed

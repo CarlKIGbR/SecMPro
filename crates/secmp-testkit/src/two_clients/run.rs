@@ -23,14 +23,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use secmp_client_core::clock::{Clock as _, TokioClock};
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations, OsSource};
 use secmp_client_core::scheduler::core::Scheduler;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::run::{Driver, Job, JobDone, Only, Worker};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, QueueId, RelayId, SendFailure, SourceError, Transport,
+    CellSource, CellToken, Delivered, QueueId, RelayId, SendFailure, SourceError, Transport,
 };
+use secmp_client_core::sessions::actor::{Conversation, Conversations, OsSource};
 use secmp_crypto::{Fingerprint, SafetyNumber, SecretBytes, Zeroizing};
 use secmp_proto::hx::{Accepted, Initiator, Responder};
 use secmp_proto::inv::{invitation_uri, invitee_check, parse_invitation_uri};
@@ -232,8 +232,8 @@ impl CellSource for NoCells {
     fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
     fn discard(&mut self, _: QueueId, _: CellToken) {}
     fn queue_lost(&mut self, _: QueueId) {}
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
-        Ok(())
+    fn deliver(&mut self, _: QueueId, _: u64, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        Ok(Delivered::Committed)
     }
 }
 
@@ -519,7 +519,7 @@ impl<P: StreamProvider + 'static> World<P> {
         label: &'static str,
         seed: u64,
     ) -> Result<Node<P, R>, Fail> {
-        let conv = Conversation::new(
+        let mut conv = Conversation::new(
             s.state,
             MemOutbox::new(),
             MemPersist::new(),
@@ -527,6 +527,7 @@ impl<P: StreamProvider + 'static> World<P> {
             s.peer,
             self.unix_base,
         );
+        conv.raw_app_payloads_kat();
         let mut all = Conversations::new();
         all.add(conv);
         let convs = Arc::new(Mutex::new(all));

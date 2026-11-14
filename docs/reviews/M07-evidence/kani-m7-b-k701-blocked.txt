@@ -1,0 +1,5 @@
+K7-01 kani_retention_bound_24: NOT MEASURED, blocked (BRIEF M7-B §3). cargo kani --package secmp-client-core --harness kani_proofs::kani_retention_bound_24 --exact, alone via kani-one-bsc.py.txt, nproc 32:
+  attempt 1 (retain with a symbolic-index insertion; 64-bit ids; r<=24, f<=16, s<=8): stopped by hand at 34 min, CBMC 9.6 GB and growing (90 % = 12.74 GB)
+  attempt 2 (retain with loop-counter indices only, the committed form; 64-bit ids): killed at the 60 min limit of the background run, CBMC 6.7 GB at 45 min
+  attempt 3 (as 2, ids assumed < 64: every order type of 40 ids): killed at the 60 min limit, CBMC 6.2 GB at 40 min
+No result in any attempt; the harness is kept in docs/reviews/M07-evidence/kani-k701-harness.rs.txt and is NOT registered (KANI_HARNESSES unchanged: 55).

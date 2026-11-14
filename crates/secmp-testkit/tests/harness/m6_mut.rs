@@ -709,7 +709,7 @@ fn tick_without_a_prepared_send_is_an_overrun() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)))
     );
 }
 
@@ -830,7 +830,7 @@ fn in_flight_counts_a_tick_until_every_answer_is_in() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::InFlight))),
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::InFlight))),
         "{:?}",
         rig.events
     );
@@ -1098,11 +1098,11 @@ fn conversation_rebinding_the_queues_redirects_the_cell_source() {
     assert!(convs.prepare_cell(A_SEND, 10_000).unwrap().is_none());
     let cell = convs.prepare_cell(QueueId(10), 10_000).unwrap().unwrap();
     convs.get_mut(b).unwrap().set_recv_queue(QueueId(11));
-    convs.deliver(QueueId(11), 1, &cell.cell).unwrap();
+    convs.deliver(QueueId(11), 0, 1, &cell.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1);
     // the old recv queue of b has no conversation any more: a cell there is dropped, not decrypted
     let again = convs.prepare_cell(QueueId(10), 20_000).unwrap().unwrap();
-    convs.deliver(B_RECV, 2, &again.cell).unwrap();
+    convs.deliver(B_RECV, 0, 2, &again.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().discarded(), 0);
 }
 
@@ -1112,9 +1112,9 @@ fn conversation_discarded_counts_cells_that_do_not_decrypt() {
     let (mut convs, _a, b) = pair(32);
     assert_eq!(convs.get(b).unwrap().discarded(), 0);
     let junk = Cell::from_bytes(&[0x5a; 4096]).unwrap();
-    convs.deliver(B_RECV, 1, &junk).unwrap();
+    convs.deliver(B_RECV, 0, 1, &junk).unwrap();
     assert_eq!(convs.get(b).unwrap().discarded(), 1);
-    convs.deliver(B_RECV, 2, &junk).unwrap();
+    convs.deliver(B_RECV, 0, 2, &junk).unwrap();
     assert_eq!(convs.get(b).unwrap().discarded(), 2);
 }
 
@@ -1137,7 +1137,7 @@ fn conversation_has_pending_real_follows_the_queue_and_the_receipts() {
     let cell = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
     assert!(!convs.get(a).unwrap().has_pending_real(), "taken");
     // the peer owes a receipt
-    convs.deliver(B_RECV, 1, &cell.cell).unwrap();
+    convs.deliver(B_RECV, 0, 1, &cell.cell).unwrap();
     assert!(convs.get(b).unwrap().has_pending_real(), "a receipt is due");
     convs.get_mut(b).unwrap().set_send_receipts(false);
     assert!(!convs.get(b).unwrap().has_pending_real(), "receipts off");
@@ -1167,7 +1167,7 @@ fn conversation_cells_carry_the_senders_clock() {
     use secmp_crypto::SecretBytes;
     use secmp_proto::tr::{Entropy, FixedEntropy};
     use secmp_testkit::harness::{EntropyPool, START_UNIX, ratchet_pair};
-    type Conv = secmp_client_core::scheduler::conversation::Conversation<
+    type Conv = secmp_client_core::sessions::actor::Conversation<
         secmp_client_core::scheduler::outbox::MemOutbox,
         MemPersist,
         EntropyPool,
@@ -1179,7 +1179,7 @@ fn conversation_cells_carry_the_senders_clock() {
     let mut eb = FixedEntropy::new(&pool.bytes(1 << 16));
     let (sa, sb) = ratchet_pair(&sk, &transcript, &mut ea, &mut eb);
     let key = pool.get().hybrid_signing_key().unwrap().verifying_key();
-    let mut conv: Conv = secmp_client_core::scheduler::conversation::Conversation::new(
+    let mut conv: Conv = secmp_client_core::sessions::actor::Conversation::new(
         sa,
         secmp_client_core::scheduler::outbox::MemOutbox::new(),
         MemPersist::new(),
@@ -1188,7 +1188,7 @@ fn conversation_cells_carry_the_senders_clock() {
         START_UNIX,
     );
     conv.bind(A_SEND, A_RECV);
-    let mut convs = secmp_client_core::scheduler::conversation::Conversations::new();
+    let mut convs = secmp_client_core::sessions::actor::Conversations::new();
     let a = convs.add(conv);
     convs
         .get_mut(a)
@@ -1208,7 +1208,7 @@ fn conversation_cells_carry_the_senders_clock() {
 }
 
 fn real_cells_until_idle(
-    convs: &mut secmp_client_core::scheduler::conversation::Conversations<
+    convs: &mut secmp_client_core::sessions::actor::Conversations<
         secmp_client_core::scheduler::outbox::MemOutbox,
         MemPersist,
         secmp_testkit::harness::EntropyPool,
@@ -1296,10 +1296,10 @@ fn first_link_life(rig: &TokioRig<Holding>) -> (u64, Option<(u64, Reason)>) {
     let up = log
         .events
         .iter()
-        .find_map(|(t, e)| matches!(e, LinkEvent::Up(l) if *l == link).then_some(*t))
+        .find_map(|(t, e)| matches!(e, LinkEvent::Up(l, _) if *l == link).then_some(*t))
         .unwrap();
     let down = log.events.iter().find_map(|(t, e)| match e {
-        LinkEvent::TornDown(l, why) if *l == link => Some((*t, *why)),
+        LinkEvent::TornDown(l, _, why) if *l == link => Some((*t, *why)),
         _ => None,
     });
     (up, down)
@@ -1448,7 +1448,7 @@ fn rejected_by(script: Script) -> bool {
     rig.run_to(10_000);
     rig.events
         .iter()
-        .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Rejected)))
+        .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Rejected)))
 }
 
 /// `channel.rs:459` (the guard `cell_id != 0 && evicted_is_plausible(..)` → `true`), `:485` (`fits(code, allowed)` → `true`):
@@ -1511,7 +1511,7 @@ fn channel_single_rejects_a_ping_answered_with_the_wrong_type() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Rejected))),
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Rejected))),
         "a PING answered with OK_SEND ends the link: {:?}",
         rig.events
     );
@@ -1599,7 +1599,7 @@ fn reason_of_a_closed_channel_is_closed() {
     let reasons: Vec<Reason> = outs
         .iter()
         .filter_map(|o| match o {
-            Output::Event(LinkEvent::TornDown(l, why)) if *l == link => Some(*why),
+            Output::Event(LinkEvent::TornDown(l, _, why)) if *l == link => Some(*why),
             _ => None,
         })
         .collect();

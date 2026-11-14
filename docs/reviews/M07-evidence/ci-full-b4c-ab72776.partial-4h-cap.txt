@@ -1,0 +1,13 @@
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+Running `target/debug/xtask ci-full`
+# attempt 1 (B-4c2, foreground command started without a head line): fuzz FAILED (Q219, D-B42), then killed by the harness 4 h cap in step 8 (mutants, secmp-proto); the file simply ends
+# gates that completed, from their "| status |" rows: fmt PASS (1 s); clippy PASS (0 s); policy PASS (1 s); deny PASS (0 s); vet PASS (1 s); audit PASS (2 s); cooldown PASS (23 s); nextest PASS (18 s); doctest PASS (1 s); hello PASS (0 s); kat PASS (102 s); harness PASS (994 s); fuzz-check PASS (0 s); perf PASS (0 s); ct PASS (5743 s); fuzz FAIL (4330 s); coverage PASS (1087 s)
+thread '<unnamed>' (2126345) panicked at fuzz_targets/scheduler_event_sequence.rs:171:37:
+two SENDs 9985 ms apart on a queue of period 10000
+FAIL [6] fuzz: fuzz: 1 of 36 targets failed: scheduler_event_sequence (inputs in fuzz/artifacts/<target>/)
+| line 1 | fuzz: 1 of 36 targets failed: scheduler_event_sequence (inputs in fuzz/artifacts/<target>/) |
+# last line of the raw log (killed): caught   crates/secmp-proto/src/wire/frame.rs:719:13: delete match arm opcode::OK_SEND in ResponseCmd::decode_fields in 3s build + 0s test
+# excerpt map (raw log target/fable/ci-full-raw/ci-full-b4c-ab72776.partial-4h-cap.txt; every other line is a verbatim copy; the "gates that completed" line is assembled from the quoted status rows):
+#   raw first lines: 1..2
+#   raw status rows of the gates: 10,22,32,68,80,96,107,1693,1776,1789,3112,3520,3974,3994,4160,25725,27556
+#   raw lines of the quoted evidence: 22184,22185,25720,25726,29052

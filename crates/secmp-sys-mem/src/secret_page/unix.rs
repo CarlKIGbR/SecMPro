@@ -147,7 +147,8 @@ mod linux {
     }
 
     /// Map the secret memory over the data page (`MAP_FIXED` replaces exactly that page of the reservation) and
-    /// keep it out of `fork` children (`MADV_DONTFORK`; the kernel already marks it locked and not dumpable).
+    /// keep it out of `fork` children (`MADV_DONTFORK`; the kernel itself keeps the page unevictable, out of its
+    /// direct map and out of core dumps, docs/04 CS-2.2).
     pub(super) fn map_secretmem(data: *mut u8, page: usize, fd: &Fd) -> Result<(), Error> {
         // SAFETY: `MAP_FIXED` at `data` replaces exactly the data page of the caller's own reservation, never
         // memory owned by anything else; `fd` is a valid `memfd_secret` descriptor of size `page`.
@@ -194,9 +195,12 @@ pub(super) fn probe_readable(addr: *const u8) -> bool {
     n == 1
 }
 
-/// Linux: the kernel's view of the data page (`VmFlags` of its VMA in `/proc/self/smaps`): locked (`lo`) and
-/// excluded from core dumps (`dd`) for both backends, plus wiped on fork (`wf`) for `mlock` or not inherited
-/// (`dc`) for `memfd_secret`. Other Unix systems (the macOS development host) have no such interface; `mlock`
+/// Linux: the kernel's view of the data page (its VMA in `/proc/self/smaps`, and `/proc/self/mem`). Both backends:
+/// excluded from core dumps (`dd`). `mlock`: locked (`lo`) and wiped on fork (`wf`). `memfd_secret` (ADR-059): a
+/// `/secretmem` mapping, shared (`sh`), not inherited (`dc`), and the kernel refuses to read it through
+/// `/proc/self/mem` (an error, no byte) while it reads an ordinary page of this process; `lo` is not required, the
+/// kernel keeps the page unevictable through its secretmem address space and stopped marking the mapping locked
+/// (kernel commit 97d34aa65c29). Other Unix systems (the macOS development host) have no such interface; `mlock`
 /// succeeding is the evidence there.
 #[cfg(test)]
 pub(super) fn assert_protected(data: *mut u8, backend: Backend) {
@@ -220,8 +224,28 @@ pub(super) fn assert_protected(data: *mut u8, backend: Backend) {
             .iter()
             .find_map(|l| l.strip_prefix("VmFlags:"))
             .unwrap_or_default();
+        if backend == Backend::MemfdSecret {
+            let control = [0x5a_u8; 32];
+            let mut seen = [0_u8; 32];
+            let got = read_own_memory(std::hint::black_box(&control).as_ptr().addr(), &mut seen);
+            assert!(
+                matches!(got, Ok(32)) && seen == control,
+                "control: /proc/self/mem must read an ordinary page: {got:?}"
+            );
+            let mut leaked = [0_u8; 32];
+            let got = read_own_memory(data.addr(), &mut leaked);
+            assert!(
+                got.is_err() && leaked == [0_u8; 32],
+                "{backend:?}: /proc/self/mem read of the data page gave {got:?} (the kernel must refuse it)"
+            );
+            let header = block.first().copied().unwrap_or_default();
+            assert!(
+                header.split_whitespace().nth(5) == Some("/secretmem"),
+                "{backend:?}: VMA {header:?} is not a secretmem mapping"
+            );
+        }
         let want: &[&str] = match backend {
-            Backend::MemfdSecret => &["lo", "dd", "dc"],
+            Backend::MemfdSecret => &["sh", "dd", "dc"],
             _ => &["lo", "dd", "wf"],
         };
         for f in want {
@@ -236,4 +260,13 @@ pub(super) fn assert_protected(data: *mut u8, backend: Backend) {
         let _ = data;
         assert_eq!(backend, Backend::Mlock);
     }
+}
+
+/// Linux: read `buf.len()` bytes at `addr` of this process through `/proc/self/mem` (the kernel's own access path,
+/// which refuses `memfd_secret` pages).
+#[cfg(all(test, target_os = "linux"))]
+fn read_own_memory(addr: usize, buf: &mut [u8]) -> std::io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    let offset = u64::try_from(addr).map_err(std::io::Error::other)?;
+    std::fs::File::open("/proc/self/mem")?.read_at(buf, offset)
 }

@@ -5,13 +5,13 @@
 use std::collections::BTreeSet;
 
 use secmp_client_core::scheduler::control::When;
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::core::Scheduler;
 use secmp_client_core::scheduler::outbox::{
     MemOutbox, MemPersist, MsgId, MsgState, OutMessage, Outbox,
 };
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{CellSource, ControlKind, Output, QueueId, RelayId};
+use secmp_client_core::sessions::actor::{Conversation, Conversations};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{FixedEntropy, RatchetState};

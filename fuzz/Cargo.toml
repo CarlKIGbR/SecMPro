@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # cargo-fuzz package (docs/06 §4–5 step 6). Outside the main workspace (its own `[workspace]` and Cargo.lock):
-# built only with the pinned nightly by `cargo xtask step fuzz`; `libfuzzer-sys` is a fuzzing-only dependency
-# (ADR-037) and never part of a shipped build.
+# fuzzed with the pinned nightly by `cargo xtask step fuzz`, checked (`cargo check --locked --all-targets`, no run)
+# with the pinned stable by the ci-fast step `fuzz-check` (ADR-045 Amendment 14); `libfuzzer-sys` is a fuzzing-only
+# dependency (ADR-037) and never part of a shipped build.
 [package]
 name = "secmp-fuzz"
 version = "0.0.0"
@@ -25,6 +26,9 @@ secmp-relay = { path = "../crates/secmp-relay", features = ["kat"] }
 # `Channel` over the fixed honest link (`Channel::from_link_kat`) and a seeded `TimingRng`.
 secmp-transport = { path = "../crates/secmp-transport", features = ["harness"] }
 secmp-client-core = { path = "../crates/secmp-client-core", features = ["kat"] }
+# `kat` (M7 Phase A): `backup_import` and `store_record_open` reach the store's decoders through `open_export_kat`,
+# `seal_file_kat`, `encode_body_kat` and `seal::{seal_kat, open_kat}` (the `kat` Argon2 parameters, `kat::TEST_MK`).
+secmp-store = { path = "../crates/secmp-store", features = ["kat"] }
 
 [workspace]
 members = ["."]
@@ -256,6 +260,27 @@ bench = false
 [[bin]]
 name = "relayref_onion_to_hsid"
 path = "fuzz_targets/relayref_onion_to_hsid.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "backup_import"
+path = "fuzz_targets/backup_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "store_record_open"
+path = "fuzz_targets/store_record_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "invitation_queue_retention"
+path = "fuzz_targets/invitation_queue_retention.rs"
 test = false
 doc = false
 bench = false

@@ -67,7 +67,28 @@ pub(crate) fn policy(ctx: &Ctx) -> Result<Outcome> {
     detail.push_str(&workflows(&ctx.root)?);
     detail.push_str("; ");
     detail.push_str(&large_files(&ctx.root)?);
+    detail.push_str("; ");
+    detail.push_str(&mutants_profile(&ctx.root)?);
     Ok(Outcome::Pass(detail))
+}
+
+/// TEST-SPEC-M7 G7-10 (ADR-047 Amendment 9): `.config/nextest.toml` holds the profile of the second mutants run exactly as
+/// `mutants_killer_profile` writes it for `expect::MUTANT_KILLER_MODULE`, once, and no other `priority`.
+fn mutants_profile(root: &Path) -> Result<String> {
+    let config = lf(&std::fs::read_to_string(root.join(".config/nextest.toml"))?);
+    let block = mutants_killer_profile(expect::MUTANT_KILLER_MODULE);
+    if config.matches(&block).count() != 1 || config.matches("priority =").count() != 1 {
+        bail!(
+            "mutants-profile: .config/nextest.toml must hold the profile {} once, as gates::mutants_killer_profile writes it, and no other priority",
+            expect::MUTANTS_HARNESS_PROFILE
+        );
+    }
+    Ok(format!(
+        "mutants-profile: {} starts {}::* first (priority {})",
+        expect::MUTANTS_HARNESS_PROFILE,
+        expect::MUTANT_KILLER_MODULE,
+        expect::MUTANT_KILLERS_PRIORITY
+    ))
 }
 
 /// The tracked files over `limit` bytes that are not allowlisted, and the allowlisted ones over `cap` (ADR-052): one
@@ -180,8 +201,8 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
 
 /// The nextest filterset of the workspace run: not the `secmp-testkit` `harness` binary. Feature unification enables
 /// `secmp-testkit/harness` in a `--workspace` build (dev-dependency of `secmp-transport`, TLS-01…TLS-11), which
-/// would run the long simulations here a second time; the `kat` step is the one runner of that binary (WEISUNG
-/// M6-CI-1, ADR-047 Amendment 5).
+/// would run the long simulations here a second time; the `harness` step is the one runner of that binary (WEISUNG
+/// M6-CI-1, ADR-047 Amendment 5; from M7 its own step and job, ADR-045 Amendment 12).
 pub(crate) const NEXTEST_WORKSPACE_FILTER: &str = "not binary(=harness)";
 
 /// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
@@ -313,6 +334,25 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
         list(&found),
         crate::testscan::kat_seed_detail(ci_seed)
     )))
+}
+
+/// The testkit `harness` binary (TEST-SPEC-M7 G7-07, OPEN-M7-18 A, ADR-045 Amendment 12): the in-process harness and
+/// the virtual-time and loopback simulations, out of the `kat` step (36–63 min on 4 vCPU, ADR-045 Amendment 10) and into
+/// the pinned job `harness`; `linux-fast` and `linux-full` delegate it there, `windows-native` runs it by name. The same
+/// build as the testkit's kat run (`--features kat`), with [`crate::testscan::SEED_ENV`] handled as in `kat`.
+pub(crate) fn harness(_: &Ctx) -> Result<Outcome> {
+    tools::require(tools::NEXTEST)?;
+    let ci_seed = crate::testscan::ci_run_seed()?;
+    for run in crate::testscan::harness_runs(ci_seed) {
+        // as in `kat`: on Windows without `expect::WINDOWS_SKIP_TESTS`
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
+        run.run()?;
+    }
+    Ok(Outcome::Pass(crate::testscan::harness_seed_detail(ci_seed)))
 }
 
 /// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --package
@@ -1044,6 +1084,31 @@ pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
     Ok(args)
 }
 
+/// ci-fast's build check of the fuzz package (ADR-045 Amendment 14, WEISUNG M7-B-4c Q204, D-B26): `fuzz/` is outside
+/// the workspace, so neither clippy nor nextest compiles it. `cargo check` of every target with the pinned stable of
+/// `rust-toolchain.toml`, `--locked` as [`fuzz_lock_check_args`] (EXTB-6); no run, no corpus, no nightly, no
+/// `-D warnings` (`fuzz/common/` has dead-code warnings).
+pub(crate) fn fuzz_check_args() -> Vec<String> {
+    [
+        "check",
+        "--locked",
+        "--manifest-path",
+        "fuzz/Cargo.toml",
+        "--all-targets",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
+}
+
+/// The ci-fast step `fuzz-check` (see [`fuzz_check_args`]); the fuzz smoke stays the `fuzz` step of ci-full.
+pub(crate) fn fuzz_check(ctx: &Ctx) -> Result<Outcome> {
+    Cmd::cargo().args(fuzz_check_args()).dir(&ctx.root).run()?;
+    Ok(Outcome::Pass(
+        "cargo check --locked --manifest-path fuzz/Cargo.toml --all-targets (pinned stable)".into(),
+    ))
+}
+
 /// The command that checks, before the fuzz build, that `fuzz/Cargo.lock` needs no change (EXTB-6).
 pub(crate) fn fuzz_lock_check_args() -> Vec<String> {
     [
@@ -1420,12 +1485,33 @@ pub(crate) fn mutants_harness_args(shard: Option<MutantsShard>) -> Vec<String> {
         .iter()
         .position(|x| x == "--")
         .map_or(a.len(), |i| i.saturating_add(1));
-    a.splice(after..after, [MUTANTS_HARNESS_MAX_FAIL.to_owned()]);
+    a.splice(
+        after..after,
+        [
+            MUTANTS_HARNESS_MAX_FAIL.to_owned(),
+            // TEST-SPEC-M7 G7-10 (ADR-047 Amendment 9): the killers of clock and period mutants first, by the profile's
+            // priority override (`mutants_killer_profile`), not by the sort position of their module's name
+            "--profile".to_owned(),
+            expect::MUTANTS_HARNESS_PROFILE.to_owned(),
+        ],
+    );
     a
 }
 
 /// The nextest option that cancels the harness run of a mutant at the first failing test.
 pub(crate) const MUTANTS_HARNESS_MAX_FAIL: &str = "--max-fail=1:immediate";
+
+/// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the nextest profile of the second mutants run as it stands in
+/// `.config/nextest.toml` — one override that gives every test of the harness module `module` the priority
+/// `expect::MUTANT_KILLERS_PRIORITY`, so nextest starts them before every other test whatever the module is called (the
+/// other tests keep priority 0 and nextest's order). The default profile's overrides still apply.
+pub(crate) fn mutants_killer_profile(module: &str) -> String {
+    format!(
+        "[profile.{profile}]\n\n[[profile.{profile}.overrides]]\nfilter = 'test(/^{module}::/)'\npriority = {priority}\n",
+        profile = expect::MUTANTS_HARNESS_PROFILE,
+        priority = expect::MUTANT_KILLERS_PRIORITY,
+    )
+}
 
 /// How often the mutation gate polls cargo-mutants and echoes its new output lines.
 const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1433,6 +1519,93 @@ const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 /// The file in which a sharded `mutants` step records its verdict for the merge (`mutants.out` is the shard's
 /// artefact).
 const MUTANTS_SHARD_VERDICT: &str = "xtask-shard.json";
+
+/// The file in which a sharded `mutants` step records the mutant inventory of both runs as `cargo mutants --list`
+/// lists it for the shard's tree (ADR-047 Amendment 12): `{"mutants": [name, …]}`, sorted, every listed mutant once per
+/// listing.
+const MUTANTS_SHARD_INVENTORY: &str = "xtask-inventory.json";
+
+/// The `cargo mutants --list --json` command line of one run of the gate (ADR-047 Amendment 12): the run's features,
+/// packages and the exclusions of `expect.rs` — what decides which mutants exist; no shard, so the whole inventory.
+fn mutants_list_args(features: &str, packages: &[&str]) -> Vec<String> {
+    let mut a: Vec<String> = ["mutants", "--list", "--json", "--features", features]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    for p in packages {
+        a.extend(["--package".to_owned(), (*p).to_owned()]);
+    }
+    for f in expect::MUTANT_EXCLUDE_FILES {
+        a.extend(["--exclude".to_owned(), (*f).to_owned()]);
+    }
+    for re in expect::MUTANT_EXCLUDE_RE {
+        a.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
+    }
+    a
+}
+
+/// The listings of the two runs: the first run's packages with `kat`, the harness packages with `harness` (the
+/// packages of the two runs are disjoint, so a mutant name names one run).
+fn mutants_inventory_args() -> [Vec<String>; 2] {
+    [
+        mutants_list_args("kat", &mutants_own_test_packages()),
+        mutants_list_args("harness", expect::MUTANT_HARNESS_PACKAGES),
+    ]
+}
+
+/// The names of the mutants of one `cargo mutants --list --json` output (an array of mutants, each with its `name`).
+fn inventory_names(json: &str) -> Result<Vec<String>> {
+    let v: Value = serde_json::from_str(json)
+        .map_err(|e| Error(format!("cargo mutants --list --json: {e}")))?;
+    let all = v
+        .as_array()
+        .ok_or_else(|| Error("cargo mutants --list --json: not an array".to_owned()))?;
+    all.iter()
+        .map(|m| {
+            m.get("name")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    Error("cargo mutants --list --json: a mutant without a name".to_owned())
+                })
+        })
+        .collect()
+}
+
+/// The inventory of both runs for this tree, sorted; an empty inventory is an error.
+fn mutants_inventory(ctx: &Ctx) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for args in mutants_inventory_args() {
+        names.extend(inventory_names(
+            &Cmd::cargo().args(args).dir(&ctx.root).read()?,
+        )?);
+    }
+    if names.is_empty() {
+        bail!("cargo mutants --list: no mutants");
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// The inventory a shard recorded (`MUTANTS_SHARD_INVENTORY`), sorted.
+fn read_inventory(path: &Path) -> Result<Vec<String>> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    let mut names: Vec<String> = v
+        .get("mutants")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error(format!("{}: no `mutants` array", path.display())))?
+        .iter()
+        .filter_map(|m| m.as_str().map(str::to_owned))
+        .collect();
+    if names.is_empty() {
+        bail!("{}: an empty inventory", path.display());
+    }
+    names.sort();
+    Ok(names)
+}
 
 /// The subdirectory of the first run's `mutants.out` that keeps the second run's own files (outcomes, survivor lists,
 /// log), so the shard artefact carries them.
@@ -1583,6 +1756,16 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     };
     let exit_codes = [status, status_h].map(|s| s.and_then(|s| s.code()));
     if let Some(shard) = shard {
+        // ADR-047 Amendment 12: the merge checks the shards against the inventory of this tree
+        let verdict = verdict.and_then(|d| {
+            let names = mutants_inventory(ctx)?;
+            std::fs::create_dir_all(&out)?;
+            std::fs::write(
+                out.join(MUTANTS_SHARD_INVENTORY),
+                serde_json::json!({ "mutants": names }).to_string(),
+            )?;
+            Ok(format!("{d}; inventory {} mutants", names.len()))
+        });
         let (passed, detail) = match &verdict {
             Ok(d) => ("PASS", d.clone()),
             Err(e) => ("FAIL", e.0.clone()),
@@ -1939,7 +2122,10 @@ fn shard_dirs(dir: &Path) -> Result<std::collections::BTreeMap<usize, Vec<PathBu
 /// no other, each with a PASS verdict of shard `K/n` (written by the shard's `mutants` step) and a complete
 /// `outcomes.json`. Every shard is read and reported before anything fails (ADR-047 Amendment 2 (3)): a shard that
 /// is missing, unfinished or failed is a failure naming it, and the outcomes of a failed shard that finished still
-/// count in the package tallies.
+/// count in the package tallies. ADR-047 Amendment 12: each shard also holds the mutant inventory of its tree
+/// (`MUTANTS_SHARD_INVENTORY`) and at least one mutant outcome; once every shard is sound, the inventories must be one
+/// and the same, and the outcomes of all shards together must be that inventory, each mutant exactly once — shards
+/// non-empty, pairwise disjoint, their union the whole list.
 fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
     let mut by_shard = shard_dirs(dir)?;
     let mut merged = MergedShards {
@@ -1947,6 +2133,7 @@ fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
         shards: Vec::new(),
         failures: Vec::new(),
     };
+    let mut inventories: Vec<(usize, Vec<String>)> = Vec::new();
     for k in 0..n {
         let dirs = by_shard.remove(&k).unwrap_or_default();
         let [d] = dirs.as_slice() else {
@@ -1990,8 +2177,18 @@ fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
                 field("shard"),
                 field("detail").replace("; ", ", ")
             ))
+        } else if let Err(e) = &read {
+            Some(e.0.clone())
+        } else if read.as_ref().is_ok_and(|r| r.outcomes.is_empty()) {
+            Some("no mutant outcomes (an empty shard)".to_owned())
         } else {
-            read.as_ref().err().map(|e| e.0.clone())
+            match read_inventory(&out.join(MUTANTS_SHARD_INVENTORY)) {
+                Ok(names) => {
+                    inventories.push((k, names));
+                    None
+                }
+                Err(e) => Some(format!("no mutant inventory: {}", e.0)),
+            }
         };
         merged.shards.push(format!(
             "shard {k}/{n}: {} — {mutants} ({dir_name})",
@@ -2009,7 +2206,77 @@ fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
             .failures
             .push(format!("a result directory for shard {k}, outside 0..{n}"));
     }
+    if merged.failures.is_empty() {
+        merged
+            .failures
+            .extend(inventory_failures(&inventories, &merged.outcomes, n));
+    }
     Ok(merged)
+}
+
+/// ADR-047 Amendment 12: the shards' inventories are one list, and the mutant outcomes of all shards are that list,
+/// every mutant exactly once.
+fn inventory_failures(
+    inventories: &[(usize, Vec<String>)],
+    outcomes: &[Value],
+    n: usize,
+) -> Vec<String> {
+    let Some((first, list)) = inventories.first() else {
+        return vec!["inventory: no shard recorded one".to_owned()];
+    };
+    let mut failures: Vec<String> = inventories
+        .iter()
+        .filter(|(_, other)| other != list)
+        .map(|(k, _)| {
+            format!(
+                "inventory: shard {k}/{n} lists another mutant inventory than shard {first}/{n}"
+            )
+        })
+        .collect();
+    let mut tested: Vec<&str> = outcomes
+        .iter()
+        .map(|o| {
+            o.get("scenario")
+                .and_then(|s| s.get("Mutant"))
+                .and_then(|m| m.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+        })
+        .collect();
+    tested.sort_unstable();
+    let (mut at_list, mut at_tested) = (0_usize, 0_usize);
+    let (mut missing, mut extra) = (Vec::new(), Vec::new());
+    loop {
+        match (list.get(at_list), tested.get(at_tested)) {
+            (Some(listed), Some(name)) if listed.as_str() == *name => {
+                at_list = at_list.saturating_add(1);
+                at_tested = at_tested.saturating_add(1);
+            }
+            (Some(listed), Some(name)) if listed.as_str() < *name => {
+                missing.push(listed.as_str());
+                at_list = at_list.saturating_add(1);
+            }
+            (Some(listed), None) => {
+                missing.push(listed.as_str());
+                at_list = at_list.saturating_add(1);
+            }
+            (_, Some(name)) => {
+                extra.push(*name);
+                at_tested = at_tested.saturating_add(1);
+            }
+            (None, None) => break,
+        }
+    }
+    if !missing.is_empty() || !extra.is_empty() {
+        failures.push(format!(
+            "inventory: {} of {} listed mutants without an outcome, {} outcomes not listed or repeated (first: {})",
+            missing.len(),
+            list.len(),
+            extra.len(),
+            missing.first().or(extra.first()).copied().unwrap_or("?")
+        ));
+    }
+    failures
 }
 
 /// The names (`path:line:col: description`, as `missed.txt`/`timeout.txt` list them) of the mutants with `summary`.
@@ -2342,14 +2609,25 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     // stubbed harnesses did not compile in CI run 36614956208), and `--manifest-path` could not start `cargo
     // metadata` on the CI runner (run 36633643390): the gate passes the package's unstable features as `-Z` itself
     let mut output = String::new();
+    let mut peaks: Vec<(String, u64)> = Vec::new();
     for p in &packages {
         let mut c = Cmd::cargo().args(["kani", "--package", &p.name]);
         for feature in &p.kani_unstable {
             c = c.args(["-Z", feature]);
         }
-        let cap = c.dir(&ctx.root).capture()?;
+        // G7-12: run under the cbmc RSS guard, stdout and stderr in a log the guard reads for the current harness
+        let log = ctx.root.join("target").join(format!("kani-{}.log", p.name));
+        let run = kani_guarded(
+            &c.dir(&ctx.root),
+            &log,
+            expect::KANI_CBMC_RSS_LIMIT_KIB,
+            std::time::Duration::from_secs(expect::KANI_RSS_POLL_SECONDS),
+            &mut cbmc_rss_sample,
+        )?;
+        peaks.extend(run.peaks);
+        let stdout = std::fs::read_to_string(&log)?;
         // the harness verdicts and Kani's summary into the log (the full output only on failure)
-        for line in cap.stdout.lines().filter(|l| {
+        for line in stdout.lines().filter(|l| {
             l.starts_with("Checking harness")
                 || l.starts_with("VERIFICATION:-")
                 || l.starts_with("Verification Time")
@@ -2358,12 +2636,17 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
         }) {
             say(&format!("  {line}"));
         }
-        if !cap.success {
-            say(cap.stdout.trim_end());
-            say(cap.stderr.trim_end());
+        if !run.success {
+            say(stdout.trim_end());
             bail!("cargo kani --package {} failed", p.name);
         }
-        output.push_str(&cap.stdout);
+        output.push_str(&stdout);
+    }
+    for (harness, kib) in &peaks {
+        say(&format!(
+            "  kani-rss {harness}: peak cbmc RSS {kib} KiB (limit {} KiB)",
+            expect::KANI_CBMC_RSS_LIMIT_KIB
+        ));
     }
     let verified = kani_verified(&output)?;
     let covers = kani_covers(&output)?;
@@ -2391,6 +2674,111 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
             covers.join("; ")
         }
     )))
+}
+
+/// The outcome of one guarded `cargo kani` run: its exit status and the peak `cbmc` RSS (KiB) seen per harness.
+pub(crate) struct KaniRun {
+    pub(crate) success: bool,
+    pub(crate) peaks: Vec<(String, u64)>,
+}
+
+/// The largest `cbmc` process of a `ps -eo pid,rss,comm` listing, as (pid, RSS in KiB); `None` without one.
+pub(crate) fn largest_cbmc(ps: &str) -> Option<(u32, u64)> {
+    ps.lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let pid = f.next()?.parse().ok()?;
+            let rss = f.next()?.parse().ok()?;
+            let comm = f.next()?;
+            (comm == "cbmc" || comm.ends_with("/cbmc")).then_some((pid, rss))
+        })
+        .max_by_key(|(_, rss)| *rss)
+}
+
+/// The harness of the last `Checking harness <name>...` line of a Kani log, or `(before the first harness)`.
+pub(crate) fn current_kani_harness(log: &str) -> String {
+    log.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("Checking harness "))
+        .map_or_else(
+            || "(before the first harness)".to_owned(),
+            |h| h.trim_end_matches("...").trim().to_owned(),
+        )
+}
+
+/// Whether a `ps -eo pid,rss,comm` listing has its header line (`PID RSS COMMAND`): without it `ps` did not run.
+pub(crate) fn ps_listing_has_header(ps: &str) -> bool {
+    ps.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 3 && f.first() == Some(&"PID") && f.get(1) == Some(&"RSS")
+    })
+}
+
+/// The `ps` listing the guard samples (empty if `ps` cannot run).
+fn cbmc_rss_sample() -> String {
+    std::process::Command::new("ps")
+        .args(["-eo", "pid,rss,comm"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A): run `cmd` (a `cargo kani`) with its output in `log` and sample the `cbmc`
+/// processes every `every` with `sample` (a `ps -eo pid,rss,comm` listing). Records the peak RSS per harness (the one of
+/// the last `Checking harness` line). When a `cbmc` exceeds `limit_kib`, it kills that process, stops the run and fails
+/// naming the harness, the RSS and the limit. Otherwise returns the run's status and the peaks.
+pub(crate) fn kani_guarded(
+    cmd: &Cmd,
+    log: &Path,
+    limit_kib: u64,
+    every: std::time::Duration,
+    sample: &mut dyn FnMut() -> String,
+) -> Result<KaniRun> {
+    let mut child = cmd.spawn_logged(log)?;
+    let mut peaks: Vec<(String, u64)> = Vec::new();
+    loop {
+        let status = child.try_wait()?;
+        let listing = sample();
+        if !ps_listing_has_header(&listing) {
+            stop_child(&mut child)?;
+            bail!(
+                "kani: no RSS sample: `ps -eo pid,rss,comm` gave no listing with a header line, so the cbmc guard cannot see memory (OPEN-M7-26); stopped"
+            );
+        }
+        if let Some((pid, rss)) = largest_cbmc(&listing) {
+            let harness = current_kani_harness(&std::fs::read_to_string(log).unwrap_or_default());
+            match peaks.iter_mut().find(|(h, _)| *h == harness) {
+                Some((_, peak)) => *peak = (*peak).max(rss),
+                None => peaks.push((harness.clone(), rss)),
+            }
+            if rss > limit_kib {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                stop_child(&mut child)?;
+                bail!(
+                    "kani: cbmc RSS {rss} KiB exceeds the limit of {limit_kib} KiB (expect::KANI_CBMC_RSS_LIMIT_KIB, OPEN-M7-26) while checking harness {harness}; stopped"
+                );
+            }
+        }
+        if let Some(status) = status {
+            let log_text = std::fs::read_to_string(log).unwrap_or_default();
+            if peaks.is_empty() && log_text.contains("Checking harness ") {
+                bail!(
+                    "kani: no cbmc peak recorded although harnesses were checked (last: {}); the RSS guard saw no cbmc process (OPEN-M7-26)",
+                    current_kani_harness(&log_text)
+                );
+            }
+            return Ok(KaniRun {
+                success: status.success(),
+                peaks,
+            });
+        }
+        std::thread::sleep(every);
+    }
 }
 
 /// M4 review C-15 (R-34): the `kani::cover!` results of a Kani run, per harness ("<harness>: N of M cover properties
@@ -3677,26 +4065,62 @@ pub(crate) fn windows_cross(ctx: &Ctx) -> Result<Outcome> {
         ));
     }
     tools::require(tools::XWIN)?;
-    Cmd::cargo()
-        .args([
-            "xwin",
-            "build",
-            "--workspace",
-            "--all-targets",
-            "--locked",
-            "--target",
-            "x86_64-pc-windows-msvc",
-        ])
-        .run()?;
-    Ok(Outcome::Pass(
-        "cargo xwin build --all-targets for x86_64-pc-windows-msvc".into(),
-    ))
+    for args in windows_cross_args() {
+        Cmd::cargo().args(args).run()?;
+    }
+    Ok(Outcome::Pass(format!(
+        "cargo xwin build --all-targets for x86_64-pc-windows-msvc, excluding {} and {}; and --lib --bins of {} (ADR-034 Amendment 1 rev. 2; built and tested natively by windows-native)",
+        expect::XWIN_EXCLUDE.join(", "),
+        expect::XWIN_LIB_ONLY.join(", "),
+        expect::XWIN_LIB_ONLY.join(", ")
+    )))
+}
+
+/// The two cargo-xwin invocations of the `windows-cross` step (ADR-034 Amendment 1 rev. 2, OPEN-M7-04 A, Q127; vendored
+/// OpenSSL cannot be cross-built): (1) the workspace with all targets less `expect::XWIN_EXCLUDE` and
+/// `expect::XWIN_LIB_ONLY`; (2) the libraries and binaries of `expect::XWIN_LIB_ONLY`, without tests, examples and
+/// benches (their dev-dependency `secmp-testkit` is excluded).
+pub(crate) fn windows_cross_args() -> Vec<Vec<String>> {
+    let mut all: Vec<String> = [
+        "xwin",
+        "build",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-msvc",
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    for p in expect::XWIN_EXCLUDE.iter().chain(expect::XWIN_LIB_ONLY) {
+        all.push("--exclude".to_owned());
+        all.push((*p).to_owned());
+    }
+    let mut roots: Vec<String> = [
+        "xwin",
+        "build",
+        "--lib",
+        "--bins",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-msvc",
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    for p in expect::XWIN_LIB_ONLY {
+        roots.push("-p".to_owned());
+        roots.push((*p).to_owned());
+    }
+    vec![all, roots]
 }
 
 pub(crate) fn windows_native(ctx: &Ctx) -> Outcome {
     if ctx.host.contains("windows") {
         return Outcome::Skip(
-            "run `cargo xtask step clippy nextest doctest kat hello` natively instead".into(),
+            "run `cargo xtask step clippy nextest doctest kat harness hello` natively instead"
+                .into(),
         );
     }
     Outcome::Skip(
@@ -4510,6 +4934,160 @@ fn sorted_str(items: &[&str]) -> Vec<String> {
     sorted(&items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
 }
 
+/// TEST-SPEC-M7 G7-08 (OPEN-M7-18 A, ADR-045 Amendment 12): the `timeout-minutes` of the pinned jobs against
+/// `expect::JOB_BUDGETS`. Findings: a pinned job without a budget entry, an entry that is no pinned job, a job of
+/// `budgets` missing from `ci`, a job whose `timeout-minutes` is absent, not a number or another value, and the same for
+/// its dispatch twin (`expect::DISPATCH_TWINS`) in `dispatch`.
+pub(crate) fn job_budget_findings(
+    ci: &str,
+    dispatch: &str,
+    budgets: &[(&str, u64)],
+    twins: &[(&str, &str)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for job in expect::PINNED_JOBS {
+        if !budgets.iter().any(|(j, _)| j == job) {
+            out.push(format!(
+                "job-budgets: pinned job `{job}` has no entry in expect::JOB_BUDGETS"
+            ));
+        }
+    }
+    let minutes = |text: &str, job: &str| -> Option<Option<u64>> {
+        yaml_jobs(text).into_iter().find(|j| j.id == job).map(|j| {
+            j.prop("timeout-minutes")
+                .and_then(|m| m.trim().parse().ok())
+        })
+    };
+    for (job, want) in budgets {
+        if !expect::PINNED_JOBS.contains(job) {
+            out.push(format!(
+                "job-budgets: `{job}` of expect::JOB_BUDGETS is no pinned job"
+            ));
+        }
+        let mut places = vec![("ci.yml", ci, *job)];
+        if let Some((twin, _)) = twins.iter().find(|(_, j)| j == job) {
+            places.push(("ci-dispatch.yml", dispatch, *twin));
+        }
+        for (file, text, id) in places {
+            match minutes(text, id) {
+                None => out.push(format!("job-budgets: no job `{id}` in {file}")),
+                Some(None) => out.push(format!(
+                    "job-budgets: {file} `{id}` has no numeric `timeout-minutes` (pinned {want})"
+                )),
+                Some(Some(found)) if found != *want => out.push(format!(
+                    "job-budgets: {file} `{id}` has `timeout-minutes: {found}`, pinned {want} (expect::JOB_BUDGETS)"
+                )),
+                Some(Some(_)) => {}
+            }
+        }
+    }
+    out
+}
+
+/// ADR-047 Amendment 11 (Q234): the items of the block list `strategy:` → `matrix:` → `shard:` of job `job`, in order
+/// (plain scalars); `None` without such a list, for a second `shard:` key and for a flow list (`shard: [0, 1]`), so the
+/// caller reports each of them.
+fn matrix_shards(text: &str, job: &str) -> Option<Vec<String>> {
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut found: Option<Vec<String>> = None;
+    let mut list: Option<usize> = None;
+    for l in yaml_lines(text) {
+        if l.job.as_deref() != Some(job) || l.header {
+            continue;
+        }
+        if let (Some(c), Some(items)) = (list, found.as_mut()) {
+            if l.dash.is_some_and(|d| d >= c) && l.key.is_empty() {
+                items.push(l.value);
+                continue;
+            }
+            list = None;
+        }
+        let col = l.dash.unwrap_or(l.col);
+        while stack.last().is_some_and(|(c, _)| *c >= col) {
+            stack.pop();
+        }
+        if l.dash.is_some() {
+            continue;
+        }
+        let under_matrix = stack.len() == 2
+            && stack.first().is_some_and(|(_, k)| k == "strategy")
+            && stack.get(1).is_some_and(|(_, k)| k == "matrix");
+        if under_matrix && l.key == "shard" {
+            if found.is_some() || !l.value.is_empty() {
+                return None;
+            }
+            found = Some(Vec::new());
+            list = Some(l.col);
+        }
+        stack.push((l.col, l.key));
+    }
+    found
+}
+
+/// ADR-047 Amendment 11 (Q234): the shard count of the mutation gate is one number, `n` (`expect::MUTANT_SHARDS`, which
+/// the merge reads). Findings: the matrix `shard:` of `mutants-shard` in `ci.yml` or of `dispatch-mutants-shard` in
+/// `ci-dispatch.yml` is not the block list 0, 1, …, n−1 in this order, or the job's gate lines are not exactly
+/// `cargo xtask step --strict mutants --shard ${{ matrix.shard }}/n`. An accident guard like the other workflow checks.
+pub(crate) fn mutant_shard_findings(ci: &str, dispatch: &str, n: usize) -> Vec<String> {
+    let want: Vec<String> = (0..n).map(|k| k.to_string()).collect();
+    let line = format!("cargo xtask step --strict mutants --shard ${{{{ matrix.shard }}}}/{n}");
+    let mut out = Vec::new();
+    for (file, text, job) in [
+        ("ci.yml", ci, "mutants-shard"),
+        ("ci-dispatch.yml", dispatch, "dispatch-mutants-shard"),
+    ] {
+        match matrix_shards(text, job) {
+            None => out.push(format!(
+                "mutant-shards: {file} `{job}` has no block list `strategy: matrix: shard:`"
+            )),
+            Some(found) if found != want => {
+                let missing: Vec<&String> = want.iter().filter(|w| !found.contains(w)).collect();
+                let extra: Vec<&String> = found.iter().filter(|f| !want.contains(f)).collect();
+                out.push(format!(
+                    "mutant-shards: {file} `{job}`: matrix `shard:` has {} items, lacks {missing:?}, has the extra {extra:?} (0…{} in order, expect::MUTANT_SHARDS = {n})",
+                    found.len(),
+                    n.saturating_sub(1)
+                ));
+            }
+            Some(_) => {}
+        }
+        let runs: Vec<String> = yaml_jobs(text)
+            .into_iter()
+            .filter(|j| j.id == job)
+            .flat_map(|j| j.steps.into_iter().flatten())
+            .filter(|(k, v)| k == "run" && is_gate_run(v))
+            .map(|(_, v)| v)
+            .collect();
+        if runs != [line.clone()] {
+            out.push(format!(
+                "mutant-shards: {file} `{job}` runs the gates {runs:?}, not [{line:?}]"
+            ));
+        }
+    }
+    out
+}
+
+/// The job-level property `key` of job `job` of a workflow (`None`: no such job or no such property).
+#[cfg(test)]
+pub(crate) fn job_prop(text: &str, job: &str, key: &str) -> Option<String> {
+    yaml_jobs(text)
+        .into_iter()
+        .find(|j| j.id == job)
+        .and_then(|j| j.prop(key).map(str::to_owned))
+}
+
+/// The `cargo xtask` gate `run:` lines of job `job` of a workflow, in order (`install-tools` aside).
+#[cfg(test)]
+pub(crate) fn job_gate_lines(text: &str, job: &str) -> Vec<String> {
+    yaml_jobs(text)
+        .into_iter()
+        .filter(|j| j.id == job)
+        .flat_map(|j| j.steps.into_iter().flatten())
+        .filter(|(k, v)| k == "run" && is_gate_run(v))
+        .map(|(_, v)| v)
+        .collect()
+}
+
 /// A step that runs a `cargo xtask` gate (not the tool installation).
 fn is_gate_run(run: &str) -> bool {
     run.contains("cargo xtask") && !run.contains("install-tools")
@@ -4778,6 +5356,12 @@ fn workflows(root: &Path) -> Result<String> {
         text_of(expect::REQUIRED_WORKFLOW),
         text_of(".github/workflows/ci-dispatch.yml"),
     ));
+    findings.extend(job_budget_findings(
+        text_of(expect::REQUIRED_WORKFLOW),
+        text_of(".github/workflows/ci-dispatch.yml"),
+        expect::JOB_BUDGETS,
+        expect::DISPATCH_TWINS,
+    ));
     let mut scanned = texts.clone();
     for f in walk_files(&root.join("crates"), &|p: &Path| {
         p.extension().is_some_and(|e| e == "rs") && p.components().any(|c| c.as_os_str() == "tests")
@@ -4792,6 +5376,11 @@ fn workflows(root: &Path) -> Result<String> {
     if let Some((_, text)) = texts.iter().find(|(n, _)| n == expect::REQUIRED_WORKFLOW) {
         findings.extend(required_gate_findings(expect::REQUIRED_WORKFLOW, text));
     }
+    findings.extend(mutant_shard_findings(
+        text_of(expect::REQUIRED_WORKFLOW),
+        text_of(".github/workflows/ci-dispatch.yml"),
+        expect::MUTANT_SHARDS,
+    ));
     for f in &findings {
         say(&format!("  FINDING {f}"));
     }
@@ -4799,9 +5388,10 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell and gate run lines as pinned, delegations mapped (accident guard, not tamper-proof)",
+        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, mutation shard matrix 0…{} in both workflows, delegations mapped (accident guard, not tamper-proof)",
         files.len(),
-        expect::PINNED_JOBS.join(", ")
+        expect::PINNED_JOBS.join(", "),
+        expect::MUTANT_SHARDS.saturating_sub(1)
     ))
 }
 
@@ -6727,7 +7317,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -6850,7 +7440,8 @@ mod tests {
             step.contains("nasm -v") && step.contains("choco install nasm --version=$pin"),
             "{step}"
         );
-        let gate = "        run: cargo xtask step --strict clippy nextest doctest kat hello\n";
+        let gate =
+            "        run: cargo xtask step --strict clippy nextest doctest kat harness hello\n";
         let late = ci
             .replacen(&step, "", 1)
             .replacen(gate, &format!("{gate}{step}"), 1);
@@ -6998,7 +7589,7 @@ mod tests {
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 13);
+        assert_eq!(parsed.len(), 14);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -7383,7 +7974,7 @@ mod tests {
     /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr\n{PINNED_EXTRA}"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat harness hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -7407,7 +7998,7 @@ mod tests {
     /// hygiene rules now yields a finding, as do `needs:`, a step-level `if` on a gate step and a changed gate line.
     #[test]
     fn required_job_bypasses_are_findings() {
-        let gate = "      - run: cargo xtask ci-fast --strict\n";
+        let gate = "      - run: cargo xtask ci-fast --strict --delegated harness\n";
         let good = gate_ci("", gate);
         assert_eq!(all_ci_findings(&good), Vec::<String>::new());
         // 2: `if : false`
@@ -7435,7 +8026,7 @@ mod tests {
         // 6: a step-level `if` on a gate step
         let case6 = gate_ci(
             "",
-            "      - if: false\n        run: cargo xtask ci-fast --strict\n",
+            "      - if: false\n        run: cargo xtask ci-fast --strict --delegated harness\n",
         );
         assert!(
             all_ci_findings(&case6)
@@ -7445,7 +8036,7 @@ mod tests {
         );
         let case6b = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n        if: false\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n        if: false\n",
         );
         assert!(!all_ci_findings(&case6b).is_empty(), "case 6b");
         // 7: `continue-on-error: true # false`, and the quoted-key and expression forms
@@ -7458,7 +8049,7 @@ mod tests {
         }
         let case7 = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n        continue-on-error: true # false\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n        continue-on-error: true # false\n",
         );
         assert!(!all_ci_findings(&case7).is_empty(), "case 7 step");
         // a flow-style job and a renamed check run
@@ -7485,7 +8076,7 @@ mod tests {
         // an `if` text inside a block scalar is content, not a key
         let block = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n      - run: |\n          if: false\n          echo done\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n      - run: |\n          if: false\n          echo done\n",
         );
         assert_eq!(all_ci_findings(&block), Vec::<String>::new());
         // the real ci.yml passes every check
@@ -7519,7 +8110,10 @@ mod tests {
     #[test]
     fn deleting_or_neutering_a_pinned_job_is_a_finding() {
         let real = lf(include_str!("../../.github/workflows/ci.yml"));
-        let fixture = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        let fixture = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n",
+        );
         for (what, ci) in [("fixture", fixture.as_str()), ("ci.yml", real.as_str())] {
             assert_eq!(all_ci_findings(ci), Vec::<String>::new(), "{what}");
             let variants = pin_edit_variants(ci);
@@ -7545,7 +8139,29 @@ mod tests {
                 ),
                 (
                     "linux-full without --delegated proverif-link",
-                    ci.replacen(" --delegated proverif-link --models tr", " --models tr", 1),
+                    ci.replacen(" --delegated proverif-link --delegated harness --models tr", " --delegated harness --models tr", 1),
+                ),
+                // TEST-SPEC-M7 G7-07: the harness job deleted, its gate line changed, or a delegation dropped
+                ("delete harness", without_job(ci, "harness")),
+                (
+                    "harness without --strict",
+                    ci.replacen("cargo xtask step --strict harness", "cargo xtask step harness", 1),
+                ),
+                (
+                    "linux-fast without --delegated harness",
+                    ci.replacen("cargo xtask ci-fast --strict --delegated harness", "cargo xtask ci-fast --strict", 1),
+                ),
+                (
+                    "linux-full without --delegated harness",
+                    ci.replacen(" --delegated harness --models tr", " --models tr", 1),
+                ),
+                (
+                    "harness skipped on push",
+                    ci.replacen(
+                        "  harness:\n    runs-on:",
+                        "  harness:\n    if: github.event_name == 'pull_request'\n    runs-on:",
+                        1,
+                    ),
                 ),
                 // M6 (WEISUNG M6-11): the Kani job deleted, its gate line changed, or its delegation dropped
                 ("delete kani", without_job(ci, "kani")),
@@ -7698,7 +8314,10 @@ mod tests {
     /// finding; every real workflow passes.
     #[test]
     fn workflow_permissions_shell_and_prover_override_are_findings() {
-        let good = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        let good = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n",
+        );
         assert_eq!(all_ci_findings(&good), Vec::<String>::new());
         let block = "permissions:\n  contents: read\n";
         let variants = [
@@ -7711,7 +8330,7 @@ mod tests {
             ),
             (
                 "job-level permissions",
-                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict\n"),
+                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict --delegated harness\n"),
             ),
             (
                 "defaults.run.shell",
@@ -7719,11 +8338,11 @@ mod tests {
             ),
             (
                 "job defaults",
-                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict\n"),
+                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict --delegated harness\n"),
             ),
             (
                 "step shell",
-                gate_ci("", "      - run: cargo xtask ci-fast --strict\n        shell: 'bash -c \"exit 0\"'\n"),
+                gate_ci("", "      - run: cargo xtask ci-fast --strict --delegated harness\n        shell: 'bash -c \"exit 0\"'\n"),
             ),
             (
                 "env SECMP_PROVERIF",
@@ -8429,7 +9048,6 @@ mod tests {
             "nasm -v || exit /b 1",
             "git --version || exit /b 1",
             "rustup component list --installed || exit /b 1",
-            "pwsh -v || echo no-pwsh",
         ]
         .map(str::to_owned)
         .to_vec();
@@ -8439,7 +9057,7 @@ mod tests {
         for s in &steps {
             if step_field(s, "shell").as_deref() == Some("cmd") {
                 for l in step_run(s) {
-                    if !l.ends_with(" || exit /b 1") && l != "pwsh -v || echo no-pwsh" {
+                    if !l.ends_with(" || exit /b 1") {
                         out.push(format!("cmd line without `|| exit /b 1`: {l}"));
                     }
                 }
@@ -8452,7 +9070,7 @@ mod tests {
                 .filter(|s| step_field(s, "if").as_deref() == Some(cond.as_str()))
                 .collect()
         };
-        let gate = "cargo xtask step --strict clippy nextest doctest kat hello";
+        let gate = "cargo xtask step --strict clippy nextest doctest kat harness hello";
         let build = "cargo build --locked --release -p secmp-testkit --features harness --example tor_smoke";
         for (line, what) in [
             (gate, "ci-dispatch win-test gate line"),
@@ -8511,6 +9129,304 @@ mod tests {
         out
     }
 
+    /// The `shell: cmd` steps of `win-ondemand.yml` whose last command line ends in an `|| <fallback>` without `exit /b`:
+    /// in `cmd` the step's exit code is the final ERRORLEVEL, and `echo` does not reset it, so the failing optional command's
+    /// code survives the fallback (run 40692102750: `pwsh -v || echo no-pwsh` ended the probe step with exit code 1).
+    fn win_cmd_bare_optional_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for job in ["vm-up", "win-suite", "vm-down"] {
+            for step in win_steps(text, job) {
+                if step_field(&step, "shell").as_deref() != Some("cmd") {
+                    continue;
+                }
+                let name = step_field(&step, "name").unwrap_or_default();
+                if let Some(last) = step_run(&step).last()
+                    && last.contains("||")
+                    && !last.contains("exit /b")
+                {
+                    out.push(format!(
+                        "{job}: step {name:?}: last line `{last}` leaks its ERRORLEVEL"
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// WEISUNG M7-A1d: no `shell: cmd` step of `win-ondemand.yml` ends in a bare optional probe (`<cmd> || echo …`); the
+    /// file as committed has none, the file with the old `pwsh -v || echo no-pwsh` line is a finding, and so is any
+    /// other last line of that form.
+    #[test]
+    fn win_ondemand_cmd_steps_have_no_bare_optional_probe() {
+        let real = win_text();
+        assert_eq!(win_cmd_bare_optional_findings(&real), Vec::<String>::new());
+        let old = plant(
+            &real,
+            "          rustup component list --installed || exit /b 1\n",
+            "          rustup component list --installed || exit /b 1\n          pwsh -v || echo no-pwsh\n",
+        );
+        let found = win_cmd_bare_optional_findings(&old);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.contains("Probe the runner toolchain")
+                    && f.contains("pwsh -v || echo no-pwsh"))
+        );
+        let other = plant(
+            &real,
+            "          git --version || exit /b 1\n",
+            "          git --version || echo no-git\n",
+        );
+        assert!(
+            win_cmd_bare_optional_findings(&other).is_empty(),
+            "only the last line leaks"
+        );
+        let last = plant(
+            &real,
+            "          rustup component list --installed || exit /b 1\n",
+            "          rustup component list --installed || echo none\n",
+        );
+        assert_eq!(win_cmd_bare_optional_findings(&last).len(), 1);
+    }
+
+    /// The text of a repository file, line endings normalised.
+    fn m7_repo_file(rel_path: &str) -> Result<String> {
+        Ok(lf(&std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(rel_path),
+        )?))
+    }
+
+    /// The text of the `[[<table>.<name>]]` blocks of a vet file (up to the next `[[`).
+    fn vet_blocks(text: &str, table: &str, name: &str) -> Vec<String> {
+        let head = format!("[[{table}.{name}]]\n");
+        text.split("\n\n")
+            .filter(|b| b.starts_with(&head))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// TEST-SPEC-M7 G7-06 (OPEN-M7-05 A): the `secmp-client-core` → `secmp-store` edge is the only store dependency line of
+    /// the client core and sits in its `[target.'cfg(not(kani))'.dependencies]` table, so the Kani build (`--cfg kani`, which
+    /// `cargo kani` passes as `CARGO_ENCODED_RUSTFLAGS`) has no store, no `rusqlite` and no `openssl-src`; the same tree
+    /// without the cfg has all three (the negative control). `cargo kani -p secmp-client-core --only-codegen` is the
+    /// evidence of the build itself (`docs/reviews/M07-evidence/kani-codegen-g7-06-<sha7>.txt`).
+    #[test]
+    fn kani_build_has_no_store() -> Result<()> {
+        let manifest = m7_repo_file("crates/secmp-client-core/Cargo.toml")?;
+        let mut table = String::new();
+        let mut store_lines = Vec::new();
+        for line in manifest.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                table = t.to_owned();
+                continue;
+            }
+            if t.starts_with("secmp-store") {
+                store_lines.push(table.clone());
+            }
+        }
+        assert_eq!(
+            store_lines,
+            ["[target.'cfg(not(kani))'.dependencies]"],
+            "the one secmp-store dependency line of secmp-client-core"
+        );
+        let tree = |kani: bool| -> Result<String> {
+            let cmd = Cmd::cargo()
+                .args([
+                    "tree",
+                    "--locked",
+                    "-p",
+                    "secmp-client-core",
+                    "-e",
+                    // `openssl-src` is a build-dependency of `openssl-sys`: `normal` alone never lists it
+                    "normal,build",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--prefix",
+                    "none",
+                ])
+                .env_remove("RUSTFLAGS");
+            let cmd = if kani {
+                cmd.env("CARGO_ENCODED_RUSTFLAGS", "--cfg\u{1f}kani")
+            } else {
+                cmd.env_remove("CARGO_ENCODED_RUSTFLAGS")
+            };
+            cmd.read()
+        };
+        let has = |text: &str, prefix: &str| text.lines().any(|l| l.starts_with(prefix));
+        let with_kani = tree(true)?;
+        let without = tree(false)?;
+        for prefix in ["secmp-store v", "rusqlite v", "openssl-src v"] {
+            assert!(!has(&with_kani, prefix), "kani build has {prefix}");
+            assert!(has(&without, prefix), "negative control lacks {prefix}");
+        }
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-02 (ADR-055 item 5, Q129, Q136): the vet records of the M7 dependency set. `argon2` and `blake2`
+    /// (the zero-exemption crypto closure) are covered by publisher trust of their RustCrypto repositories, ratified on
+    /// 2026-10-29 by the reviewer under the owner's delegation; `rusqlite`, a direct dependency of `secmp-store`, has a
+    /// full source audit by the reviewer's verifier, ratified the same way, and no exemption; the build inputs and the
+    /// lock-only crates are tracked exemptions that say so; `check_vet_closure` stays zero-exemption with `argon2` and
+    /// `blake2` in the closure. `cargo vet --locked` itself is the `vet` step.
+    #[test]
+    fn vet_records_for_m7_closure() -> Result<()> {
+        let audits = m7_repo_file("supply-chain/audits.toml")?;
+        let config = m7_repo_file("supply-chain/config.toml")?;
+        for (krate, publisher, start) in [
+            ("argon2", "github:RustCrypto/password-hashes", "2026-08-27"),
+            ("blake2", "github:RustCrypto/hashes", "2026-08-26"),
+            // lock-only under argon2 but inside the zero-exemption closure: publisher trust, not an exemption (A-2 finding)
+            ("password-hash", "github:RustCrypto/traits", "2026-04-08"),
+            ("phc", "github:RustCrypto/formats", "2026-03-09"),
+        ] {
+            let blocks = vet_blocks(&audits, "trusted", krate);
+            assert_eq!(blocks.len(), 1, "{krate}");
+            let b = blocks.first().map_or("", String::as_str);
+            assert!(b.contains("criteria = \"safe-to-deploy\""), "{krate}");
+            assert!(
+                b.contains(&format!("trusted-publisher = \"{publisher}\"")),
+                "{krate}"
+            );
+            assert!(
+                b.contains(
+                    "ratified 2026-10-29 by the reviewer under the owner's delegation of 2026-10-29 (Q136)"
+                ),
+                "{krate}"
+            );
+            assert!(!b.contains("ratification pending"), "{krate}");
+            assert!(
+                b.contains("ADR-055 item") && b.contains("Read by the implementer:"),
+                "{krate}"
+            );
+            assert!(b.contains(&format!("start = \"{start}\"")), "{krate}");
+            assert!(b.contains("end = \"2027-10-28\""), "{krate}");
+            assert!(
+                vet_blocks(&config, "exemptions", krate).is_empty(),
+                "{krate} has no exemption"
+            );
+        }
+        let rusqlite = vet_blocks(&audits, "audits", "rusqlite");
+        assert_eq!(rusqlite.len(), 1);
+        let r = rusqlite.first().map_or("", String::as_str);
+        assert!(r.contains("version = \"0.39.0\"") && r.contains("criteria = \"safe-to-deploy\""));
+        assert!(r.contains("who = \"Christopher Carl (owner), ratified 2026-10-29 by delegation to the reviewer (Q136); source audit by the reviewer's verifier (Claude Opus)\""));
+        assert!(
+            vet_blocks(&config, "exemptions", "rusqlite").is_empty(),
+            "rusqlite has a record, no exemption"
+        );
+        for (krate, version, needle) in [
+            (
+                "libsqlite3-sys",
+                "0.37.0",
+                "rusqlite (secmp-store, ADR-055) and arti-client",
+            ),
+            (
+                "openssl-sys",
+                "0.9.117",
+                "ADR-055 item 5, build input of the vendored OpenSSL",
+            ),
+            (
+                "openssl-src",
+                "300.6.1+3.6.3",
+                "ADR-055 item 5, build input of the vendored OpenSSL",
+            ),
+        ] {
+            let blocks = vet_blocks(&config, "exemptions", krate);
+            assert_eq!(blocks.len(), 1, "{krate}");
+            let b = blocks.first().map_or("", String::as_str);
+            assert!(b.contains(&format!("version = \"{version}\"")), "{krate}");
+            assert!(
+                b.contains("Tracked exemption (supply-chain/README.md):") && b.contains(needle),
+                "{krate}"
+            );
+        }
+        // base64ct and cpufeatures stay under the publisher trust of user-id 267
+        for krate in ["base64ct", "cpufeatures"] {
+            let blocks = vet_blocks(&audits, "trusted", krate);
+            assert!(
+                blocks.iter().any(|b| b.contains("user-id = 267")),
+                "{krate}"
+            );
+        }
+        // the zero-exemption closure holds the new crates and no exemption
+        let ws = crate::meta::Workspace::load()?;
+        let closure = crate::policy::zero_exemption_closure(&ws)?;
+        for krate in ["argon2", "blake2", "password-hash", "phc"] {
+            assert!(
+                closure.iter().any(|(n, _)| n == krate),
+                "{krate} in the closure"
+            );
+        }
+        let summary = crate::policy::check_vet_closure(&ws)?;
+        assert!(summary.contains(", 0 exempted;"), "{summary}");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-03 (ADR-055, item 6): the licence policy is untouched by the M7 closure — the allowlist and the
+    /// exceptions of `deny.toml` are the M6 ones, with Apache-2.0 (OpenSSL) and BSD-3-Clause (SQLCipher) among them, and
+    /// the new lock crates carry licences inside it (`MIT`, `MIT OR Apache-2.0`, `Apache-2.0 OR MIT`, `MIT/Apache-2.0`);
+    /// `cargo deny check licenses` is the gate.
+    #[test]
+    fn licenses_cover_m7_closure() -> Result<()> {
+        let deny = m7_repo_file("deny.toml")?;
+        let list = deny
+            .split_once("\nallow = [\n")
+            .and_then(|(_, r)| r.split_once("\n]"))
+            .map(|(b, _)| b.to_owned())
+            .unwrap_or_default();
+        let allow: Vec<&str> = list
+            .lines()
+            .filter_map(|l| {
+                l.trim()
+                    .strip_prefix('"')
+                    .and_then(|r| r.split_once('"'))
+                    .map(|(v, _)| v)
+            })
+            .collect();
+        assert_eq!(
+            allow,
+            [
+                "MIT",
+                "Apache-2.0",
+                "BSD-2-Clause",
+                "BSD-3-Clause",
+                "ISC",
+                "Zlib",
+                "Unicode-3.0",
+                "Unicode-DFS-2016",
+                "MPL-2.0"
+            ]
+        );
+        assert!(allow.contains(&"Apache-2.0") && allow.contains(&"BSD-3-Clause"));
+        let exceptions = deny
+            .split_once("\nexceptions = [\n")
+            .and_then(|(_, r)| r.split_once("\n]"))
+            .map(|(b, _)| b.matches("crate = ").count())
+            .unwrap_or_default();
+        assert_eq!(exceptions, 3, "slint, async_executors, notify only");
+        let ws = crate::meta::Workspace::load()?;
+        for krate in [
+            "argon2",
+            "blake2",
+            "password-hash",
+            "phc",
+            "openssl-sys",
+            "openssl-src",
+            "rusqlite",
+            "libsqlite3-sys",
+        ] {
+            assert!(
+                ws.all.values().any(|(n, _, _)| n == krate),
+                "{krate} is in the lock"
+            );
+        }
+        Ok(())
+    }
+
     /// W-3g
     #[test]
     fn win_suite_lines_per_suite() {
@@ -8522,8 +9438,8 @@ mod tests {
         );
         let kat = plant(
             &real,
-            "doctest kat hello || exit",
-            "nextest kat hello || exit",
+            "doctest kat harness hello || exit",
+            "nextest kat harness hello || exit",
         );
         assert!(!win_suite_line_findings(&kat, &dispatch).is_empty());
         let nasm = plant(&real, "nasm -v || exit /b 1", "nasm -v");
@@ -8915,12 +9831,18 @@ mod tests {
         assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
-    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates.
+    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates; TEST-SPEC-M7 G7-14: so does
+    /// `secmp-store`.
     #[test]
     fn coverage_strict_includes_client_core() {
         assert_eq!(
             expect::COVERAGE_STRICT,
-            &["secmp-crypto", "secmp-proto", "secmp-client-core"]
+            &[
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-client-core",
+                "secmp-store"
+            ]
         );
         assert!((expect::COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
     }
@@ -9101,12 +10023,17 @@ mod tests {
     /// Output claim; a site added without its entry, or an entry no code sets, fails.
     #[test]
     fn known_sites_equal_the_product_site_tags() -> Result<()> {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-proto/src");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates");
         let mut tags: BTreeSet<String> = BTreeSet::new();
         let mut calls = 0_usize;
-        for f in walk_files(&src, &|p: &Path| {
+        let mut files = walk_files(&root.join("secmp-proto/src"), &|p: &Path| {
             p.extension().is_some_and(|e| e == "rs") && !p.ends_with("tests.rs")
-        })? {
+        })?;
+        // TEST-SPEC-M7 CT-01: the store's unlock tag (`wrap::WRAP_SITE_KAT`)
+        files.extend(walk_files(&root.join("secmp-store/src"), &|p: &Path| {
+            p.extension().is_some_and(|e| e == "rs")
+        })?);
+        for f in files {
             let full = lf(&std::fs::read_to_string(&f)?);
             let text = full.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
             for (at, _) in text.match_indices("_SITE_KAT.set(") {
@@ -9155,18 +10082,21 @@ mod tests {
     }
 
     /// TEST-SPEC-M5 X-02 (ADR-047 Amendment 3, OPEN-M5-12): `secmp-relay` (executor, stores, link server) is in the
-    /// 8-shard gate with the Amendment 2 floor, every shard's command line names it, and its Kani-only file is kept
+    /// sharded gate (`expect::MUTANT_SHARDS`, ADR-047 Amendment 11) with the Amendment 2 floor, every shard's command line names it, and its Kani-only file is kept
     /// out like `secmp-proto`'s; the package builds with feature `kat` like the other two.
     #[test]
     fn mutants_scope_includes_relay() -> Result<()> {
         assert!(expect::MUTANT_PACKAGES.contains(&"secmp-relay"));
         assert!(!expect::MUTANT_HARNESS_PACKAGES.contains(&"secmp-relay"));
-        assert_eq!(expect::MUTANT_SHARDS, 12);
+        assert_eq!(expect::MUTANT_SHARDS, 24);
         assert_eq!(expect::MUTANT_MIN_CAUGHT_PERCENT, 50);
         assert_eq!(expect::MUTANT_UNVIABLE_WARN_PERCENT, 35);
         assert!(expect::MUTANT_EXCLUDE_FILES.contains(&"crates/secmp-relay/src/kani_proofs.rs"));
-        for k in 0..12 {
-            let args = mutants_args(Some(MutantsShard { k, n: 12 }));
+        for k in 0..expect::MUTANT_SHARDS {
+            let args = mutants_args(Some(MutantsShard {
+                k,
+                n: expect::MUTANT_SHARDS,
+            }));
             assert!(
                 args.windows(2)
                     .any(|w| w.first().map(String::as_str) == Some("--package")
@@ -9185,6 +10115,97 @@ mod tests {
             standards.contains("`secmp-crypto`, `secmp-proto`, `secmp-relay`"),
             "docs/06 §4 Mutation names the three packages (ADR-047 Am. 3 consequence)"
         );
+        Ok(())
+    }
+
+    /// The committed `ci.yml` and `ci-dispatch.yml`, with LF line endings.
+    fn committed_ci_and_dispatch() -> Result<(String, String)> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows");
+        Ok((
+            lf(&std::fs::read_to_string(dir.join("ci.yml"))?),
+            lf(&std::fs::read_to_string(dir.join("ci-dispatch.yml"))?),
+        ))
+    }
+
+    /// ADR-047 Amendment 11 (Q234): the mutation gate runs as 24 shards, one number — the matrix of `mutants-shard`
+    /// (`ci.yml`) and of `dispatch-mutants-shard` (`ci-dispatch.yml`) is 0…23 in order, both run lines end in `/24`, and
+    /// the pinned gate line of `expect::REQUIRED_GATE_RUNS` is the same line.
+    #[test]
+    fn mutant_shard_matrix_matches_the_shard_count() -> Result<()> {
+        let (ci, dispatch) = committed_ci_and_dispatch()?;
+        let found = mutant_shard_findings(&ci, &dispatch, expect::MUTANT_SHARDS);
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(expect::MUTANT_SHARDS, 24);
+        let line = format!(
+            "cargo xtask step --strict mutants --shard ${{{{ matrix.shard }}}}/{}",
+            expect::MUTANT_SHARDS
+        );
+        let pinned = expect::REQUIRED_GATE_RUNS
+            .iter()
+            .find(|(job, _)| *job == "mutants-shard")
+            .map(|(_, lines)| lines.to_vec());
+        assert_eq!(pinned, Some(vec![line.as_str()]));
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 11 (Q234): every way in which the matrix, the run line and the count can disagree is a finding
+    /// naming the file and the job — a shard dropped, added or out of order, a flow list, a second `shard:` key, a run
+    /// line of another count in `ci-dispatch.yml` — and the old count 12 against the committed workflows gives four.
+    #[test]
+    fn mutant_shard_mismatches_are_findings() -> Result<()> {
+        let (ci, dispatch) = committed_ci_and_dispatch()?;
+        let n = expect::MUTANT_SHARDS;
+        let items: Vec<String> = (0..n).map(|k| format!("          - {k}\n")).collect();
+        let block = items.concat();
+        let full = format!("        shard:\n{block}");
+        assert_eq!(ci.matches(&full).count(), 1);
+        assert_eq!(dispatch.matches(&full).count(), 1);
+        let ci_variants = [
+            ("drop 23", ci.replacen("          - 23\n", "", 1)),
+            (
+                "add 24",
+                ci.replacen("          - 23\n", "          - 23\n          - 24\n", 1),
+            ),
+            (
+                "swap 0 and 1",
+                ci.replacen(
+                    "          - 0\n          - 1\n",
+                    "          - 1\n          - 0\n",
+                    1,
+                ),
+            ),
+            (
+                "flow list",
+                ci.replacen(&full, "        shard: [0, 1]\n", 1),
+            ),
+            (
+                "second key",
+                ci.replacen(&full, &format!("{full}        shard:\n          - 0\n"), 1),
+            ),
+        ];
+        for (label, text) in &ci_variants {
+            assert_ne!(text, &ci, "{label}: the edit applied");
+            let found = mutant_shard_findings(text, &dispatch, n);
+            assert!(
+                found.len() == 1 && found.iter().all(|f| f.contains("ci.yml `mutants-shard`")),
+                "{label}: {found:?}"
+            );
+        }
+        let other = dispatch.replacen(
+            &format!("mutants --shard ${{{{ matrix.shard }}}}/{n}"),
+            "mutants --shard ${{ matrix.shard }}/12",
+            1,
+        );
+        assert_ne!(other, dispatch);
+        let found = mutant_shard_findings(&ci, &other, n);
+        assert!(
+            found.len() == 1
+                && found
+                    .iter()
+                    .all(|f| f.contains("ci-dispatch.yml `dispatch-mutants-shard` runs the gates")),
+            "{found:?}"
+        );
+        assert_eq!(mutant_shard_findings(&ci, &dispatch, 12).len(), 4);
         Ok(())
     }
 
@@ -9230,11 +10251,12 @@ mod tests {
     }
 
     /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
-    /// `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards with the Amendment 2 floor; the two M6
-    /// packages are mutated in the second run of every shard, tested by their own tests and the testkit harness
-    /// (`--test-package`, feature `harness`), the first run keeps the three others with feature `kat`; `secmp-testkit`
+    /// `secmp-relay`, `secmp-client-core`, `secmp-transport` and (M7, ADR-047 Amendment 10, G7-13) `secmp-store` in the
+    /// shards of `expect::MUTANT_SHARDS` (ADR-047 Amendment 11) with the Amendment 2 floor; the two M6 packages are mutated in the second run of every shard, tested by their
+    /// own tests and the testkit harness (`--test-package`, feature `harness`), the first run keeps the four others with
+    /// feature `kat`; `secmp-testkit`
     /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
-    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the five packages.
+    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the six packages.
     #[test]
     fn mutants_scope_includes_client_core_and_transport() {
         assert_eq!(
@@ -9244,7 +10266,8 @@ mod tests {
                 "secmp-proto",
                 "secmp-relay",
                 "secmp-client-core",
-                "secmp-transport"
+                "secmp-transport",
+                "secmp-store"
             ]
         );
         assert_eq!(
@@ -9256,19 +10279,22 @@ mod tests {
             &["secmp-client-core", "secmp-transport", "secmp-testkit"]
         );
         assert!(!expect::MUTANT_PACKAGES.contains(&"secmp-testkit"));
-        assert_eq!(expect::MUTANT_SHARDS, 12);
+        assert_eq!(expect::MUTANT_SHARDS, 24);
         let pairs = |args: &[String]| -> Vec<(String, String)> {
             args.windows(2)
                 .filter_map(|w| Some((w.first()?.clone(), w.get(1)?.clone())))
                 .collect()
         };
-        for k in 0..12 {
-            let shard = Some(MutantsShard { k, n: 12 });
+        for k in 0..expect::MUTANT_SHARDS {
+            let shard = Some(MutantsShard {
+                k,
+                n: expect::MUTANT_SHARDS,
+            });
             let first = pairs(&mutants_args(shard));
             let second = pairs(&mutants_harness_args(shard));
             let has =
                 |p: &[(String, String)], a: &str, b: &str| p.iter().any(|(x, y)| x == a && y == b);
-            for p in ["secmp-crypto", "secmp-proto", "secmp-relay"] {
+            for p in ["secmp-crypto", "secmp-proto", "secmp-relay", "secmp-store"] {
                 assert!(
                     has(&first, "--package", p) && !has(&second, "--package", p),
                     "{k} {p}"
@@ -9285,10 +10311,8 @@ mod tests {
             }
             assert!(!first.iter().any(|(a, _)| a == "--test-package"), "{k}");
             assert!(has(&first, "--features", "kat") && has(&second, "--features", "harness"));
-            assert!(
-                has(&first, "--shard", &format!("{k}/12"))
-                    && has(&second, "--shard", &format!("{k}/12"))
-            );
+            let label = format!("{k}/{}", expect::MUTANT_SHARDS);
+            assert!(has(&first, "--shard", &label) && has(&second, "--shard", &label));
             assert!(has(&first, "--output", "target"));
             assert!(has(&second, "--output", MUTANTS_HARNESS_OUTPUT));
             assert!(
@@ -9379,7 +10403,9 @@ mod tests {
         let accepted = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/mutants-accepted.md"),
         )?;
-        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:751:39: replace || with && in World::prepare_fetch\n\
+        // the run of M6 (163 mutants), with the core row's place as renumbered after M7 B-SC2 (755:39 -> 806:39) and after
+        // M7 B-4/B-4b (806:39 -> 816:39)
+        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:816:39: replace || with && in World::prepare_fetch\n\
              crates/secmp-transport/src/tls.rs:366:13: replace || with && in <impl StreamProvider for TlsProvider<D>>::connect\n\
              crates/secmp-transport/src/tor/mod.rs:53:26: replace | with ^ in base32\n";
         assert_eq!(
@@ -9620,13 +10646,21 @@ mod tests {
         let floor = |outcomes: Vec<Value>| -> Result<MutantsFloor> {
             Ok(mutants_floor(&mutant_counts(&outcomes)?))
         };
+        // the four other packages, all above the floor
+        let rest = || {
+            [
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
+            ]
+            .concat()
+        };
         // every crypto mutant unviable (the R-06 build failure)
         let all_unviable = [
             mutant_outcomes("secmp-crypto", 0, 241, 0),
             mutant_outcomes("secmp-proto", 60, 30, 1),
-            mutant_outcomes("secmp-relay", 50, 10, 0),
-            mutant_outcomes("secmp-client-core", 40, 5, 0),
-            mutant_outcomes("secmp-transport", 30, 3, 0),
+            rest(),
         ]
         .concat();
         let MutantsFloor {
@@ -9648,9 +10682,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 64, 36, 0),
                 mutant_outcomes("secmp-proto", 70, 30, 0),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -9666,9 +10698,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 70, 30, 0),
                 mutant_outcomes("secmp-proto", 63, 36, 1),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -9685,9 +10715,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 65, 35, 0),
                 mutant_outcomes("secmp-proto", 80, 18, 2),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -9704,6 +10732,7 @@ mod tests {
                 "secmp-relay: caught 50, missed 0, timeout 0, unviable 10 of 60 (caught 83.3 %, at least 50 %, unviable 16.7 %)".to_owned(),
                 "secmp-client-core: caught 40, missed 0, timeout 0, unviable 5 of 45 (caught 88.9 %, at least 50 %, unviable 11.1 %)".to_owned(),
                 "secmp-transport: caught 30, missed 0, timeout 0, unviable 3 of 33 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
+                "secmp-store: caught 20, missed 0, timeout 0, unviable 2 of 22 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
             ]
         );
         // a package without any mutant: no caught mutant
@@ -9714,7 +10743,8 @@ mod tests {
                 "secmp-crypto: no caught mutant (of 0)".to_owned(),
                 "secmp-relay: no caught mutant (of 0)".to_owned(),
                 "secmp-client-core: no caught mutant (of 0)".to_owned(),
-                "secmp-transport: no caught mutant (of 0)".to_owned()
+                "secmp-transport: no caught mutant (of 0)".to_owned(),
+                "secmp-store: no caught mutant (of 0)".to_owned()
             ]
         );
         Ok(())
@@ -9742,6 +10772,288 @@ mod tests {
             m.remove("package");
         }
         assert!(mutant_counts(&[nameless]).is_err());
+    }
+
+    /// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A): the `kani` step runs every `cargo kani` under the cbmc RSS guard with the 14.5 GB
+    /// limit; the guard reads the largest `cbmc` and the current harness, records peaks, and — red test with a lowered
+    /// limit — stops a run whose `cbmc` exceeds it, kills that process and fails naming the harness; under the limit the
+    /// run's own status and the peak are returned.
+    #[test]
+    fn kani_rss_guard() -> Result<()> {
+        assert_eq!(expect::KANI_CBMC_RSS_LIMIT_KIB, 14_160_156);
+        assert_eq!(14_500_000_000_u64 / 1024, expect::KANI_CBMC_RSS_LIMIT_KIB);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let gates_rs = lf(&std::fs::read_to_string(root.join("xtask/src/gates.rs"))?);
+        let body = gates_rs
+            .split_once("pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(b, _)| b)
+            .unwrap_or_default();
+        assert!(body.contains("kani_guarded(") && body.contains("expect::KANI_CBMC_RSS_LIMIT_KIB"));
+        assert!(!body.contains(".capture()"));
+        // the readers
+        let ps = "    PID   RSS COMMAND\n    1   900 systemd\n  4242 5000000 cbmc\n  4243 7000000 cbmc\n  4244 9000000 rustc\n";
+        assert_eq!(largest_cbmc(ps), Some((4243, 7_000_000)));
+        assert_eq!(largest_cbmc("  PID RSS COMMAND\n  7 10 bash\n"), None);
+        let log = "Compiling x\nChecking harness kani_proofs::kani_a...\nVERIFICATION:- SUCCESSFUL\nChecking harness kani_proofs::kani_b...\n";
+        assert_eq!(current_kani_harness(log), "kani_proofs::kani_b");
+        assert_eq!(current_kani_harness(""), "(before the first harness)");
+        #[cfg(unix)]
+        {
+            let dir = root.join("target").join("kani-guard-test");
+            std::fs::create_dir_all(&dir)?;
+            let fake = || {
+                Cmd::new("sh").args([
+                    "-c",
+                    "echo 'Checking harness kani_proofs::kani_fake...'; exec sleep 30",
+                ])
+            };
+            // a stand-in for the cbmc process, which the guard kills
+            let mut victim = std::process::Command::new("sleep").arg("60").spawn()?;
+            let pid = victim.id();
+            let mut calls = 0_u32;
+            let mut over = || {
+                calls = calls.saturating_add(1);
+                if calls < 3 {
+                    "  PID RSS COMMAND\n".to_owned()
+                } else {
+                    format!("  PID RSS COMMAND\n  {pid} 2000000 cbmc\n")
+                }
+            };
+            let every = std::time::Duration::from_millis(200);
+            let lowered = 1_000_000;
+            let err = kani_guarded(&fake(), &dir.join("over.log"), lowered, every, &mut over)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(
+                err.contains("2000000 KiB exceeds the limit of 1000000 KiB")
+                    && err.contains("while checking harness kani_proofs::kani_fake"),
+                "{err}"
+            );
+            let killed = victim.wait()?;
+            assert!(!killed.success(), "the cbmc stand-in was killed");
+            // under the limit: the run ends with its own status, the peak is recorded
+            let quick = Cmd::new("sh").args([
+                "-c",
+                "echo 'Checking harness kani_proofs::kani_ok...'; sleep 1",
+            ]);
+            let mut under = || "  PID RSS COMMAND\n  1 500 cbmc\n".to_owned();
+            let run = kani_guarded(&quick, &dir.join("under.log"), lowered, every, &mut under)?;
+            assert!(run.success);
+            assert!(
+                run.peaks
+                    .iter()
+                    .any(|(h, k)| h == "kani_proofs::kani_ok" && *k == 500),
+                "{:?}",
+                run.peaks
+            );
+        }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §2 (F-04): a `ps` that yields nothing, or no header line, is a step failure naming the cause, never
+    /// a silent pass; a sample with the header and no `cbmc` row is a legitimate quiet moment.
+    #[test]
+    #[cfg(unix)]
+    fn kani_rss_guard_fails_closed_without_ps_sample() -> Result<()> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target")
+            .join("kani-guard-test");
+        std::fs::create_dir_all(&dir)?;
+        let every = std::time::Duration::from_millis(100);
+        let quick = || {
+            Cmd::new("sh").args([
+                "-c",
+                "echo 'Checking harness kani_proofs::kani_q...'; sleep 1",
+            ])
+        };
+        for (name, text) in [("empty", ""), ("headerless", "  1 500 cbmc\n")] {
+            let mut sample = || text.to_owned();
+            let err = kani_guarded(
+                &quick(),
+                &dir.join("closed.log"),
+                1_000_000,
+                every,
+                &mut sample,
+            )
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+            assert!(err.contains("no RSS sample"), "{name}: {err}");
+        }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §2 (F-04): a log with `Checking harness` lines and no recorded peak fails naming the harness; with a
+    /// recorded peak, and with a log that has no harness line at all, the run returns normally.
+    #[test]
+    #[cfg(unix)]
+    fn kani_rss_guard_requires_a_peak_per_checked_harness() -> Result<()> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target")
+            .join("kani-guard-test");
+        std::fs::create_dir_all(&dir)?;
+        let every = std::time::Duration::from_millis(100);
+        let header = "  PID RSS COMMAND\n  1 10 bash\n";
+        let checked = Cmd::new("sh").args([
+            "-c",
+            "echo 'Checking harness kani_proofs::kani_nopeak...'; sleep 1",
+        ]);
+        let mut quiet = || header.to_owned();
+        let err = kani_guarded(
+            &checked,
+            &dir.join("nopeak.log"),
+            1_000_000,
+            every,
+            &mut quiet,
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(
+            err.contains("no cbmc peak") && err.contains("kani_proofs::kani_nopeak"),
+            "{err}"
+        );
+        let none = Cmd::new("sh").args(["-c", "echo 'Compiling x'; sleep 1"]);
+        let mut quiet = || header.to_owned();
+        let run = kani_guarded(
+            &none,
+            &dir.join("noharness.log"),
+            1_000_000,
+            every,
+            &mut quiet,
+        )?;
+        assert!(run.success && run.peaks.is_empty());
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the second mutants run selects the nextest profile whose
+    /// one override gives the killer module's tests a priority above every other test, so they start first by that filter;
+    /// `.config/nextest.toml` holds exactly the block `mutants_killer_profile` writes for `expect::MUTANT_KILLER_MODULE`.
+    /// Renaming the module keeps the order: the block for another module name differs only in its filter and carries the
+    /// same priority; the override list of the real file puts the `m0_early::` entry first, and the first run (own tests) uses no such profile. The killer module exists and holds tests.
+    #[test]
+    fn mutant_killers_run_first_by_filter() -> Result<()> {
+        let args = mutants_harness_args(None);
+        let dashes = args.iter().position(|a| a == "--").unwrap_or(usize::MAX);
+        let profile = args.iter().position(|a| a == "--profile");
+        assert_eq!(profile, Some(dashes.saturating_add(2)));
+        assert_eq!(
+            profile
+                .and_then(|i| args.get(i.saturating_add(1)))
+                .map(String::as_str),
+            Some(expect::MUTANTS_HARNESS_PROFILE)
+        );
+        assert!(!mutants_args(None).iter().any(|a| a == "--profile"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let config = lf(&std::fs::read_to_string(root.join(".config/nextest.toml"))?);
+        let block = mutants_killer_profile(expect::MUTANT_KILLER_MODULE);
+        assert_eq!(config.matches(&block).count(), 1, "{config}");
+        assert_eq!(config.matches("priority =").count(), 1);
+        assert!(block.contains("filter = 'test(/^m0_early::/)'\npriority = 100\n"));
+        // another module name: the same profile and priority, only the filter follows the name
+        let renamed = mutants_killer_profile("zz_killers");
+        // the real override list: the one priority entry of the profile is the killer module's, with the highest priority
+        let overrides: Vec<&str> = config
+            .lines()
+            .filter(|l| {
+                l.trim_start().starts_with("filter = ") || l.trim_start().starts_with("priority =")
+            })
+            .collect();
+        assert_eq!(
+            overrides
+                .iter()
+                .skip_while(|l| !l.contains("m0_early::"))
+                .take(2)
+                .copied()
+                .collect::<Vec<_>>(),
+            ["filter = 'test(/^m0_early::/)'", "priority = 100"]
+        );
+        assert_eq!(
+            renamed.replace("zz_killers", expect::MUTANT_KILLER_MODULE),
+            block
+        );
+        // the module is declared in the harness binary and holds tests
+        let main = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-testkit/tests/harness/main.rs"),
+        )?);
+        assert!(main.contains(&format!("mod {};", expect::MUTANT_KILLER_MODULE)));
+        let killers = std::fs::read_to_string(
+            root.join("crates/secmp-testkit/tests/harness")
+                .join(format!("{}.rs", expect::MUTANT_KILLER_MODULE)),
+        )?;
+        assert!(killers.matches("#[test]").count() >= 4);
+        // nextest's `priority` override needs nextest 0.9.91 or later; the pinned version
+        assert_eq!(tools::NEXTEST.version, "0.9.145");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-09 (OPEN-M7-19 B): the two tests that dominated the per-mutant harness suite (C2-18c: 70 s on 32
+    /// cores, of it 69.5 s and 27 s) are split. Each long form is in `expect::MUTANT_HARNESS_SKIP_TESTS` with its time
+    /// and the name of its short form; the short form is a harness test that no skip entry matches (a `--skip` filter is
+    /// a substring match), so it runs for every mutant; docs/mutants-accepted.md §Skipped names it as the killer. The
+    /// suite's wall time on 32 cores is measured and reported (M07 report §4), not asserted here (no wall clock in tests).
+    #[test]
+    fn mutant_harness_suite_under_30s() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut sources = String::new();
+        for f in walk_files(
+            &root.join("crates/secmp-testkit/tests/harness"),
+            &|p: &Path| p.extension().is_some_and(|e| e == "rs"),
+        )? {
+            sources.push_str(&lf(&std::fs::read_to_string(f)?));
+        }
+        let accepted = lf(&std::fs::read_to_string(
+            root.join("docs/mutants-accepted.md"),
+        )?);
+        let skipped = accepted
+            .split_once("\n## Skipped\n")
+            .map(|(_, s)| s)
+            .unwrap_or_default();
+        for (long, short) in [
+            (
+                "timing_draws_independent_of_activity",
+                "timing_draws_unmoved_by_one_hour_of_activity",
+            ),
+            (
+                "relay_idle_and_age_bounds_from_schedule",
+                "relay_idle_and_age_bounds_defaults",
+            ),
+        ] {
+            let reason = expect::MUTANT_HARNESS_SKIP_TESTS
+                .iter()
+                .find(|(n, _)| *n == long)
+                .map(|(_, r)| *r)
+                .unwrap_or_default();
+            assert!(
+                reason.contains(" s;") && reason.ends_with(&format!("short form {short}")),
+                "{long}: {reason:?}"
+            );
+            for name in [long, short] {
+                assert_eq!(
+                    sources.matches(&format!("#[test]\nfn {name}() {{")).count(),
+                    1,
+                    "{name}"
+                );
+            }
+            for (name, _) in expect::MUTANT_HARNESS_SKIP_TESTS
+                .iter()
+                .chain(expect::MUTANT_SKIP_TESTS)
+            {
+                assert!(!short.contains(name), "{name} would skip {short}");
+            }
+            assert!(
+                skipped
+                    .lines()
+                    .any(|l| l.starts_with(&format!("| `{long}`"))
+                        && l.contains(&format!("killer: `{short}`"))),
+                "docs/mutants-accepted.md §Skipped: {long}"
+            );
+        }
+        Ok(())
     }
 
     /// ADR-047 Amendment 1 (5): every test skipped for each mutant is a `#[cfg(feature = "kat")]` test function of
@@ -9815,6 +11127,55 @@ mod tests {
         Ok(())
     }
 
+    /// ADR-047 Amendment 12: write into every shard result under `dir` the inventory of all their outcomes together,
+    /// each mutant once — what `cargo mutants --list` would list for a tree whose shards are complete.
+    fn seal_inventory(dir: &Path) -> Result<()> {
+        let mut outs = Vec::new();
+        let mut names = BTreeSet::new();
+        for entry in std::fs::read_dir(dir)? {
+            let out = entry?.path().join("mutants.out");
+            for o in read_outcomes(&out.join("outcomes.json"))?.outcomes {
+                if let Some(name) = o
+                    .get("scenario")
+                    .and_then(|s| s.get("Mutant"))
+                    .and_then(|m| m.get("name"))
+                    .and_then(Value::as_str)
+                {
+                    names.insert(name.to_owned());
+                }
+            }
+            outs.push(out);
+        }
+        let names: Vec<String> = names.into_iter().collect();
+        for out in outs {
+            write_inventory(&out, &names)?;
+        }
+        Ok(())
+    }
+
+    /// Write `names` as the inventory of the shard result `out` (a `mutants.out`).
+    fn write_inventory(out: &Path, names: &[String]) -> Result<()> {
+        std::fs::write(
+            out.join(MUTANTS_SHARD_INVENTORY),
+            serde_json::json!({ "mutants": names }).to_string(),
+        )?;
+        Ok(())
+    }
+
+    /// `outcomes` as shard `k` holds them: every name and file in `lib<k>.rs`, so no two shards share a mutant.
+    fn in_shard(outcomes: &[Value], k: usize) -> Vec<Value> {
+        outcomes
+            .iter()
+            .map(|o| {
+                serde_json::from_str(
+                    &o.to_string()
+                        .replace("/src/lib.rs", &format!("/src/lib{k}.rs")),
+                )
+                .unwrap_or(Value::Null)
+            })
+            .collect()
+    }
+
     /// A mutant outcome with the name cargo-mutants prints (`crates/<package>/<file>:<line>:<col>: <description>`).
     fn named_mutant(name: &str, summary: &str) -> Value {
         let file = name.split_once(':').map_or(name, |(f, _)| f);
@@ -9854,6 +11215,7 @@ mod tests {
         let proto = mutant_outcomes("secmp-proto", 3, 1, 0);
         write_shard(&dir, (0, 2), "PASS", &crypto, 4)?;
         write_shard(&dir, (1, 2), "PASS", &proto, 4)?;
+        seal_inventory(&dir)?;
         let merged = merge_mutant_shards(&dir, 2)?;
         assert!(merged.failures.is_empty(), "{:?}", merged.failures);
         assert_eq!(merged.outcomes.len(), 8);
@@ -9893,6 +11255,231 @@ mod tests {
         Ok(())
     }
 
+    /// ADR-047 Amendment 11 (Q234): the merge of the CI gate reads `expect::MUTANT_SHARDS` (24) results. All 24 with a
+    /// PASS verdict: no failure, one line per shard; the last one missing: one failure naming shard 23/24; one result
+    /// labelled with the old 12-shard layout: one failure naming that label.
+    #[test]
+    fn mutants_merge_needs_all_24_shards() -> Result<()> {
+        let n = expect::MUTANT_SHARDS;
+        assert_eq!(n, 24);
+        let (dir, _) = merge_dirs("ci5");
+        let crypto = mutant_outcomes("secmp-crypto", 1, 0, 0);
+        for k in 0..n.saturating_sub(1) {
+            write_shard(&dir, (k, n), "PASS", &in_shard(&crypto, k), 1)?;
+        }
+        seal_inventory(&dir)?;
+        assert_eq!(
+            merge_mutant_shards(&dir, n)?.failures,
+            vec!["shard 23/24: 0 result directories (exactly one expected)".to_owned()]
+        );
+        write_shard(&dir, (23, n), "PASS", &in_shard(&crypto, 23), 1)?;
+        seal_inventory(&dir)?;
+        let merged = merge_mutant_shards(&dir, n)?;
+        assert!(merged.failures.is_empty(), "{:?}", merged.failures);
+        assert_eq!((merged.shards.len(), merged.outcomes.len()), (24, 24));
+        write_shard(&dir, (4, 12), "PASS", &in_shard(&crypto, 4), 1)?;
+        assert_eq!(
+            merge_mutant_shards(&dir, n)?.failures,
+            vec!["shard 4/24: verdict PASS for shard 4/12: d".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12, Q239, EXT2c-4): 24 PASS shards of which 23 hold no mutant outcome (`total_mutants` 0) do not
+    /// merge: each empty shard is a failure naming it.
+    #[test]
+    fn mutants_merge_refuses_an_empty_shard() -> Result<()> {
+        let n = expect::MUTANT_SHARDS;
+        let (dir, out) = merge_dirs("am12-empty");
+        let full = [
+            mutant_outcomes("secmp-crypto", 10, 0, 0),
+            mutant_outcomes("secmp-proto", 10, 0, 0),
+            mutant_outcomes("secmp-relay", 10, 0, 0),
+            mutant_outcomes("secmp-client-core", 10, 0, 0),
+            mutant_outcomes("secmp-transport", 10, 0, 0),
+            mutant_outcomes("secmp-store", 10, 0, 0),
+        ]
+        .concat();
+        write_shard(&dir, (0, n), "PASS", &full, full.len())?;
+        for k in 1..n {
+            write_shard(&dir, (k, n), "PASS", &[], 0)?;
+        }
+        seal_inventory(&dir)?;
+        let v = merge_verdict(&dir, n, &accepted_survivors()?, &out)?;
+        let expected: Vec<String> = (1..n)
+            .map(|k| format!("shard {k}/{n}: no mutant outcomes (an empty shard)"))
+            .collect();
+        assert_eq!(v.failures, expected);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap_or(&dir));
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): two shards that share a mutant do not merge (pairwise disjoint), though every listed mutant
+    /// has an outcome.
+    #[test]
+    fn mutants_merge_refuses_overlapping_shards() -> Result<()> {
+        let (dir, _) = merge_dirs("am12-overlap");
+        let crypto = mutant_outcomes("secmp-crypto", 2, 0, 0);
+        let shared = named_mutant(
+            "crates/secmp-proto/src/a.rs:1:1: replace g with ()",
+            "CaughtMutant",
+        );
+        write_shard(
+            &dir,
+            (0, 2),
+            "PASS",
+            &[crypto, vec![shared.clone()]].concat(),
+            3,
+        )?;
+        write_shard(&dir, (1, 2), "PASS", &[shared], 1)?;
+        seal_inventory(&dir)?;
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec![
+                "inventory: 0 of 3 listed mutants without an outcome, 1 outcomes not listed or repeated (first: \
+                 crates/secmp-proto/src/a.rs:1:1: replace g with ())"
+                    .to_owned()
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): the union of the shards must be the whole inventory — a listed mutant without an outcome
+    /// fails, and so does an outcome of a mutant the inventory does not list (a substituted mutant).
+    #[test]
+    fn mutants_merge_refuses_an_incomplete_or_substituted_union() -> Result<()> {
+        let (dir, _) = merge_dirs("am12-union");
+        let crypto = mutant_outcomes("secmp-crypto", 2, 0, 0);
+        let proto = mutant_outcomes("secmp-proto", 1, 0, 0);
+        write_shard(&dir, (0, 2), "PASS", &crypto, 2)?;
+        write_shard(&dir, (1, 2), "PASS", &proto, 1)?;
+        seal_inventory(&dir)?;
+        assert!(merge_mutant_shards(&dir, 2)?.failures.is_empty());
+        let mut names: Vec<String> = [&crypto, &proto]
+            .iter()
+            .flat_map(|o| o.iter())
+            .filter_map(|o| o.pointer("/scenario/Mutant/name").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect();
+        let untested = "crates/secmp-a/src/lib.rs:9:1: replace f9 with ()".to_owned();
+        names.push(untested.clone());
+        names.sort();
+        for k in 0..2 {
+            write_inventory(
+                &dir.join(format!("mutants-{k}-1")).join("mutants.out"),
+                &names,
+            )?;
+        }
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec![format!(
+                "inventory: 1 of 4 listed mutants without an outcome, 0 outcomes not listed or repeated (first: \
+                 {untested})"
+            )]
+        );
+        // the proto mutant is replaced in the inventory by the untested one: one missing, one outcome not listed
+        names.retain(|x| !x.starts_with("crates/secmp-proto/"));
+        for k in 0..2 {
+            write_inventory(
+                &dir.join(format!("mutants-{k}-1")).join("mutants.out"),
+                &names,
+            )?;
+        }
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec![format!(
+                "inventory: 1 of 3 listed mutants without an outcome, 1 outcomes not listed or repeated (first: \
+                 {untested})"
+            )]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): every shard records the inventory, the inventories are one, and none is empty.
+    #[test]
+    fn mutants_merge_needs_one_inventory_in_every_shard() -> Result<()> {
+        let (dir, _) = merge_dirs("am12-inventory");
+        write_shard(
+            &dir,
+            (0, 2),
+            "PASS",
+            &mutant_outcomes("secmp-crypto", 2, 0, 0),
+            2,
+        )?;
+        write_shard(
+            &dir,
+            (1, 2),
+            "PASS",
+            &mutant_outcomes("secmp-proto", 1, 0, 0),
+            1,
+        )?;
+        seal_inventory(&dir)?;
+        let one = dir.join("mutants-1-1").join("mutants.out");
+        let list = read_inventory(&one.join(MUTANTS_SHARD_INVENTORY))?;
+        std::fs::remove_file(one.join(MUTANTS_SHARD_INVENTORY))?;
+        let found = merge_mutant_shards(&dir, 2)?.failures;
+        assert!(
+            found.len() == 1
+                && found
+                    .iter()
+                    .all(|f| f.starts_with("shard 1/2: no mutant inventory: ")),
+            "{found:?}"
+        );
+        write_inventory(&one, &[])?;
+        let found = merge_mutant_shards(&dir, 2)?.failures;
+        assert!(
+            found.len() == 1 && found.iter().all(|f| f.ends_with(": an empty inventory")),
+            "{found:?}"
+        );
+        write_inventory(
+            &one,
+            &[list, vec!["crates/x/src/y.rs:1:1: z".to_owned()]].concat(),
+        )?;
+        assert_eq!(
+            merge_mutant_shards(&dir, 2)?.failures,
+            vec!["inventory: shard 1/2 lists another mutant inventory than shard 0/2".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// G7-22 (ADR-047 Amendment 12): the inventory is listed per run with the run's features, packages and exclusions, without a
+    /// shard; `--list --json` gives each mutant's `name`.
+    #[test]
+    fn mutants_inventory_lists_both_runs() -> Result<()> {
+        let [first, second] = mutants_inventory_args();
+        for (args, features, packages) in [
+            (&first, "kat", mutants_own_test_packages()),
+            (&second, "harness", expect::MUTANT_HARNESS_PACKAGES.to_vec()),
+        ] {
+            let mut want: Vec<String> = ["mutants", "--list", "--json", "--features", features]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+            for p in packages {
+                want.extend(["--package".to_owned(), p.to_owned()]);
+            }
+            for f in expect::MUTANT_EXCLUDE_FILES {
+                want.extend(["--exclude".to_owned(), (*f).to_owned()]);
+            }
+            for re in expect::MUTANT_EXCLUDE_RE {
+                want.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
+            }
+            assert_eq!(*args, want);
+        }
+        assert_eq!(
+            inventory_names(r#"[{"name": "a", "package": "p"}, {"name": "b"}]"#)?,
+            ["a", "b"]
+        );
+        assert!(inventory_names("{}").is_err());
+        assert!(inventory_names(r#"[{"package": "p"}]"#).is_err());
+        assert_eq!(inventory_names("[]")?, Vec::<String>::new());
+        Ok(())
+    }
+
     /// ADR-047 Amendment 2 (1): a package that caught fewer than half of its generated mutants fails the merge naming
     /// the package and its caught share (40 caught, 0 missed, 60 unviable: 40.0 %).
     #[test]
@@ -9900,34 +11487,33 @@ mod tests {
         let (dir, out) = merge_dirs("below-half");
         write_shard(
             &dir,
-            (0, 8),
+            (0, 3),
             "PASS",
             &mutant_outcomes("secmp-crypto", 40, 60, 0),
             100,
         )?;
         write_shard(
             &dir,
-            (1, 8),
+            (1, 3),
             "PASS",
             &mutant_outcomes("secmp-proto", 80, 20, 0),
             100,
         )?;
         write_shard(
             &dir,
-            (2, 8),
+            (2, 3),
             "PASS",
             &[
                 mutant_outcomes("secmp-relay", 50, 10, 0),
                 mutant_outcomes("secmp-client-core", 40, 5, 0),
                 mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
             ]
             .concat(),
-            138,
+            160,
         )?;
-        for k in 3..8 {
-            write_shard(&dir, (k, 8), "PASS", &[], 0)?;
-        }
-        let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
+        seal_inventory(&dir)?;
+        let v = merge_verdict(&dir, 3, &accepted_survivors()?, &out)?;
         assert_eq!(
             v.failures,
             vec!["secmp-crypto: caught 40 of 100 mutants (40.0 %) is below 50 %".to_owned()]
@@ -9967,24 +11553,23 @@ mod tests {
         ] {
             proto.push(named_mutant(name, "MissedMutant"));
         }
-        write_shard(&dir, (0, 8), "PASS", &crypto, 268)?;
-        write_shard(&dir, (1, 8), "PASS", &proto, 1024)?;
+        write_shard(&dir, (0, 3), "PASS", &crypto, 268)?;
+        write_shard(&dir, (1, 3), "PASS", &proto, 1024)?;
         write_shard(
             &dir,
-            (2, 8),
+            (2, 3),
             "PASS",
             &[
                 mutant_outcomes("secmp-relay", 50, 10, 0),
                 mutant_outcomes("secmp-client-core", 40, 5, 0),
                 mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
             ]
             .concat(),
-            138,
+            160,
         )?;
-        for k in 3..8 {
-            write_shard(&dir, (k, 8), "PASS", &[], 0)?;
-        }
-        let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
+        seal_inventory(&dir)?;
+        let v = merge_verdict(&dir, 3, &accepted_survivors()?, &out)?;
         assert!(v.failures.is_empty(), "{:?}", v.failures);
         let warnings: Vec<&String> = v
             .lines
@@ -10034,6 +11619,7 @@ mod tests {
                 mutant_outcomes("secmp-relay", 10, 2, 0),
                 mutant_outcomes("secmp-client-core", 8, 1, 0),
                 mutant_outcomes("secmp-transport", 4, 1, 0),
+                mutant_outcomes("secmp-store", 4, 1, 0),
             ]
             .concat();
             let failed = survivors.iter().find(|(s, _)| *s == k);
@@ -10049,6 +11635,7 @@ mod tests {
                 total,
             )?;
         }
+        seal_inventory(&dir)?;
         let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
         let text = format!("mutants-merge: {}", v.lines.join("; "));
         for k in 0..8 {
@@ -10136,6 +11723,84 @@ mod tests {
         Ok(())
     }
 
+    /// OPEN-M7-26 B (Q132, Q133, Q135): the committed M5 run is history and predates the splits of
+    /// `kani_commit_accept_atomic` and `kani_q_frame_plaintext_exact_fit`; the block of `old_harness` is left out of `log`
+    /// (nothing on disk is rewritten) and the real run of its split harnesses (the one committed file
+    /// `docs/reviews/M07-evidence/<evidence_prefix><sha7>.txt`) is appended in its place.
+    fn swap_split_harness_block(
+        root: &Path,
+        log: &mut String,
+        old_harness: &str,
+        evidence_prefix: &str,
+    ) -> Result<()> {
+        let head = format!("  Checking harness kani_proofs::{old_harness}...\n");
+        let old_block = log
+            .split_once(&head)
+            .and_then(|(_, rest)| rest.split_once("  Checking harness "))
+            .map(|(block, _)| format!("{head}{block}"))
+            .ok_or_else(|| Error(format!("no block of {old_harness} in the M5 log")))?;
+        assert_eq!(log.matches(&old_block).count(), 1);
+        *log = log.replacen(&old_block, "", 1);
+        let mut split: Vec<_> = std::fs::read_dir(root.join("docs/reviews/M07-evidence"))?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(evidence_prefix))
+            })
+            .collect();
+        split.sort();
+        assert_eq!(
+            split.len(),
+            1,
+            "one committed run of the split harnesses: {split:?}"
+        );
+        log.push_str(&lf(&std::fs::read_to_string(
+            split.first().ok_or_else(|| Error("no run".into()))?,
+        )?));
+        Ok(())
+    }
+
+    /// The committed alone runs of the B-SC harnesses (`kani-m7-bsc-sc-<harness>.txt`, the A-3b wrapper's form); a harness
+    /// re-measured after its B-SC2 re-dictation reads its `kani-m7-bsc2-sc-<harness>.txt` instead.
+    fn push_b_sc_runs(root: &Path, log: &mut String) -> Result<()> {
+        for h in B_SC_RUNS {
+            let tag = if B4C_RUNS.contains(h) {
+                "b4c"
+            } else if B3B_RUNS.contains(h) {
+                "b3b"
+            } else if B_SC2_RUNS.contains(h) {
+                "bsc2"
+            } else {
+                "bsc"
+            };
+            let file = format!("docs/reviews/M07-evidence/kani-m7-{tag}-sc-{h}.txt");
+            log.push_str(&lf(&std::fs::read_to_string(root.join(file))?));
+        }
+        Ok(())
+    }
+
+    /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
+    const B_SC2_RUNS: &[&str] = &["kani_paired_executions", "kani_persist_contract_abstract"];
+
+    /// The harness of WEISUNG M7-B-4 (OPEN-M7-B-2), changed by WEISUNG M7-B-4c (Q212 (5): the liveness check on the
+    /// pre-update state): the cover pin reads its `kani-m7-b4c-sc-<harness>.txt` (the B-4 file stays as it was).
+    const B4C_RUNS: &[&str] = &["kani_prepare_link_send_before_fetch"];
+
+    /// The harness of WEISUNG M7-B3b (K7-01, Q191): the cover pin reads its `kani-m7-b3b-sc-<harness>.txt`.
+    const B3B_RUNS: &[&str] = &["kani_retention_bound_24"];
+
+    /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
+    const B_SC_RUNS: &[&str] = &[
+        "kani_in_flight_over_transitions",
+        "kani_queue_generations",
+        "kani_persist_contract_abstract",
+        "kani_paired_executions",
+        "kani_retention_bound_24",
+        "kani_prepare_link_send_before_fetch",
+    ];
+
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
     /// each on a known harness); the committed Kani log matches it; a deleted or an added cover is a finding; a
     /// summary with Kani's `(K unreachable)` suffix fails the cover check.
@@ -10169,11 +11834,7 @@ mod tests {
             )?));
         }
         // M5 fix round (M05 review R-121, C-12): the runs of K-01, K-03 and K-08 with their new covers
-        for h in [
-            "kani_frame_pad_total",
-            "kani_link_counter_checked_add",
-            "kani_q_frame_plaintext_exact_fit",
-        ] {
+        for h in ["kani_frame_pad_total", "kani_link_counter_checked_add"] {
             log.push_str(&lf(&std::fs::read_to_string(
                 root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
             )?));
@@ -10218,6 +11879,14 @@ mod tests {
         // the C1 run covers the client-core harnesses again: those of Phase A are replaced by its (newer) summaries
         log = log.replace(positive, "");
         log.push_str(&c1_log);
+        for (old, prefix) in [
+            ("kani_commit_accept_atomic", "kani-m7-a1f-commit-accept-"),
+            ("kani_q_frame_plaintext_exact_fit", "kani-m7-a3b-split-"),
+        ] {
+            swap_split_harness_block(&root, &mut log, old, prefix)?;
+        }
+        // M7 B-SC (SC-06…SC-09) and B-SC2: the committed alone runs of the new `secmp-client-core` harnesses
+        push_b_sc_runs(&root, &mut log)?;
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -10276,8 +11945,16 @@ mod tests {
         let all = expect::KANI_HARNESSES;
         // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
         // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07); M6 Phase C1: + K-C1…K-C6
-        assert_eq!(all.len(), 46);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 46);
+        // M7 A1e (Q132): `kani_commit_accept_atomic` split in two, 47
+        // M7 A-3b (Q135): q_frame split in three, tr_header_selection in three (k ≤ 2, k = 3, k = 4), 51
+        // M7 B-SC: + SC-06
+        // M7 B-SC: + SC-07
+        // M7 B-SC: + SC-08
+        // M7 B-SC: + SC-09
+        // M7 B-3b: + K7-01 (Q191)
+        // M7 B-4: + the SEND-before-FETCH guard (OPEN-M7-B-2)
+        assert_eq!(all.len(), 57);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 57);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
@@ -10424,16 +12101,16 @@ mod tests {
             let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
                 3_600
             } else {
-                232
+                211
             };
             assert_eq!(nightly_seconds_for(t)?, want, "{t}");
         }
-        // M6 Phase B (FZ-02, FZ-03): 31 x 232 + 2 x 3600 = 14 392 <= 14 400
+        // M7 Phase B (FZ-04): 34 x 211 + 2 x 3600 = 14 374 <= 14 400 (Phase A: 33 x 218 + 2 x 3600 = 14 394)
         let total: u64 = expect::FUZZ_TARGETS
             .iter()
             .map(|t| nightly_seconds_for(t))
             .sum::<Result<u64>>()?;
-        assert_eq!(total, 14_392);
+        assert_eq!(total, 14_374);
         assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
         // the evidence: runs and lim per target, lim = max_len
         let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\
@@ -10622,21 +12299,7 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(pinned.len(), 1);
         assert_eq!(gate_lines(&dispatch, "dispatch-full"), pinned);
-        for (twin, job) in [
-            ("dispatch-fast", "linux-fast"),
-            ("dispatch-windows", "windows-native"),
-            ("dispatch-xwin", "xwin-cross"),
-            ("dispatch-full", "linux-full"),
-            ("dispatch-ct", "ct"),
-            ("dispatch-mutants-shard", "mutants-shard"),
-            ("dispatch-mutants", "mutants"),
-            ("dispatch-proverif-hx", "proverif-hx"),
-            ("dispatch-proverif-link", "proverif-link"),
-            // M6 (WEISUNG M6-11)
-            ("dispatch-kani", "kani"),
-            // M6-CI (WEISUNG M6-CI-1 §4)
-            ("dispatch-fuzz", "fuzz"),
-        ] {
+        for (twin, job) in expect::DISPATCH_TWINS.iter().copied() {
             let lines = gate_lines(&ci, job);
             assert!(!lines.is_empty(), "{job}: no gate line in ci.yml");
             assert_eq!(gate_lines(&dispatch, twin), lines, "{twin} vs {job}");
@@ -10796,8 +12459,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M6 Phase B: 33 targets (+ FZ-02, FZ-03 of M6), 436 s each
-            14_400 / 33
+            // M7 Phase B: 36 targets (+ FZ-04 of M7 Phase B), 400 s each
+            14_400 / 36
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());
@@ -10973,7 +12636,7 @@ mod tests {
             assert!(expect::CT_TARGETS.contains(target), "{target}");
             assert!(expect::KNOWN_SITES.contains(site), "{target}: {site}");
         }
-        assert_eq!(expect::CT_TARGET_SITES.len(), 11);
+        assert_eq!(expect::CT_TARGET_SITES.len(), 12);
         assert!(expect::CT_TARGET_SITES.contains(&("tr_decrypt_trial_open_position", "body MAC")));
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../docs/reviews/M04-evidence/ct-report-local-b138a2b-scale10.json");
@@ -10992,9 +12655,10 @@ mod tests {
                 Some((name.to_owned(), r.get("site")?.as_str()?.to_owned()))
             })
             .collect();
+        // the M4 report predates `tr_decrypt_trial_open_position` (M5) and `store_unlock_reject` (M7)
         let bound: BTreeSet<(String, String)> = expect::CT_TARGET_SITES
             .iter()
-            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position")
+            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position" && *t != "store_unlock_reject")
             .map(|(t, s)| ((*t).to_owned(), (*s).to_owned()))
             .collect();
         assert_eq!(claimed, bound);
@@ -11072,8 +12736,9 @@ mod tests {
     }
 
     /// CT-00 (TEST-SPEC-M6 (j)): M6 adds no ct target. `expect::CT_TARGETS` is the list of the M5 close (BASE `6300b65`, 26 names,
-    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22); the ADR-042 Amendment 5 informative target is
-    /// not in it, and no name occurs twice.
+    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22) — since TEST-SPEC-M7 CT-01 its first 26 names,
+    /// followed by `store_unlock_reject` (CT-05: `expect::ct_targets_m7`); the informative targets are not in it, and no
+    /// name occurs twice.
     #[test]
     fn ct_targets_unchanged_in_m6() {
         const M5: [&str; 26] = [
@@ -11104,7 +12769,7 @@ mod tests {
             "tr_decrypt_trial_open_position",
             "link_same_content_control",
         ];
-        assert_eq!(expect::CT_TARGETS, M5.as_slice());
+        assert_eq!(expect::CT_TARGETS.get(..26), Some(M5.as_slice()));
         let unique: std::collections::BTreeSet<&&str> = expect::CT_TARGETS.iter().collect();
         assert_eq!(unique.len(), expect::CT_TARGETS.len());
         for informative in expect::CT_INFORMATIVE_TARGETS {

@@ -1,0 +1,8 @@
+head 8f1009655115d23890ac99faa2dbaaa73c49fe0f
+command: cargo test --locked -p secmp-client-core --features kat --lib -- --test-threads=1 peer_name_with_control_characters_is_shown_empty shown_name_follows_adr054_item5
+temporary edit: sed -i '103s#c.display_name.as_deref().map(shown_name)#c.display_name.clone()#' crates/secmp-client-core/src/contacts.rs
+13:thread '<unnamed>' (3502929) panicked at crates/secmp-client-core/src/hub.rs:1550:13:
+15:  left: [Some("A\u{85}B\n")]
+16: right: [Some("")]
+24:test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 222 filtered out; finished in 1.58s
+cause: without shown_name in contact_of, a peer name with C1/C0 control characters is passed on as received instead of shown empty.

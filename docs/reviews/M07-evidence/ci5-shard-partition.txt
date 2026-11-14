@@ -1,0 +1,14 @@
+head 9589530f7da221c19a22eb5094154ed8fd38af81 + ci5-code.diff
+cargo-mutants 27.1.0
+L1: cargo mutants --list --no-shuffle --package secmp-store --features kat > target/fable/ci5/all.txt
+crates/secmp-store/src/backup.rs:55:43: replace + with -
+L2: seq 0 23 > target/fable/ci5/k.txt; xargs -a target/fable/ci5/k.txt -I K cargo mutants --list --no-shuffle --package secmp-store --features kat --shard K/24 --sharding round-robin > target/fable/ci5/shards.txt && echo L2-OK
+L2-OK
+L3: sort -o all.sorted all.txt; sort -u -o all.unique all.txt; sort -o shards.sorted shards.txt; diff shards.sorted all.sorted && diff all.unique all.sorted && echo PARTITION-OK
+PARTITION-OK
+L4: cargo mutants --list --no-shuffle --package secmp-store --features kat --shard 4/24 --sharding round-robin > target/fable/ci5/shard-4.txt; awk 'NR % 24 == 5' all.txt > rr-4.txt; diff rr-4.txt shard-4.txt && echo ROUND-ROBIN-OK
+ROUND-ROBIN-OK
+L5: wc -l all.txt shards.txt shard-4.txt
+   968 target/fable/ci5/all.txt
+   968 target/fable/ci5/shards.txt
+    41 target/fable/ci5/shard-4.txt

@@ -7,10 +7,10 @@
 //! it; the idle run is the same scenario with the same timing seed and no activity.
 
 use secmp_client_core::scheduler::control::When;
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{CellSource, ControlKind, QueueId, RelayId};
+use secmp_client_core::sessions::actor::{Conversation, Conversations};
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::cell::AppKind;
 use secmp_testkit::harness::{
@@ -160,6 +160,7 @@ impl Rig {
                 key_p,
                 START_UNIX,
             );
+            conv_x.raw_app_payloads_kat();
             conv_x.bind(x_send, x_recv);
             let mut conv_p: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
                 state_p,
@@ -169,12 +170,13 @@ impl Rig {
                 key_x,
                 START_UNIX,
             );
+            conv_p.raw_app_payloads_kat();
             conv_p.bind(QueueId(0), QueueId(1));
             // the first cell goes to the peer by hand: from then on it can answer
             let first = conv_x.prepare_direct(0).unwrap();
             let mut convs = PeerConvs::new();
             convs.add(conv_p);
-            convs.deliver(QueueId(1), 0, &first.cell).unwrap();
+            convs.deliver(QueueId(1), 0, 0, &first.cell).unwrap();
             let x_conv = sim.client(x).convs.add(conv_x);
             peers.push(Peer {
                 convs,
@@ -217,7 +219,7 @@ impl Rig {
                     break;
                 }
                 for (id, cell) in cells {
-                    peer.convs.deliver(QueueId(1), id, &cell).unwrap();
+                    peer.convs.deliver(QueueId(1), 0, id, &cell).unwrap();
                     peer.drained_to = peer.drained_to.max(id);
                 }
             }
@@ -516,7 +518,9 @@ fn activity_independence_when_receiving() {
     }
 }
 
-/// AI-05: the timing randomness is drawn the same way with or without activity.
+/// AI-05: the timing randomness is drawn the same way with or without activity. Long form (6 h, 4 traces; about 70 s),
+/// left out of the per-mutant run (`expect::MUTANT_HARNESS_SKIP_TESTS`); its short form is
+/// `timing_draws_unmoved_by_one_hour_of_activity` (TEST-SPEC-M7 G7-09, OPEN-M7-19 B).
 #[test]
 fn timing_draws_independent_of_activity() {
     let hours = 6;
@@ -533,6 +537,36 @@ fn timing_draws_independent_of_activity() {
         let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
         assert_eq!(run.draws, idle.draws, "trace {trace}");
     }
+}
+
+/// AI-05, short form of `timing_draws_independent_of_activity` (TEST-SPEC-M7 G7-09, OPEN-M7-19 B): the same scenario
+/// over 1 h with one activity trace — the draws of the hour are taken and equal those of the idle run. Kept in the
+/// per-mutant run of the mutation gate.
+#[test]
+fn timing_draws_unmoved_by_one_hour_of_activity() {
+    let hours = 1;
+    let sc = Scenario {
+        mode: Mode::Strict,
+        contacts: vec![(10_000, 10_000), (20_000, 40_000)],
+        pool: true,
+        seed: 79,
+    };
+    let idle = Rig::new(&sc, Params::default()).run(hours, None);
+    assert!(idle.draws.len() == 1 && idle.draws.iter().all(|d| d.0 > 0 && d.1 > 0));
+    let act = activity(900, hours, 2);
+    // the long form asserts no send count; the short form's trace must not be empty (WEISUNG M7-A1b §3): at least 100
+    let sends = act
+        .events
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::UserSend { .. }))
+        .count();
+    evidence(
+        "timing_draws_unmoved_by_one_hour_of_activity",
+        &format!("timing_draws_unmoved_by_one_hour_of_activity: {sends} user sends in the trace"),
+    );
+    assert!(sends >= 100, "{sends} user sends");
+    let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
+    assert_eq!(run.draws, idle.draws);
 }
 
 /// AI-06: the relay's answers carry no activity either — same length, sizes, times.

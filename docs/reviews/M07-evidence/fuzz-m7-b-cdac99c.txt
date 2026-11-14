@@ -1,0 +1,4 @@
+head cdac99c: cargo +nightly-2026-09-21 fuzz run invitation_queue_retention -- -max_total_time=120 (the tracked corpus of 6 seeds; the 473 inputs libFuzzer added were removed)
+#7	INITED cov: 251 ft: 552 corp: 6/462b exec/s: 0 rss: 100Mb
+#1974581	DONE   cov: 369 ft: 2286 corp: 479/121Kb lim: 4096 exec/s: 16318 rss: 529Mb
+Done 1974581 runs in 121 second(s)

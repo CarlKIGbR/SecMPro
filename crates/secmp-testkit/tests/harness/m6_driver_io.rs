@@ -249,7 +249,7 @@ pub(crate) fn link_of(rig: &TokioRig<Holding>, n: usize) -> LinkId {
         .connects
         .iter()
         .filter_map(|(_, p, _)| match p {
-            Purpose::Link(l) => Some(*l),
+            Purpose::Link(l, _) => Some(*l),
             Purpose::Control(_) => None,
         })
         .collect();
@@ -278,7 +278,7 @@ fn driver_hanging_writer_does_not_delay_other_links() {
     let up = |l: LinkId| {
         log.events
             .iter()
-            .find_map(|(t, e)| (*e == LinkEvent::Up(l)).then_some(*t))
+            .find_map(|(t, e)| (matches!(e, LinkEvent::Up(x, _) if *x == l)).then_some(*t))
             .unwrap()
     };
     for n in [0_usize, 2, 3] {
@@ -299,9 +299,9 @@ fn driver_hanging_writer_does_not_delay_other_links() {
     }
     assert_eq!(run.overruns, 0);
     assert!(
-        log.events
-            .iter()
-            .any(|(_, e)| *e == LinkEvent::TornDown(held_link, Reason::Closed)),
+        log.events.iter().any(
+            |(_, e)| matches!(e, LinkEvent::TornDown(x, _, Reason::Closed) if *x == held_link)
+        ),
         "the hanging link is closed: {:?}",
         log.events
     );
@@ -475,7 +475,7 @@ fn driver_shutdown_aborts_pending_connects() {
                 .connects
                 .iter()
                 .filter_map(|(_, p, _)| match p {
-                    Purpose::Link(l) => Some(*l),
+                    Purpose::Link(l, _) => Some(*l),
                     Purpose::Control(_) => None,
                 })
                 .collect();
@@ -543,7 +543,7 @@ fn driver_close_reconnect_race_discards_old_completion() {
                 .connects
                 .iter()
                 .filter_map(|(_, p, iso)| match p {
-                    Purpose::Link(l) => Some((*l, *iso)),
+                    Purpose::Link(l, _) => Some((*l, *iso)),
                     Purpose::Control(_) => None,
                 })
                 .collect();
@@ -587,7 +587,7 @@ fn driver_close_reconnect_race_discards_old_completion() {
                 );
             }
             let new_up = log.events.iter().any(|(_, e)| match e {
-                LinkEvent::Up(l) => !old.iter().any(|(o, _)| o == l),
+                LinkEvent::Up(l, _) => !old.iter().any(|(o, _)| o == l),
                 _ => false,
             });
             assert!(new_up, "close at {close_at}: the Balanced link came up");
@@ -635,13 +635,13 @@ fn direct_blackhole_link_is_closed_within_idle_bound() {
         let up = log
             .events
             .iter()
-            .find_map(|(t, e)| (*e == LinkEvent::Up(silent)).then_some(*t))
+            .find_map(|(t, e)| (matches!(e, LinkEvent::Up(x, _) if *x == silent)).then_some(*t))
             .unwrap();
         let torn = log
             .events
             .iter()
             .find_map(|(t, e)| match e {
-                LinkEvent::TornDown(l, reason) if *l == silent => Some((*t, *reason)),
+                LinkEvent::TornDown(l, _, reason) if *l == silent => Some((*t, *reason)),
                 _ => None,
             })
             .unwrap();
@@ -660,7 +660,7 @@ fn direct_blackhole_link_is_closed_within_idle_bound() {
         assert!(
             !log.events
                 .iter()
-                .any(|(_, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == other)),
+                .any(|(_, e)| matches!(e, LinkEvent::TornDown(l, _, _) if *l == other)),
             "{:?}",
             log.events
         );
@@ -705,7 +705,7 @@ fn driver_never_completing_connect_is_bounded() {
             let started = log
                 .connects
                 .iter()
-                .find_map(|(t, p, _)| matches!(p, Purpose::Link(l) if *l == stuck).then_some(*t))
+                .find_map(|(t, p, _)| matches!(p, Purpose::Link(l, _) if *l == stuck).then_some(*t))
                 .unwrap();
             let bound = secmp_testkit::harness::RelayLimits::defaults().link_idle_ms;
             assert_eq!(bound, 240_000);
@@ -715,7 +715,7 @@ fn driver_never_completing_connect_is_bounded() {
                 .find_map(|(t, l, up)| (*l == stuck && !up).then_some(*t))
                 .or_else(|| {
                     log.events.iter().find_map(|(t, e)| {
-                        matches!(e, LinkEvent::TornDown(l, _) if *l == stuck).then_some(*t)
+                        matches!(e, LinkEvent::TornDown(l, _, _) if *l == stuck).then_some(*t)
                     })
                 });
             // the mechanism: the driver's own connect timeout over provider connect + link handshake, which is below the
@@ -733,7 +733,7 @@ fn driver_never_completing_connect_is_bounded() {
             assert!(
                 !log.events
                     .iter()
-                    .any(|(_, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == other)),
+                    .any(|(_, e)| matches!(e, LinkEvent::TornDown(l, _, _) if *l == other)),
                 "hang {hang}: the other link was torn down"
             );
         });
@@ -781,13 +781,13 @@ fn driver_hanging_writer_does_not_shift_staggered_tick() {
         let up_held = log
             .events
             .iter()
-            .find_map(|(t, e)| (*e == LinkEvent::Up(held)).then_some(*t))
+            .find_map(|(t, e)| (matches!(e, LinkEvent::Up(x, _) if *x == held)).then_some(*t))
             .unwrap();
         assert_eq!(up_held, 119_999, "the late link comes up at 119 999");
         let torn_healthy: Vec<_> = log
             .events
             .iter()
-            .filter(|(_, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == healthy))
+            .filter(|(_, e)| matches!(e, LinkEvent::TornDown(l, _, _) if *l == healthy))
             .collect();
         assert!(
             torn_healthy.is_empty(),
@@ -896,10 +896,9 @@ fn driver_closes_a_link_whose_write_is_pending_at_its_next_tick() {
         rig.run_minutes(1, None).await;
         let held = link_of(&rig, 0);
         let log = rig.x.driver.log().unwrap();
-        let torn = log
-            .events
-            .iter()
-            .find_map(|(t, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == held).then_some(*t));
+        let torn = log.events.iter().find_map(|(t, e)| {
+            matches!(e, LinkEvent::TornDown(l, _, _) if *l == held).then_some(*t)
+        });
         assert_eq!(torn, Some(10_000), "{:?}", log.events);
     });
 }
@@ -1184,10 +1183,12 @@ fn driver_reports_no_unmatched_written() {
 /// `FETCH_MULTI`. Per period the test records how many cells were newly committed (decided and persisted by the worker, so
 /// delivered to the conversation) and when each cell became ready to acknowledge — the scheduler's *internal* acknowledgement
 /// state (`Scheduler::acked`), which the next `FETCH_MULTI` carries — and, as a second series, when the relay saw the
-/// acknowledgement (its head moved). The measured values are the expectation: **one cell is committed per response, each is
-/// ready to be acknowledged one period after its commit, and the relay sees it with the next `FETCH_MULTI`** — the cost the Phase-B report
-/// names (a `FETCH` response commits at most one new cell instead of up to four; the fix needs a core API, M7). The numbers
-/// are printed (`target/m6-evidence/R-01.txt`) and change only with the reviewer.
+/// acknowledgement (its head moved). M7 B-SC (OQ-20, OPEN-M7-08 A; the M6 series — one cell per response, each acknowledged
+/// one period after its commit — is history): the core hands every cell of a response to the worker at once and
+/// acknowledges the highest committed prefix, so the expectation is now **all four cells are committed after the first
+/// response, each is ready to be acknowledged as soon as it is committed, and the relay sees one acknowledgement of all four
+/// with the next `FETCH_MULTI`, at most one period later**. The numbers are printed (`target/m6-evidence/R-01.txt`) and
+/// change only with the reviewer.
 #[test]
 fn receive_throughput_per_fetch_is_measured() {
     use crate::m6_activity::Event;
@@ -1269,14 +1270,21 @@ fn receive_throughput_per_fetch_is_measured() {
         crate::m6_common::evidence("R-01", &text);
         assert_eq!(got_at.len(), 4, "all four cells are committed: {text}");
         assert_eq!(acked_at.len(), 4, "all four become ready to acknowledge: {text}");
-        assert_eq!(relay_acks.len(), 4, "the relay saw four acknowledgements: {text}");
+        assert_eq!(relay_acks.len(), 1, "the relay saw one acknowledgement of all four: {text}");
         assert!(
-            relay_acks.iter().zip(&acked_at).all(|(w, a)| w >= a),
-            "the relay sees an acknowledgement no earlier than it is ready: {text}"
+            acked_at.iter().all(|a| relay_acks.iter().all(|w| w >= a)),
+            "the relay sees the acknowledgement no earlier than it is ready: {text}"
         );
-        // one cell per response: the commits are one period apart
-        assert!(steps.iter().all(|d| *d == 10), "{text}");
-        // each acknowledgement is ready one period after its commit
-        assert!(delays.iter().all(|d| *d == 10), "{text}");
+        // every cell of the response at once: the commits fall in one second
+        assert!(steps.iter().all(|d| *d == 0), "{text}");
+        // each acknowledgement is ready as soon as its cell is committed
+        assert!(delays.iter().all(|d| *d == 0), "{text}");
+        // the next FETCH_MULTI carries it: at most one period (10 s) after the commits
+        assert!(
+            relay_acks
+                .iter()
+                .all(|w| w.saturating_sub(got_at.last().copied().unwrap_or(0)) <= 10),
+            "{text}"
+        );
     });
 }

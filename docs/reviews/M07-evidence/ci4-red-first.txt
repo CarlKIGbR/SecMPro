@@ -1,0 +1,4 @@
+head 1a5c5ed99d62007f3df0ba520394e79b51034c15
+lock: panicked at crates/secmp-client-core/src/profile.rs:929:9: a write to `lock` is caught
+M-wal: panicked at crates/secmp-client-core/src/profile.rs:934:9: a changed -wal byte changes the hash
+M-shm: panicked at crates/secmp-client-core/src/profile.rs:949:9: the -shm content is not hashed

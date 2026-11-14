@@ -1,0 +1,44 @@
+head 85a589a8a1059ded159b812f447f46da3793fd89
+diff --git a/crates/secmp-client-core/src/scheduler/core/mod.rs b/crates/secmp-client-core/src/scheduler/core/mod.rs
+index 2888a34..9675608 100644
+--- a/crates/secmp-client-core/src/scheduler/core/mod.rs
++++ b/crates/secmp-client-core/src/scheduler/core/mod.rs
+@@ -857,7 +857,7 @@ impl World {
+         }
+         let todo = match &link.state {
+             State::Down { at } if *at <= now => Todo::Connect,
+-            State::Up(up) if now >= up.die_at => Todo::Lifetime,
++            State::Up(up) if false => Todo::Lifetime,
+             State::Up(_) => Todo::Run,
+             _ => Todo::Nothing,
+         };
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+   Compiling secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.35s
+────────────
+ Nextest run ID 83f8d8fb-4ef3-4f7c-aa76-aaf437d0a82b with nextest profile: default
+    Starting 2 tests across 1 binary (310 tests skipped)
+        FAIL [   0.082s] (1/2) secmp-testkit::harness m0_early::link_is_torn_down_at_the_end_of_its_lifetime
+  stdout ───
+
+    running 1 test
+    test m0_early::link_is_torn_down_at_the_end_of_its_lifetime ... FAILED
+
+    failures:
+
+    failures:
+        m0_early::link_is_torn_down_at_the_end_of_its_lifetime
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 311 filtered out; finished in 0.07s
+
+  stderr ───
+
+    thread 'm0_early::link_is_torn_down_at_the_end_of_its_lifetime' (3826621) panicked at crates/secmp-testkit/tests/harness/m0_early.rs:160:5:
+    torn down at its end: []
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.152s] (2/2) secmp-testkit::harness m0_early::next_deadline_moves_past_the_lead_once_it_is_reached
+────────────
+     Summary [   0.153s] 2 tests run: 1 passed, 1 failed, 310 skipped
+        FAIL [   0.082s] (1/2) secmp-testkit::harness m0_early::link_is_torn_down_at_the_end_of_its_lifetime
+error: test run failed

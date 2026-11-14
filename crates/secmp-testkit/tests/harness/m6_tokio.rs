@@ -7,12 +7,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use secmp_client_core::clock::{Clock, TokioClock};
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::core::Scheduler;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::run::{Driver, Only, Purpose};
 use secmp_client_core::scheduler::types::{CellSource, QueueId, RelayId, Transport};
+use secmp_client_core::sessions::actor::{Conversation, Conversations};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{Entropy, FixedEntropy};
@@ -221,7 +221,7 @@ impl<P: StreamProvider + 'static> TClient<P> {
                 .iter()
                 .find(|(_, _, i)| *i == iso)
                 .map(|(_, p, _)| match p {
-                    Purpose::Link(l) => l.0,
+                    Purpose::Link(l, _) => l.0,
                     Purpose::Control(op) => CONTROL_SLOT_BASE.saturating_add(op.0),
                 })
         };
@@ -284,6 +284,7 @@ pub const AI_COSTS: Costs = Costs {
     prepare_real: 20,
     prepare_dummy: 1,
     receive: 5,
+    jitter: 0,
 };
 
 fn text(n: u64, len: usize) -> OutMessage {
@@ -330,6 +331,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                 key_p,
                 START_UNIX,
             );
+            conv_x.raw_app_payloads_kat();
             conv_x.bind(x_send, x_recv);
             let mut conv_p = Conversation::new(
                 state_p,
@@ -339,11 +341,12 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                 key_x,
                 START_UNIX,
             );
+            conv_p.raw_app_payloads_kat();
             conv_p.bind(QueueId(0), QueueId(1));
             let first = conv_x.prepare_direct(0).unwrap();
             let mut convs = PeerConvs::new();
             convs.add(conv_p);
-            convs.deliver(QueueId(1), 0, &first.cell).unwrap();
+            convs.deliver(QueueId(1), 0, 0, &first.cell).unwrap();
             let x_conv = x.convs.lock().unwrap().add(conv_x);
             peers.push(TPeer {
                 convs,
@@ -380,7 +383,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                     break;
                 }
                 for (id, cell) in cells {
-                    CellSource::deliver(&mut peer.convs, QueueId(1), id, &cell).unwrap();
+                    CellSource::deliver(&mut peer.convs, QueueId(1), 0, id, &cell).unwrap();
                     peer.drained_to = peer.drained_to.max(id);
                 }
             }
@@ -397,6 +400,27 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                 t.send(&peer.into_x, &cell.cell).await.unwrap();
                 sent = sent.saturating_add(1);
             }
+        }
+    }
+
+    /// Peer `contact` sends `count` one-cell messages (ids from `first`) straight into `x`'s receive queue on a set-up
+    /// link (M7 B-SC drain tests, SC-01: a backlog, or one cell per period).
+    pub(crate) async fn peer_cells(&mut self, contact: usize, first: u64, count: u64, now: u64) {
+        let Self { setup, peers, .. } = self;
+        let peer = peers.get_mut(contact).unwrap();
+        for n in first..first.saturating_add(count) {
+            peer.convs
+                .get_mut(0)
+                .unwrap()
+                .outbox_mut()
+                .enqueue(text(n.saturating_add(2_000_000), 20), now);
+        }
+        let mut t = setup.transport(&mut peer.pool).await;
+        for _ in 0..count {
+            let cell = CellSource::prepare_cell(&mut peer.convs, QueueId(0), now)
+                .unwrap()
+                .unwrap();
+            t.send(&peer.into_x, &cell.cell).await.unwrap();
         }
     }
 
@@ -464,7 +488,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
             .events
             .iter()
             .filter_map(|(t, e)| match e {
-                secmp_client_core::scheduler::types::LinkEvent::Up(l) => Some((l.0, *t)),
+                secmp_client_core::scheduler::types::LinkEvent::Up(l, _) => Some((l.0, *t)),
                 _ => None,
             })
             .collect();

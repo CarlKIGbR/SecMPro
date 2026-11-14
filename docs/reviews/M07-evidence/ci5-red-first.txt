@@ -1,0 +1,24 @@
+head 9589530f7da221c19a22eb5094154ed8fd38af81 + ci5-code.diff
+before: <T1> 1 passed, <T2> 1 passed
+R1:
+sed -i '/^          - 23/d' .github/workflows/ci.yml
+cargo test --locked -p xtask -- gates::tests::mutant_shard_matrix_matches_the_shard_count
+thread 'gates::tests::mutant_shard_matrix_matches_the_shard_count' (3380369) panicked at xtask/src/gates.rs:9956:9:
+["mutant-shards: ci.yml `mutants-shard`: matrix `shard:` has 23 items, lacks [\"23\"], has the extra [] (0…23 in order, expect::MUTANT_SHARDS = 24)"]
+R2:
+sed -i 's|matrix.shard }}/24|matrix.shard }}/12|' .github/workflows/ci-dispatch.yml
+cargo test --locked -p xtask -- gates::tests::mutant_shard_matrix_matches_the_shard_count
+thread 'gates::tests::mutant_shard_matrix_matches_the_shard_count' (3380673) panicked at xtask/src/gates.rs:9956:9:
+["mutant-shards: ci-dispatch.yml `dispatch-mutants-shard` runs the gates [\"cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\"], not [\"cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\"]"]
+R3:
+sed -i 's/MUTANT_SHARDS: usize = 24;/MUTANT_SHARDS: usize = 12;/' xtask/src/expect.rs
+cargo test --locked -p xtask -- gates::tests::mutant_shard_matrix_matches_the_shard_count
+thread 'gates::tests::mutant_shard_matrix_matches_the_shard_count' (3380975) panicked at xtask/src/gates.rs:9956:9:
+["mutant-shards: ci.yml `mutants-shard`: matrix `shard:` has 24 items, lacks [], has the extra [\"12\", \"13\", \"14\", \"15\", \"16\", \"17\", \"18\", \"19\", \"20\", \"21\", \"22\", \"23\"] (0…11 in order, expect::MUTANT_SHARDS = 12)", "mutant-shards: ci.yml `mutants-shard` runs the gates [\"cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\"], not [\"cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\"]", "mutant-shards: ci-dispatch.yml `dispatch-mutants-shard`: matrix `shard:` has 24 items, lacks [], has the extra [\"12\", \"13\", \"14\", \"15\", \"16\", \"17\", \"18\", \"19\", \"20\", \"21\", \"22\", \"23\"] (0…11 in order, expect::MUTANT_SHARDS = 12)", "mutant-shards: ci-dispatch.yml `dispatch-mutants-shard` runs the gates [\"cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\"], not [\"cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\"]"]
+R4:
+sed -i 's/^    for k in 0..n {/    for k in 0..n.min(12) {/' xtask/src/gates.rs
+cargo test --locked -p xtask -- gates::tests::mutants_merge_needs_all_24_shards
+thread 'gates::tests::mutants_merge_needs_all_24_shards' (3381277) panicked at xtask/src/gates.rs:11039:9:
+assertion `left == right` failed
+  left: ["a result directory for shard 12, outside 0..24", "a result directory for shard 13, outside 0..24", "a result directory for shard 14, outside 0..24", "a result directory for shard 15, outside 0..24", "a result directory for shard 16, outside 0..24", "a result directory for shard 17, outside 0..24", "a result directory for shard 18, outside 0..24", "a result directory for shard 19, outside 0..24", "a result directory for shard 20, outside 0..24", "a result directory for shard 21, outside 0..24", "a result directory for shard 22, outside 0..24"]
+restored: 26f326c1 08430c8c 119b1777 f1f9a62b b3a923fe

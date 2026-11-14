@@ -68,6 +68,42 @@ fn accept_zero_dh_rejects_and_keeps_opk() {
     }
 }
 
+/// Q147 (v): with feature `kat`, `k_id_kat` and `sk_digest_kat` report the last `K_id` and SHA-256 of the last `SK`
+/// derived on this thread, `None` before the first; a later derivation replaces an earlier one.
+#[cfg(feature = "kat")]
+#[test]
+fn key_accessors_report_the_last_derivation() -> Result<()> {
+    let s = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]);
+    assert_eq!(k_id_kat(), None);
+    assert_eq!(sk_digest_kat(), None);
+    let first = k_id(&[1; 16], &s(2)?, &s(3)?, &s(4)?, &s(5)?, &s(6)?)?;
+    assert_eq!(k_id_kat(), Some(*first.expose_secret()));
+    let second = k_id(&[9; 16], &s(2)?, &s(3)?, &s(4)?, &s(5)?, &s(6)?)?;
+    assert_ne!(first.expose_secret(), second.expose_secret());
+    assert_eq!(k_id_kat(), Some(*second.expose_secret()));
+    assert_eq!(sk_digest_kat(), None, "no SK yet");
+    let shared = Shared {
+        dh1: s(1)?,
+        dh2: s(2)?,
+        dh3: s(3)?,
+        dh4: s(4)?,
+        ss_spk: s(5)?,
+        ss_opk: s(6)?,
+    };
+    let sk = session_key(&shared, &[7; 32])?;
+    assert_eq!(
+        sk_digest_kat(),
+        Some(secmp_crypto::sha256(&[sk.expose_secret()]))
+    );
+    assert_ne!(
+        sk_digest_kat(),
+        Some(*sk.expose_secret()),
+        "a digest, not SK"
+    );
+    assert_eq!(k_id_kat(), Some(*second.expose_secret()), "unchanged by SK");
+    Ok(())
+}
+
 /// V-8 / M3 F12 (matrix (e)), the crate-private part of `hx_secrets_are_zeroizing_types`: the store's secrets and
 /// the persisted cells/state are held in zeroizing types; a signature change breaks these ascriptions.
 #[test]

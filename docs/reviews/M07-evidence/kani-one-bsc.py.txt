@@ -1,0 +1,39 @@
+# M7 B-SC: the A-3b wrapper (docs/reviews/M07-evidence/kani-one-a3b.py.txt) with the package as an argument.
+# Usage: python3 -I kani-one.py <package> <harness>   (one process per harness: RUSAGE_CHILDREN is a running maximum)
+# secmp-proto runs with `-Z stubbing` (its [package.metadata.kani.unstable]); secmp-client-core has none.
+import resource
+import subprocess
+import sys
+import time
+
+LIMIT_KIB = 14160156  # expect::KANI_CBMC_RSS_LIMIT_KIB
+package = sys.argv[1]
+harness = sys.argv[2]
+cmd = ['cargo', 'kani', '--package', package]
+if package == 'secmp-proto':
+    cmd += ['-Z', 'stubbing']
+cmd += ['--harness', 'kani_proofs::' + harness, '--exact']
+t0 = time.time()
+p = subprocess.run(cmd, cwd='/work/SecMPro', capture_output=True, text=True)
+wall = time.time() - t0
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+out = p.stdout + p.stderr
+keep = []
+lines = out.split('\n')
+for i, line in enumerate(lines):
+    t = line.strip()
+    if t.startswith('Checking harness') or t.startswith('VERIFICATION') or t.startswith('Verification Time') \
+            or t.startswith('Complete -') or t.startswith('SUMMARY') or 'cover properties satisfied' in t \
+            or (t.startswith('** ') and ' of ' in t and 'failed' in t):
+        keep.append('  ' + t)
+    elif t.startswith('Check ') and '.cover.' in t:
+        keep.append('  ' + t)
+        for nxt in lines[i + 1:i + 4]:
+            if nxt.strip().startswith('- Status:'):
+                keep.append('  ' + nxt.strip())
+                break
+if p.returncode != 0:
+    keep.append('  --- failure output (tail) ---')
+    keep += ['  ' + x for x in lines[-60:]]
+print('\n'.join(keep))
+print(f'  exit {p.returncode}; wall {wall:.0f} s; peak {peak} KiB = {100.0 * peak / LIMIT_KIB:.1f} % of {LIMIT_KIB} KiB')

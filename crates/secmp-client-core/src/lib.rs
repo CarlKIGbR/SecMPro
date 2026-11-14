@@ -12,8 +12,32 @@
 //! `QueuePool` and `outbox` (in-memory behind traits). Contacts, sessions, invitations and the `Api` are M7.
 #![forbid(unsafe_code)]
 
+#[cfg(not(kani))]
+pub mod api;
 pub mod clock;
+#[cfg(not(kani))]
+pub mod contacts;
+#[cfg(not(kani))]
+pub mod hub;
+#[cfg(not(kani))]
+pub mod invitations;
 #[cfg(kani)]
 mod kani_proofs;
+#[cfg(not(kani))]
+pub mod outbox;
+#[cfg(not(kani))]
+pub mod persist;
+#[cfg(not(kani))]
+pub mod profile;
+#[cfg(not(kani))]
+pub mod relay_view;
+pub mod retention;
 pub mod scheduler;
+#[cfg(not(kani))]
+pub mod sessions;
+#[cfg(not(kani))]
+pub mod settings;
+#[cfg(test)]
+#[cfg(feature = "kat")]
+mod testutil;
 pub mod timing;

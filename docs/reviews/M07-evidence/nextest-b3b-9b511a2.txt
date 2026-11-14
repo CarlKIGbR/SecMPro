@@ -1,0 +1,7 @@
+head 9b511a24167e33861a0c9ca95e91e0c7700c83c5 (clean tree)
+$ cargo nextest run -p secmp-client-core -p secmp-proto --features kat
+────────────
+     Summary [   9.518s] 487 tests run: 487 passed, 0 skipped
+$ cargo nextest run -p secmp-testkit --features harness --test harness -E 'test(/^m7_accept::/)'
+────────────
+     Summary [   4.269s] 4 tests run: 4 passed, 288 skipped

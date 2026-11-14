@@ -92,11 +92,11 @@ Tables (SQLCipher, one database per profile):
 | `identity` | IKS secret material (wrapped), fingerprint, creation time |
 | `prekeys` | SPK/OPK secret material (wrapped), ids, expiry, used flag |
 | `relays` | `RelayRef`, access key (`RelayInfo` is never stored — spec §8.2) |
-| `contacts` | peer `IKSPublic`, fingerprint, display name, verified flag, routes (ordered `RouteDescriptor`s), our queues for this contact (`rid`, recv key), state |
+| `contacts` | peer `IKSPublic`, fingerprint, display name, verified flag, routes (ordered `RouteDescriptor`s), our queues for this contact (`rid`, recipient key, sender seed, period), state |
 | `sessions` | serialised `RatchetState` per contact (persist-before-send) |
 | `outbox` | queued/relayed/delivered `AppMessage`s with cell-id mapping for eviction handling |
 | `messages` | conversation history (content, direction, ts, expiry, view-once state) |
-| `invitations` | issued invitations: `ld_id`, `link_key`, link-data owner key, `spk_id`/`opk_id`, invitation-queue recipient key, `inv_period_s`, `expires`, status (pending/consumed/expired) |
+| `invitations` | issued invitations: `ld_id`, `link_key`, link-data owner key, `spk_id`/`opk_id`, invitation-queue recipient key and sender seed, `inv_period_s`, `expires`, status (pending/consumed/expired) |
 | `settings` | mode (Strict/Balanced/Low-bw), screen-security options, retention defaults |
 
 All secret columns are additionally wrapped with a per-profile master key (`04-client-security.md` §3). Nothing in the store is ever written unencrypted; temp files are forbidden (`PRAGMA temp_store = MEMORY`, `journal_mode = WAL` inside the encrypted file). Ratchet persistence is incremental (chain keys/counters per slot; skipped keys row-by-row), because constant-rate dummies update every session every slot.

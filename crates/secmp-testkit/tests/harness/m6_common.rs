@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Shared set-up of the M6 scheduler tests: contacts over the in-process relay on the virtual clock.
 
-use secmp_client_core::scheduler::conversation::Conversation;
 use secmp_client_core::scheduler::core::LinkKind;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{CellSource, QueueId, RelayId};
+use secmp_client_core::sessions::actor::Conversation;
 use secmp_proto::wire::cell::Cell;
 use secmp_testkit::harness::{
     Dir, EntropyPool, HarnessConfig, START_UNIX, TraceEntry, VirtualDriver,
@@ -43,7 +43,7 @@ pub fn seed_conversation(sim: &mut VirtualDriver, alice: usize, bob: usize, c: &
         .unwrap();
     sim.client(bob)
         .convs
-        .deliver(c.b_recv, 0, &cell.cell)
+        .deliver(c.b_recv, 0, 0, &cell.cell)
         .unwrap();
 }
 
@@ -105,11 +105,14 @@ pub fn contact_on(
         .sched
         .add_send_queue(now, relay, sc_alice, period_ba)
         .unwrap();
-    sim.client(bob).material.queues.insert(bob_recv.0, (rb, sb));
+    sim.client(bob)
+        .material
+        .queues
+        .insert(bob_recv.0, (rb, Some(sb)));
     sim.client(alice)
         .material
         .queues
-        .insert(alice_recv.0, (ra, sa));
+        .insert(alice_recv.0, (ra, Some(sa)));
     let (state_alice, state_bob) = sim.ratchet_states(alice, bob);
     let peer_alice = sim.peer_key(alice);
     let peer_bob = sim.peer_key(bob);
@@ -126,6 +129,7 @@ pub fn contact_on(
         peer_bob,
         START_UNIX,
     );
+    conv_alice.raw_app_payloads_kat();
     let mut conv_bob: TestConv = Conversation::new(
         state_bob,
         MemOutbox::new(),
@@ -137,6 +141,7 @@ pub fn contact_on(
         peer_alice,
         START_UNIX,
     );
+    conv_bob.raw_app_payloads_kat();
     conv_alice.bind(alice_send, alice_recv);
     conv_bob.bind(bob_send, bob_recv);
     let index_alice = sim.client(alice).convs.add(conv_alice);
@@ -204,7 +209,7 @@ pub fn half_contact(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u
     sim.client(alice)
         .material
         .queues
-        .insert(a_recv.0, (recv_seed, send_seed));
+        .insert(a_recv.0, (recv_seed, Some(send_seed)));
     let (state_bob, state_alice) = sim.ratchet_states(bob, alice);
     let peer_alice = sim.peer_key(alice);
     let peer_bob = sim.peer_key(bob);
@@ -216,6 +221,7 @@ pub fn half_contact(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u
         peer_bob,
         START_UNIX,
     );
+    conv_alice.raw_app_payloads_kat();
     let mut conv_bob: TestConv = Conversation::new(
         state_bob,
         MemOutbox::new(),
@@ -224,6 +230,7 @@ pub fn half_contact(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u
         peer_alice,
         START_UNIX,
     );
+    conv_bob.raw_app_payloads_kat();
     conv_alice.bind(QueueId(u32::MAX - 1), a_recv);
     conv_bob.bind(QueueId(u32::MAX), QueueId(u32::MAX - 2));
     let conv_a = sim.client(alice).convs.add(conv_alice);
@@ -297,6 +304,7 @@ pub fn send_only_full(
         peer,
         START_UNIX,
     );
+    conv.raw_app_payloads_kat();
     conv.bind(a_send, QueueId(u32::MAX));
     (sim.client(alice).convs.add(conv), sid, state_bob)
 }

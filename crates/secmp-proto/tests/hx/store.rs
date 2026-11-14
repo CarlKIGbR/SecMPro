@@ -5,8 +5,9 @@
 use secmp_crypto::SecretBytes;
 use secmp_proto::inv::{IssueError, MAX_INVITATION_LIFE_S};
 use secmp_proto::prekeys::{
-    IdentityKeys, InvitationRecord, IssueParams, Issued, MemoryPrekeyStore, PrekeyStore,
-    SPK_ROTATION_S, SpkGeneration,
+    IdentityKeys, InvitationRecord, IssueParams, Issued, MemoryPrekeyStore, OPK_SEEDS_LEN,
+    OpkSecrets, PoolQueueSeeds, PrekeyStore, RECORD_LEN, SPK_ROTATION_S, SPK_SEEDS_LEN,
+    SpkGeneration,
 };
 use secmp_proto::tr::{FixedEntropy, OsEntropy};
 use secmp_proto::wire::Period;
@@ -474,8 +475,9 @@ fn patterned_draws() -> Vec<u8> {
 fn assert_zeroizing<T: secmp_crypto::ZeroizeOnDrop>(_: &T) {}
 
 /// G-04: the record `issue_invitation` stores holds the link-data owner seed and the invitation queue's recipient
-/// seed (zeroizing `SecretBytes<32>`), as drawn, and a copy (the restore stand-in; the product has no record
-/// serialiser) has the same seeds and public keys.
+/// seed (zeroizing `SecretBytes<32>`), as drawn, and a copy (the restore stand-in; the product's record serialiser,
+/// `InvitationRecord::to_bytes`, is tested by `seed_encodings_round_trip_and_reject_every_other_length`) has the same
+/// seeds and public keys.
 #[test]
 fn invitation_record_holds_owner_and_invq_recv_keys() {
     let id = identity();
@@ -609,4 +611,274 @@ fn issue_invitation_derives_inv_sid() {
         hex(&c4.output("blob")),
         "hx-0004 blob"
     );
+}
+
+/// The pool-queue seeds `recv`, `send`.
+fn pool_seeds(recv: &[u8], send: &[u8]) -> PoolQueueSeeds {
+    PoolQueueSeeds {
+        invq_recv_seed: SecretBytes::from_slice(recv).unwrap(),
+        inv_send_seed: SecretBytes::from_slice(send).unwrap(),
+    }
+}
+
+/// Q147 (i): `issue_invitation_on` takes `inv_send_seed` and `invq_recv_seed` from the pooled queue and draws neither;
+/// every other draw keeps its place. With the hx-0001/3/4 draws less those two seeds, and the two seeds of hx-0003 as
+/// the queue's, the product produces case 3's invitation and `inv_sid` (§9.1 of the given seeds) and case 4's blob —
+/// the frozen vectors are the oracle.
+#[test]
+fn issue_invitation_on_uses_the_pool_queue_seeds() {
+    use secmp_proto::Encode;
+    use secmp_proto::wire::inv::{Onion, RelayRef};
+    let cases = crate::vectors::load_cases();
+    let by = |n: u32| crate::vectors::by_id(&cases, &format!("hx-{n:04}"));
+    let (c1, c3, c4) = (by(1), by(3), by(4));
+    let identity_seed = [
+        c1.input("ik_mldsa_xi"),
+        c1.input("ik_ed_seed"),
+        c1.input("ik_dh_sk"),
+    ]
+    .concat();
+    let id = IdentityKeys::generate(&mut FixedEntropy::new(&identity_seed)).unwrap();
+    // the draws of `issue_invitation_derives_inv_sid` without `inv_send_seed` and `invq_recv_seed`
+    let draws = [
+        c1.input("spk_dh_sk"),
+        c1.input("spk_kem_seed"),
+        c1.input("rpk_kem_seed"),
+        c1.input("opk_dh_sk"),
+        c1.input("opk_kem_seed"),
+        c1.input("rnd"),
+        c3.input("ld_id"),
+        c3.input("link_key"),
+        c3.input("inv_sid_discarded"),
+        c4.input("n"),
+        c3.input("owner_seed"),
+    ]
+    .concat();
+    let mut e = FixedEntropy::new(&draws);
+    let mut store = MemoryPrekeyStore::starting_at(7, 42);
+    let issued = store
+        .issue_invitation_on(
+            &id,
+            IssueParams {
+                relay: RelayRef {
+                    relay_fp: c3.input("relay_fp").try_into().unwrap(),
+                    onion: Onion::from_pubkey(&c3.input("onion_pubkey").try_into().unwrap()),
+                    akc: c3.input("akc").try_into().unwrap(),
+                    direct: None,
+                },
+                inv_period: Period::S20,
+                profile: Profile::new("bob", None).unwrap(),
+                now: CREATED,
+                expires: EXPIRES,
+                spk_expiry: EXPIRES,
+            },
+            pool_seeds(&c3.input("invq_recv_seed"), &c3.input("inv_send_seed")),
+            &mut e,
+        )
+        .unwrap();
+    assert_eq!(e.remaining(), 0, "every draw consumed, no seed drawn");
+    assert_eq!(
+        hex(issued.invitation.encode().unwrap().as_slice()),
+        hex(&c3.output("invitation")),
+        "hx-0003 invitation"
+    );
+    assert_eq!(hex(&issued.invitation.inv_sid), hex(&c3.output("inv_sid")));
+    // §9.1 of the given seeds, recomputed here
+    let digest = secmp_crypto::sha256(&[
+        secmp_crypto::Label::QSid.as_bytes(),
+        &ed_pk(&c3.input("invq_recv_seed")),
+        &ed_pk(&c3.input("inv_send_seed")),
+    ]);
+    assert_eq!(
+        issued.invitation.inv_sid.as_slice(),
+        digest.get(..16).unwrap()
+    );
+    let record = store.record(&issued.invitation.ld_id).unwrap();
+    assert_eq!(
+        record.invq_recv_seed.expose_secret().as_slice(),
+        c3.input("invq_recv_seed").as_slice()
+    );
+    assert_eq!(
+        hex(record.invq_recv_pk().unwrap().as_bytes()),
+        hex(&c3.output("invq_recv_pk"))
+    );
+    assert_eq!(
+        hex(record.owner_pk().unwrap().as_bytes()),
+        hex(&c3.output("owner_pk"))
+    );
+    assert_eq!(
+        hex(issued.blob.encode().unwrap().as_slice()),
+        hex(&c4.output("blob")),
+        "hx-0004 blob"
+    );
+}
+
+/// Q147 (i): with the fill patterns, `issue_invitation_on` consumes exactly the draws of `issue_invitation` less the two
+/// seeds (patterns 10 and 12), in the same order; the seeds are the given ones. A bound error records nothing.
+#[test]
+fn issue_invitation_on_draws_no_seed() {
+    let id = identity();
+    let without_seeds: Vec<u8> = [
+        vec![1; 32],
+        vec![2; 64],
+        vec![3; 64],
+        vec![4; 32],
+        vec![5; 64],
+        vec![6; 32],
+        vec![7; 16],
+        vec![8; 32],
+        vec![9; 16],
+        vec![11; 24],
+        vec![13; 32],
+    ]
+    .concat();
+    let mut store = MemoryPrekeyStore::default();
+    let mut e = FixedEntropy::new(&without_seeds);
+    let issued = store
+        .issue_invitation_on(
+            &id,
+            params(CREATED, EXPIRES, EXPIRES),
+            pool_seeds(&[0x51; 32], &[0x52; 32]),
+            &mut e,
+        )
+        .unwrap();
+    assert_eq!(e.remaining(), 0, "every draw consumed");
+    assert_eq!(issued.invitation.ld_id, [7; 16]);
+    assert_eq!(issued.invitation.link_key.expose_secret(), &[8; 32]);
+    assert_eq!(issued.invitation.inv_send_seed.expose_secret(), &[0x52; 32]);
+    let record = store.record(&issued.invitation.ld_id).unwrap();
+    assert_eq!(record.invq_recv_seed.expose_secret(), &[0x51; 32]);
+    assert_eq!(
+        record.owner_seed.expose_secret(),
+        &[13; 32],
+        "owner_seed drawn"
+    );
+    assert_eq!(opened(&issued).bundle.opk_id, record.opk_id);
+    // the same entropy through `issue_invitation` runs out: it draws the two seeds
+    let mut e = FixedEntropy::new(&without_seeds);
+    assert!(
+        MemoryPrekeyStore::default()
+            .issue_invitation(&id, params(CREATED, EXPIRES, EXPIRES), &mut e)
+            .is_err()
+    );
+    // a bound error: nothing recorded
+    let before = store.digest_kat();
+    let err = store
+        .issue_invitation_on(
+            &id,
+            params(CREATED, CREATED, EXPIRES),
+            pool_seeds(&[0x53; 32], &[0x54; 32]),
+            &mut OsEntropy,
+        )
+        .err();
+    assert_eq!(err, Some(IssueError::AlreadyExpired));
+    assert_eq!(store.digest_kat(), before);
+}
+
+/// Q147 (ii): the persistence encodings of an SPK generation, an OPK and a record — fixed big-endian layouts, the
+/// ML-KEM decapsulation keys as seeds, zeroizing outputs — round-trip to the same keys and bytes; every truncation and
+/// one extension reject with the uniform error.
+#[test]
+fn seed_encodings_round_trip_and_reject_every_other_length() {
+    let id = identity();
+    let mut store = MemoryPrekeyStore::starting_at(0x0102_0304, 0x0a0b_0c0d);
+    let issued = store
+        .issue_invitation(&id, params(CREATED, EXPIRES, EXPIRES), &mut OsEntropy)
+        .unwrap();
+    let rejected = Some(secmp_proto::Error::Rejected);
+
+    let spk = store.current_spk().unwrap();
+    let bytes: secmp_crypto::Zeroizing<Vec<u8>> = spk.to_seeds();
+    assert_eq!(bytes.len(), SPK_SEEDS_LEN);
+    assert_eq!(SPK_SEEDS_LEN, 172);
+    assert_eq!(bytes.get(..4).unwrap(), &[1, 2, 3, 4], "spk_id big-endian");
+    assert_eq!(bytes.get(4..12).unwrap(), &CREATED.to_be_bytes(), "created");
+    let back = SpkGeneration::from_seeds(&bytes).unwrap();
+    assert_eq!(back.id(), spk.id());
+    assert_eq!(back.created(), spk.created());
+    assert_eq!(
+        back.dh_public().unwrap().as_bytes(),
+        spk.dh_public().unwrap().as_bytes()
+    );
+    assert_eq!(back.kem_public().unwrap(), spk.kem_public().unwrap());
+    assert_eq!(back.rpk_public().unwrap(), spk.rpk_public().unwrap());
+    assert_eq!(back.to_seeds().as_slice(), bytes.as_slice());
+    for len in 0..bytes.len() {
+        assert_eq!(
+            SpkGeneration::from_seeds(bytes.get(..len).unwrap()).err(),
+            rejected,
+            "spk {len}"
+        );
+    }
+    let longer = [bytes.as_slice(), &[0]].concat();
+    assert_eq!(SpkGeneration::from_seeds(&longer).err(), rejected);
+
+    let opk_id = store.opk_ids().first().copied().unwrap();
+    let opk = store.opk(opk_id).unwrap();
+    let bytes: secmp_crypto::Zeroizing<Vec<u8>> = opk.to_seeds();
+    assert_eq!(bytes.len(), OPK_SEEDS_LEN);
+    assert_eq!(OPK_SEEDS_LEN, 100);
+    assert_eq!(bytes.get(..4).unwrap(), &[0x0a, 0x0b, 0x0c, 0x0d], "opk_id");
+    let back = OpkSecrets::from_seeds(&bytes).unwrap();
+    assert_eq!(back.id(), opk.id());
+    assert_eq!(
+        back.dh_public().unwrap().as_bytes(),
+        opk.dh_public().unwrap().as_bytes()
+    );
+    assert_eq!(back.kem_public().unwrap(), opk.kem_public().unwrap());
+    assert_eq!(back.to_seeds().as_slice(), bytes.as_slice());
+    for len in 0..bytes.len() {
+        assert_eq!(
+            OpkSecrets::from_seeds(bytes.get(..len).unwrap()).err(),
+            rejected,
+            "opk {len}"
+        );
+    }
+    let longer = [bytes.as_slice(), &[0]].concat();
+    assert_eq!(OpkSecrets::from_seeds(&longer).err(), rejected);
+
+    let record = store.record(&issued.invitation.ld_id).unwrap();
+    let bytes: secmp_crypto::Zeroizing<Vec<u8>> = record.to_bytes();
+    assert_eq!(bytes.len(), RECORD_LEN);
+    assert_eq!(RECORD_LEN, 128);
+    assert_eq!(bytes.get(..16).unwrap(), &record.ld_id);
+    assert_eq!(
+        bytes.get(112..116).unwrap(),
+        &0x0102_0304_u32.to_be_bytes(),
+        "spk_id"
+    );
+    assert_eq!(
+        bytes.get(116..120).unwrap(),
+        &0x0a0b_0c0d_u32.to_be_bytes(),
+        "opk_id"
+    );
+    assert_eq!(bytes.get(120..).unwrap(), &EXPIRES.to_be_bytes(), "expires");
+    let back = InvitationRecord::from_bytes(&bytes).unwrap();
+    assert_eq!(back.ld_id, record.ld_id);
+    assert_eq!(
+        back.link_key.expose_secret(),
+        record.link_key.expose_secret()
+    );
+    assert_eq!(
+        back.owner_seed.expose_secret(),
+        record.owner_seed.expose_secret()
+    );
+    assert_eq!(
+        back.invq_recv_seed.expose_secret(),
+        record.invq_recv_seed.expose_secret()
+    );
+    assert_eq!(
+        (back.spk_id, back.opk_id, back.expires),
+        (record.spk_id, record.opk_id, record.expires)
+    );
+    assert_eq!(back.to_bytes().as_slice(), bytes.as_slice());
+    for len in 0..bytes.len() {
+        assert_eq!(
+            InvitationRecord::from_bytes(bytes.get(..len).unwrap()).err(),
+            rejected,
+            "record {len}"
+        );
+    }
+    let longer = [bytes.as_slice(), &[0]].concat();
+    assert_eq!(InvitationRecord::from_bytes(&longer).err(), rejected);
 }

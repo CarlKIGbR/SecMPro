@@ -1,0 +1,222 @@
+head d5dfdc71c46e2fbbc207d580e6aa94870376116b
+diff --git a/crates/secmp-sys-mem/src/secret_page/grow.rs b/crates/secmp-sys-mem/src/secret_page/grow.rs
+index 8605acd..29df92e 100644
+--- a/crates/secmp-sys-mem/src/secret_page/grow.rs
++++ b/crates/secmp-sys-mem/src/secret_page/grow.rs
+@@ -80,9 +80,6 @@ pub(super) fn lock_with_growth(
+     mut set: impl FnMut(usize, usize) -> Result<(), Error>,
+     growth: Growth,
+ ) -> Result<(), Error> {
+-    if attempt(&mut lock)? {
+-        return Ok(());
+-    }
+     let mut step = growth.first_step;
+     for _ in 0..growth.max_steps {
+         let (min, max) = sizes()?;
+   Compiling secmp-sys-mem v0.0.0 (/work/SecMPro/crates/secmp-sys-mem)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+────────────
+ Nextest run ID ebbab03a-a20b-489f-a9f3-b5cfcd2d0be7 with nextest profile: default
+    Starting 10 tests across 1 binary (9 tests skipped)
+        FAIL [   0.005s] ( 1/10) secmp-sys-mem secret_page::grow::tests::grows_again_when_the_grown_quota_is_taken
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::grows_again_when_the_grown_quota_is_taken ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::grows_again_when_the_grown_quota_is_taken
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::grows_again_when_the_grown_quota_is_taken' (4040167) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:171:9:
+    assertion `left == right` failed
+      left: Err(Error(()))
+     right: Ok(())
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.005s] ( 2/10) secmp-sys-mem secret_page::grow::tests::fails_closed_when_the_quota_cannot_be_set
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::fails_closed_when_the_quota_cannot_be_set ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::fails_closed_when_the_quota_cannot_be_set
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::fails_closed_when_the_quota_cannot_be_set' (4040169) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:241:9:
+    assertion `left == right` failed
+      left: [Sizes, Set(466944, 1675264)]
+     right: [Lock, Sizes, Set(466944, 1675264)]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.005s] ( 3/10) secmp-sys-mem secret_page::grow::tests::first_lock_success_touches_no_sizes
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::first_lock_success_touches_no_sizes ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::first_lock_success_touches_no_sizes
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::first_lock_success_touches_no_sizes' (4040168) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:318:9:
+    assertion `left == right` failed
+      left: [Sizes, Set(466944, 1675264), Lock]
+     right: [Lock]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.006s] ( 4/10) secmp-sys-mem secret_page::grow::tests::re_reads_the_sizes_when_a_step_was_undone
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::re_reads_the_sizes_when_a_step_was_undone ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::re_reads_the_sizes_when_a_step_was_undone
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::re_reads_the_sizes_when_a_step_was_undone' (4040170) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:196:9:
+    assertion `left == right` failed
+      left: Err(Error(()))
+     right: Ok(())
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.006s] ( 5/10) secmp-sys-mem secret_page::grow::tests::working_set_bounds_cover_the_measured_demand
+        FAIL [   0.006s] ( 6/10) secmp-sys-mem secret_page::grow::tests::fails_closed_when_the_sizes_cannot_be_read
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::fails_closed_when_the_sizes_cannot_be_read ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::fails_closed_when_the_sizes_cannot_be_read
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::fails_closed_when_the_sizes_cannot_be_read' (4040171) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:362:9:
+    assertion `left == right` failed: first step
+      left: [Sizes]
+     right: [Lock, Sizes]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.007s] ( 7/10) secmp-sys-mem secret_page::grow::tests::steps_double_and_overflow_fails
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::steps_double_and_overflow_fails ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::steps_double_and_overflow_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::steps_double_and_overflow_fails' (4040173) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:267:9:
+    assertion `left == right` failed
+      left: Err(Error(()))
+     right: Ok(())
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.007s] ( 8/10) secmp-sys-mem secret_page::grow::tests::other_lock_errors_fail_without_growth
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::other_lock_errors_fail_without_growth ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::other_lock_errors_fail_without_growth
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::other_lock_errors_fail_without_growth' (4040174) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:254:9:
+    assertion `left == right` failed
+      left: [Sizes, Set(466944, 1675264), Lock]
+     right: [Lock]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.008s] ( 9/10) secmp-sys-mem secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it' (4040175) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:224:9:
+    assertion `left == right` failed
+      left: [Sizes, Set(268435456, 1544192), Lock, Sizes]
+     right: [Lock, Sizes, Set(268435456, 1544192), Lock, Sizes]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.008s] (10/10) secmp-sys-mem secret_page::grow::tests::stops_after_the_last_step
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::stops_after_the_last_step ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::stops_after_the_last_step
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::stops_after_the_last_step' (4040176) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:333:9:
+    assertion `left == right` failed
+      left: 8
+     right: 9
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.009s] 10 tests run: 1 passed, 9 failed, 9 skipped
+        FAIL [   0.005s] ( 1/10) secmp-sys-mem secret_page::grow::tests::grows_again_when_the_grown_quota_is_taken
+        FAIL [   0.005s] ( 2/10) secmp-sys-mem secret_page::grow::tests::fails_closed_when_the_quota_cannot_be_set
+        FAIL [   0.005s] ( 3/10) secmp-sys-mem secret_page::grow::tests::first_lock_success_touches_no_sizes
+        FAIL [   0.006s] ( 4/10) secmp-sys-mem secret_page::grow::tests::re_reads_the_sizes_when_a_step_was_undone
+        FAIL [   0.006s] ( 6/10) secmp-sys-mem secret_page::grow::tests::fails_closed_when_the_sizes_cannot_be_read
+        FAIL [   0.007s] ( 7/10) secmp-sys-mem secret_page::grow::tests::steps_double_and_overflow_fails
+        FAIL [   0.007s] ( 8/10) secmp-sys-mem secret_page::grow::tests::other_lock_errors_fail_without_growth
+        FAIL [   0.008s] ( 9/10) secmp-sys-mem secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it
+        FAIL [   0.008s] (10/10) secmp-sys-mem secret_page::grow::tests::stops_after_the_last_step
+error: test run failed

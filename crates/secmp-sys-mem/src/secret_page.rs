@@ -9,7 +9,7 @@
 //! | Platform | Data page |
 //! |---|---|
 //! | Linux | `memfd_secret(2)` (removed from the kernel direct map, unevictable through its secretmem address space, refused to the kernel's `get_user_pages` and excluded from core dumps; docs/04 CS-2.2), not inherited across `fork` (`MADV_DONTFORK`); where `memfd_secret` is unavailable, `mlock` + `MADV_DONTDUMP` + `MADV_WIPEONFORK` |
-//! | Windows | `VirtualLock` (the working set is enlarged when the lock quota is exhausted) |
+//! | Windows | `VirtualLock` (the working set is enlarged, in bounded doubling steps under one process-wide lock, when the lock quota is exhausted) |
 //! | macOS (development host) | `mlock` |
 //! | Miri, Kani | a heap allocation (verification backends: neither tool executes the operating-system calls) |
 //!
@@ -28,6 +28,9 @@ mod os;
 #[cfg(all(windows, not(any(miri, kani))))]
 #[path = "secret_page/windows.rs"]
 mod os;
+// The lock policy of the Windows backend; compiled for its tests on every host (and under Miri).
+#[cfg(any(test, all(windows, not(any(miri, kani)))))]
+mod grow;
 
 /// The mechanism that protects the data page of a [`SecretPage`] (observable so that tests and the security
 /// status of the client can report it).

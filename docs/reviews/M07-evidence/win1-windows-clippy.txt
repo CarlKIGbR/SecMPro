@@ -1,0 +1,5 @@
+    Checking windows-link v0.2.1
+    Checking zeroize v1.9.0
+    Checking windows-sys v0.61.2
+    Checking secmp-sys-mem v0.0.0 (/work/SecMPro/crates/secmp-sys-mem)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.76s

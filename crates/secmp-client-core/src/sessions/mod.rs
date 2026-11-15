@@ -26,7 +26,7 @@ use crate::persist::{SharedStore, StorePersist};
 use crate::scheduler::outbox::{MsgId, OutMessage, Outbox as _, trust_code};
 use actor::{
     Conversation, EntropySource, PendingControl, Received, Refusal, block_code, block_of,
-    initial_parts, marker_of,
+    initial_parts,
 };
 
 /// A conversation over the profile store: the session's rows, the contact's outbox.
@@ -401,13 +401,7 @@ pub fn open_conversation<S: EntropySource>(
         .lock()
         .map_err(|_| Error::Unavailable)?
         .pending_controls(contact.0)?;
-    // a `KeyChange`'s marker (Q248) joins its `KeyChange`, read before it (rows in `ord` order); a row that does not
-    // decode fails the open like every other row (Q251: never a `KeyChange` released early)
     for (ord, row) in pending {
-        if let Some((key_change, sid)) = marker_of(&row).map_err(|_| Error::Unavailable)? {
-            conversation.restore_marker(ord, key_change, sid);
-            continue;
-        }
         let content = PendingControl::decode(&row).map_err(|_| Error::Unavailable)?;
         conversation
             .queue_pending(ord, content)

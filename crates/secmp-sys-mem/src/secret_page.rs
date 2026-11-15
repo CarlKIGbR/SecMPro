@@ -31,9 +31,6 @@ mod os;
 // The lock policy of the Windows backend; compiled for its tests on every host (and under Miri).
 #[cfg(any(test, all(windows, not(any(miri, kani)))))]
 mod grow;
-// WIN2-DIAG (D-CI14): the process totals of `crate::diag::process`.
-#[cfg(all(windows, not(any(miri, kani))))]
-pub(crate) use os::process_stats;
 
 /// The mechanism that protects the data page of a [`SecretPage`] (observable so that tests and the security
 /// status of the client can report it).
@@ -94,9 +91,9 @@ impl<const N: usize> SecretPage<N> {
         if N > page {
             return Err(Error::new());
         }
-        let map = os::Mapping::new(page, allow_secretmem)?;
-        crate::diag::add(&crate::diag::ALLOCS, 1);
-        Ok(Self { map })
+        Ok(Self {
+            map: os::Mapping::new(page, allow_secretmem)?,
+        })
     }
 
     /// The mechanism protecting this page.
@@ -128,7 +125,6 @@ impl<const N: usize> Drop for SecretPage<N> {
     fn drop(&mut self) {
         // Zeroise first; `self.map` is dropped afterwards and unlocks and releases the pages.
         self.get_mut().zeroize();
-        crate::diag::add(&crate::diag::FREES, 1);
     }
 }
 

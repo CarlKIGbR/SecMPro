@@ -9,22 +9,19 @@ use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::ptr::{self, NonNull};
 use std::sync::{Mutex, PoisonError};
-use std::time::Instant;
 
-use windows_sys::Win32::Foundation::{ERROR_WORKING_SET_QUOTA, FILETIME, GetLastError};
+use windows_sys::Win32::Foundation::{ERROR_WORKING_SET_QUOTA, GetLastError};
 use windows_sys::Win32::System::Memory::{
     MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_PROTECTION_FLAGS, PAGE_READWRITE,
     VirtualAlloc, VirtualFree, VirtualLock, VirtualProtect, VirtualUnlock,
 };
 use windows_sys::Win32::System::SystemInformation::{GetSystemInfo, SYSTEM_INFO};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessIoCounters, GetProcessTimes, GetProcessWorkingSetSize,
-    IO_COUNTERS, SetProcessWorkingSetSize,
+    GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
 };
 
 use super::grow::{Growth, LockError, lock_with_growth};
 use super::{Backend, Error};
-use crate::diag;
 
 /// Serialises every `VirtualLock` of a data page and every working-set change of this crate, so that a step one
 /// thread takes cannot be lost to another thread's read-modify-write of the sizes. It guards no data.
@@ -95,11 +92,8 @@ impl Mapping {
 impl Drop for Mapping {
     fn drop(&mut self) {
         if self.locked {
-            let started = Instant::now();
             // SAFETY: unlocks the data page that `new` locked.
             let _ = unsafe { VirtualUnlock(self.data().cast::<c_void>().cast_const(), self.page) };
-            diag::add(&diag::UNLOCK_NS, diag::nanos(started.elapsed()));
-            diag::add(&diag::UNLOCKS, 1);
         }
         // SAFETY: releases the whole allocation made by `VirtualAlloc` in `new` (`MEM_RELEASE` requires size 0);
         // `self` owns it and `SecretPage` hands out references only for the duration of a borrow of itself.
@@ -111,40 +105,24 @@ impl Drop for Mapping {
 /// (`grow::lock_with_growth`), all under [`GROW`].
 fn lock(data: *const c_void, page: usize) -> Result<(), Error> {
     let growth = Growth::working_set(page)?;
-    diag::add(&diag::LOCKS, 1);
-    let asked = Instant::now();
     // A panic of another holder leaves nothing inconsistent: `GROW` guards no data and every step re-reads the sizes.
     let _serial = GROW.lock().unwrap_or_else(PoisonError::into_inner);
-    let held = Instant::now();
-    let waited = diag::nanos(held.saturating_duration_since(asked));
-    diag::add(&diag::WAIT_NS, waited);
-    diag::raise(&diag::WAIT_MAX_NS, waited);
     // SAFETY: returns the pseudo-handle of the current process; no preconditions.
     let process = unsafe { GetCurrentProcess() };
-    let mut first = true;
-    let locked = lock_with_growth(
+    lock_with_growth(
         || {
-            let started = Instant::now();
             // SAFETY: locks the committed read-write data page of our own allocation; its contents are not accessed.
-            let ok = unsafe { VirtualLock(data, page) } != 0;
-            // SAFETY: reads the calling thread's last-error value, right after the call; no preconditions.
-            let quota = !ok && unsafe { GetLastError() } == ERROR_WORKING_SET_QUOTA;
-            diag::add(&diag::VLOCK_NS, diag::nanos(started.elapsed()));
-            diag::add(&diag::VLOCK_CALLS, 1);
-            if first && quota {
-                diag::add(&diag::QUOTA_PATHS, 1);
+            if unsafe { VirtualLock(data, page) } != 0 {
+                return Ok(());
             }
-            first = false;
-            if ok {
-                Ok(())
-            } else if quota {
+            // SAFETY: reads the calling thread's last-error value, right after the failed call; no preconditions.
+            if unsafe { GetLastError() } == ERROR_WORKING_SET_QUOTA {
                 Err(LockError::Quota)
             } else {
                 Err(LockError::Other)
             }
         },
         || {
-            diag::add(&diag::SIZES_CALLS, 1);
             let (mut min, mut max) = (0_usize, 0_usize);
             // SAFETY: the current-process pseudo-handle has full access; `min` and `max` are valid out-pointers.
             if unsafe { GetProcessWorkingSetSize(process, &raw mut min, &raw mut max) } == 0 {
@@ -153,72 +131,16 @@ fn lock(data: *const c_void, page: usize) -> Result<(), Error> {
             Ok((min, max))
         },
         |min, max| {
-            let started = Instant::now();
             // SAFETY: the current-process pseudo-handle has `PROCESS_SET_QUOTA`; `lock_with_growth` only raises both
             // sizes, the minimum at most to its cap.
-            let ok = unsafe { SetProcessWorkingSetSize(process, min, max) } != 0;
-            diag::add(&diag::SET_NS, diag::nanos(started.elapsed()));
-            diag::add(&diag::SET_CALLS, 1);
-            if ok { Ok(()) } else { Err(Error::new()) }
+            if unsafe { SetProcessWorkingSetSize(process, min, max) } == 0 {
+                Err(Error::new())
+            } else {
+                Ok(())
+            }
         },
         growth,
-    );
-    let held_ns = diag::nanos(held.elapsed());
-    diag::add(&diag::HOLD_NS, held_ns);
-    diag::raise(&diag::HOLD_MAX_NS, held_ns);
-    if locked.is_err() {
-        diag::add(&diag::FAILED, 1);
-    }
-    locked
-}
-
-/// WIN2-DIAG (D-CI14): the working-set bounds, CPU times and I/O counters of the current process; `None` if a query
-/// fails.
-pub(crate) fn process_stats() -> Option<diag::ProcessStats> {
-    // SAFETY: returns the pseudo-handle of the current process; no preconditions.
-    let process = unsafe { GetCurrentProcess() };
-    let (mut ws_min, mut ws_max) = (0_usize, 0_usize);
-    // SAFETY: the current-process pseudo-handle has full access; both are valid out-pointers.
-    if unsafe { GetProcessWorkingSetSize(process, &raw mut ws_min, &raw mut ws_max) } == 0 {
-        return None;
-    }
-    let (mut created, mut exited) = (FILETIME::default(), FILETIME::default());
-    let (mut kernel, mut user) = (FILETIME::default(), FILETIME::default());
-    // SAFETY: the current-process pseudo-handle has full access; the four are valid out-pointers.
-    let timed = unsafe {
-        GetProcessTimes(
-            process,
-            &raw mut created,
-            &raw mut exited,
-            &raw mut kernel,
-            &raw mut user,
-        )
-    };
-    if timed == 0 {
-        return None;
-    }
-    let mut io = IO_COUNTERS::default();
-    // SAFETY: the current-process pseudo-handle has full access; `io` is a valid out-pointer.
-    if unsafe { GetProcessIoCounters(process, &raw mut io) } == 0 {
-        return None;
-    }
-    Some(diag::ProcessStats {
-        ws_min,
-        ws_max,
-        kernel_100ns: ticks(kernel),
-        user_100ns: ticks(user),
-        reads: io.ReadOperationCount,
-        writes: io.WriteOperationCount,
-        others: io.OtherOperationCount,
-        read_bytes: io.ReadTransferCount,
-        write_bytes: io.WriteTransferCount,
-        other_bytes: io.OtherTransferCount,
-    })
-}
-
-/// A `FILETIME` as one count of 100 ns units.
-fn ticks(t: FILETIME) -> u64 {
-    u64::from(t.dwHighDateTime).checked_shl(32).unwrap_or(0) | u64::from(t.dwLowDateTime)
+    )
 }
 
 #[cfg(test)]
@@ -346,130 +268,6 @@ mod tests {
         drop(held);
         worker.join().map_err(|_| Error::new())??;
         assert!(done.load(Ordering::SeqCst));
-        Ok(())
-    }
-
-    /// Bytes of one simulated `SQLite` allocation: four share a 4 KiB page, as small heap blocks do.
-    const W2_CHUNK: usize = 1024;
-    /// The simulated heap: 8 MiB.
-    const W2_HEAP: usize = 8_388_608;
-    /// Passes over the simulated heap per regime.
-    const W2_ROUNDS: u8 = 4;
-    /// The headroom of the second regime: 64 MiB more minimum (and maximum) working set.
-    const W2_HEADROOM: usize = 67_108_864;
-
-    /// One regime's totals.
-    #[derive(Debug, Default)]
-    struct W2Pass {
-        lock_ok: u64,
-        lock_quota: u64,
-        lock_other: u64,
-        lock_ns: u64,
-        touch_ns: u64,
-        unlock_ok: u64,
-        unlock_failed: u64,
-        unlock_ns: u64,
-    }
-
-    /// `SQLCipher`'s `cipher_memory_security` pattern on a simulated heap: per block `VirtualLock`, a write (the use), then
-    /// per block `VirtualUnlock` (on Windows a second unlock of a page already unlocked by a neighbour fails and, per
-    /// the documentation, removes the page from the working set, so the next write faults it back).
-    fn w2_pass(heap: &mut [u8]) -> W2Pass {
-        let mut pass = W2Pass::default();
-        for round in 0..W2_ROUNDS {
-            for chunk in heap.chunks_mut(W2_CHUNK) {
-                let started = Instant::now();
-                // SAFETY: locks bytes of a live heap buffer of this test; its contents are not accessed by the call.
-                let ok = unsafe { VirtualLock(chunk.as_ptr().cast::<c_void>(), chunk.len()) } != 0;
-                // SAFETY: reads the calling thread's last-error value, right after the call; no preconditions.
-                let quota = !ok && unsafe { GetLastError() } == ERROR_WORKING_SET_QUOTA;
-                pass.lock_ns = pass.lock_ns.saturating_add(diag::nanos(started.elapsed()));
-                match (ok, quota) {
-                    (true, _) => pass.lock_ok = pass.lock_ok.saturating_add(1),
-                    (false, true) => pass.lock_quota = pass.lock_quota.saturating_add(1),
-                    (false, false) => pass.lock_other = pass.lock_other.saturating_add(1),
-                }
-            }
-            let started = Instant::now();
-            heap.fill(round);
-            pass.touch_ns = pass.touch_ns.saturating_add(diag::nanos(started.elapsed()));
-            for chunk in heap.chunks_mut(W2_CHUNK) {
-                let started = Instant::now();
-                // SAFETY: unlocks bytes of a live heap buffer of this test; its contents are not accessed by the call.
-                let ok =
-                    unsafe { VirtualUnlock(chunk.as_ptr().cast::<c_void>(), chunk.len()) } != 0;
-                pass.unlock_ns = pass
-                    .unlock_ns
-                    .saturating_add(diag::nanos(started.elapsed()));
-                if ok {
-                    pass.unlock_ok = pass.unlock_ok.saturating_add(1);
-                } else {
-                    pass.unlock_failed = pass.unlock_failed.saturating_add(1);
-                }
-            }
-            // the reuse after the frees: a write to every block
-            let started = Instant::now();
-            heap.fill(round.wrapping_add(1));
-            pass.touch_ns = pass.touch_ns.saturating_add(diag::nanos(started.elapsed()));
-        }
-        pass
-    }
-
-    /// WIN2-DIAG SE-130 (D-CI14): the cost per block of the pattern above, first with the process's default working
-    /// set (most locks fail with the quota error, as `SQLCipher`'s did before the working set grew), then with 64 MiB
-    /// more minimum working set (every lock succeeds). No assertion on the numbers: one `W2DIAG-BENCH` line per regime
-    /// on stdout, shown in a green run by the `.config/nextest.toml` override of this unit.
-    #[test]
-    fn w2diag_sqlcipher_pattern_cost() -> Result<(), Error> {
-        use std::io::Write;
-
-        let mut heap = vec![0_u8; W2_HEAP];
-        let mut lines = Vec::new();
-        for regime in ["default", "headroom"] {
-            if regime == "headroom" {
-                // SAFETY: returns the pseudo-handle of the current process; no preconditions.
-                let process = unsafe { GetCurrentProcess() };
-                let (mut min, mut max) = (0_usize, 0_usize);
-                // SAFETY: the current-process pseudo-handle has full access; both are valid out-pointers.
-                if unsafe { GetProcessWorkingSetSize(process, &raw mut min, &raw mut max) } == 0 {
-                    return Err(Error::new());
-                }
-                let min = min.checked_add(W2_HEADROOM).ok_or(Error::new())?;
-                let max = max.checked_add(W2_HEADROOM).ok_or(Error::new())?;
-                // SAFETY: the current-process pseudo-handle has `PROCESS_SET_QUOTA`; both sizes only grow.
-                if unsafe { SetProcessWorkingSetSize(process, min, max) } == 0 {
-                    return Err(Error::new());
-                }
-            }
-            let before = process_stats().ok_or(Error::new())?;
-            let started = Instant::now();
-            let pass = w2_pass(&mut heap);
-            let wall_ns = diag::nanos(started.elapsed());
-            let after = process_stats().ok_or(Error::new())?;
-            lines.push(format!(
-                "W2DIAG-BENCH regime={regime} blocks_per_round={} rounds={W2_ROUNDS} lock_ok={} lock_quota={} \
-                 lock_other={} lock_ns={} touch_ns={} unlock_ok={} unlock_failed={} unlock_ns={} wall_ns={wall_ns} \
-                 kernel_100ns={} user_100ns={} ws_min={} ws_max={}\n",
-                W2_HEAP.checked_div(W2_CHUNK).unwrap_or(0),
-                pass.lock_ok,
-                pass.lock_quota,
-                pass.lock_other,
-                pass.lock_ns,
-                pass.touch_ns,
-                pass.unlock_ok,
-                pass.unlock_failed,
-                pass.unlock_ns,
-                after.kernel_100ns.saturating_sub(before.kernel_100ns),
-                after.user_100ns.saturating_sub(before.user_100ns),
-                after.ws_min,
-                after.ws_max,
-            ));
-        }
-        let mut out = std::io::stdout().lock();
-        for line in lines {
-            out.write_all(line.as_bytes()).map_err(|_| Error::new())?;
-        }
-        out.flush().map_err(|_| Error::new())?;
         Ok(())
     }
 }

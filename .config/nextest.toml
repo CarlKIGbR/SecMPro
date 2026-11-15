@@ -4,13 +4,6 @@
 filter = 'test(cpu_per_slot_measured)'
 threads-required = "num-test-threads"
 
-# WIN2-DIAG (D-CI14, Q260; a throw-away commit, reverted before any further unit): nextest shows a passing test's output
-# only when told to; these tests print `W2DIAG` lines (and SQLCipher's own stderr lines) that the extraction of this unit
-# reads from the job logs of a green run.
-[[profile.default.overrides]]
-filter = 'test(=m7_activity::store_backed_source_activity_independent) | test(=m7_persist::write_amplification_measured) | test(=m7_rotation::recipient_retires_old_queue) | test(=secret_page::os::tests::w2diag_sqlcipher_pattern_cost)'
-success-output = "final"
-
 # TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the profile of the second mutants run (`--profile mutants-harness`,
 # `gates::mutants_harness_args`). Its one override starts the killers of clock and period mutants before every other test by
 # priority, whatever their module is called (`gates::mutants_killer_profile`, test `mutant_killers_run_first_by_filter`).

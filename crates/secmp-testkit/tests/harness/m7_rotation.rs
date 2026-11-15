@@ -304,8 +304,6 @@ const SHORT_DRAWS: Option<(u64, u64)> = Some((176, 234));
 /// `U[1 min, 60 min]` later; afterwards the queue is gone from the set, the scheduler and the relay.
 #[test]
 fn recipient_retires_old_queue() {
-    let started = std::time::Instant::now();
-    let commits = secmp_store::kat::store_txn_commits();
     let mut d = driver();
     let s = establish_seeded(&mut d, "se03", 3, SHORT_DRAWS);
     let old = rotate(&mut d, s.host.idx, s.guest.idx);
@@ -319,14 +317,6 @@ fn recipient_retires_old_queue() {
             old.deadline_ms,
             (old.deadline_ms - old.t0) / 1000,
             (t_del - quiet) / 1000
-        ),
-    );
-    super::w2diag::report(
-        "SE-03",
-        started,
-        &format!(
-            "commits={}",
-            secmp_store::kat::store_txn_commits().saturating_sub(commits)
         ),
     );
 }

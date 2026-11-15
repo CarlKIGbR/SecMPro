@@ -447,6 +447,7 @@ fn run(mode: Mode, act: Option<&[(u64, Act)]>) -> Run {
 /// control links and the timing draws are the same; the activity really happened (messages, refusals in each state).
 #[test]
 fn store_backed_source_activity_independent() {
+    let started = std::time::Instant::now();
     let modes = [Mode::Strict, Mode::Balanced, Mode::LowBw];
     let traces: Vec<Vec<(u64, Act)>> = (1..=3_u64).map(activity).collect();
     // the six runs in parallel: one idle run and one active run per mode
@@ -456,8 +457,17 @@ fn store_backed_source_activity_independent() {
         .flat_map(|(number, mode)| [(*mode, false, number), (*mode, true, number)])
         .collect();
     let runs = par_map(jobs, |(mode, active, number)| {
-        run(mode, active.then(|| traces.get(number).unwrap().as_slice()))
+        let job_started = std::time::Instant::now();
+        let commits = secmp_store::kat::store_txn_commits();
+        let r = run(mode, active.then(|| traces.get(number).unwrap().as_slice()));
+        super::w2diag::job(
+            &format!("{mode:?}-{}", if active { "active" } else { "idle" }),
+            job_started,
+            secmp_store::kat::store_txn_commits().saturating_sub(commits),
+        );
+        r
     });
+    super::w2diag::report("SE-19", started, "jobs=6");
     let mut table = Vec::new();
     for (number, mode) in modes.iter().enumerate() {
         let idle = runs.get(number.saturating_mul(2)).unwrap();

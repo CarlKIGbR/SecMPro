@@ -57,6 +57,9 @@ aws-lc-rs.workspace = true
 sha3.workspace = true
 chacha20poly1305.workspace = true
 subtle.workspace = true
+# WIN2-DIAG (D-CI14, Q260; throw-away, reverted before any further unit): the lock counters the instrumented harness
+# tests print (`secmp_sys_mem::diag`); a workspace crate (docs/02 §3), no third-party crate.
+secmp-sys-mem.workspace = true
 # ADR-051 Part 2: network simulations (docs/06 §4), dev only.
 turmoil.workspace = true
 # `tokio::time::pause` for the virtual-time tests of the tokio driver (BRIEF M6-B §2.2): feature `test-util`, test

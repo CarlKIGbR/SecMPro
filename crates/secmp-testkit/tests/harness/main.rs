@@ -52,3 +52,4 @@ mod scripted;
 #[path = "../../../secmp-proto/tests/common/seed.rs"]
 mod seed;
 mod transport;
+mod w2diag;

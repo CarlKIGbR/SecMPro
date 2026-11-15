@@ -21,6 +21,7 @@
 //! the client.
 #![allow(unsafe_code)]
 
+pub mod diag;
 mod secret_page;
 
 pub use secret_page::{Backend, Error, SecretPage};

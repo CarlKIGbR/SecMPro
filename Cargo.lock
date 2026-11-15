@@ -3637,6 +3637,7 @@ dependencies = [
  "secmp-proto",
  "secmp-relay",
  "secmp-store",
+ "secmp-sys-mem",
  "secmp-transport",
  "serde_json",
  "sha3 0.11.0",

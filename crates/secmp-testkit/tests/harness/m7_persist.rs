@@ -306,6 +306,7 @@ pub(crate) fn evidence(name: &str, text: &str) {
 /// `RatchetStateV1` + the outbox row of a message of one cell).
 #[test]
 fn write_amplification_measured() {
+    let started = std::time::Instant::now();
     secmp_store::kat::measure_writes(true);
     secmp_store::kat::reset_counters();
     let mut sim = driver();
@@ -361,5 +362,10 @@ fn write_amplification_measured() {
          bound 2 × (fixed {fixed} + outbox row {outbox_row}) = {bound}"
     );
     evidence("pc-13-write-amplification", &text);
+    crate::w2diag::report(
+        "PC-13",
+        started,
+        &format!("commits={commits} slots={slots} wal_bytes={bytes}"),
+    );
     assert!(per_slot <= bound, "{text}");
 }

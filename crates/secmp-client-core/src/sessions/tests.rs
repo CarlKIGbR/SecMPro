@@ -4016,13 +4016,14 @@ fn second_restart_elsewhere_keeps_an_uncounted_marker() -> R {
     })
 }
 
-/// SE-103 (Q249; verification R2): a restart registered on C (`sid` 9) first; the peer's route then moves the sender back
-/// to B (`sid` 1, a new queue id). B's marker read at open is not taken over by that later registration: it keeps holding
-/// the `KeyChange` for good, also after B's re-sent copy has left its window and B's later ids would have counted a
-/// taken-over copy away (first registration only; D-B81).
+/// SE-103 (Q249, Q253; verification R2, re-dictated by B17b-3, OPEN-M7-B-27): a restart registered on C (`sid` 9)
+/// first; the peer's route then moves the sender back to B (`sid` 1, a new queue id). That later registration takes B's
+/// marker read at open over, as every registration of its `sid` does (Q253): no second marker is written for the new
+/// queue id, the pre-restart copy counts as a cell of unknown outcome there (first later id 301 + 2 + 128 = 431), and the
+/// `KeyChange` goes with its marker once B's re-sent copy has left its window too (303 + 257 = 560; 559 is not enough).
 #[cfg(feature = "kat")]
 #[test]
-fn later_registration_of_a_marked_sid_keeps_the_hold() -> R {
+fn later_registration_of_a_marked_sid_counts_its_copy() -> R {
     use crate::scheduler::types::QueueId;
 
     big(|| {
@@ -4046,19 +4047,911 @@ fn later_registration_of_a_marked_sid_keeps_the_hold() -> R {
         h.switch_send_queue(back);
         let mut convs = actor::Conversations::new();
         let at = convs.add(h);
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
         for i in 0..total {
             send_on(&mut convs, back, ms(add(200, i)), add(300, i))?;
         }
-        for i in 0..4 {
-            send_on(&mut convs, back, ms(add(300, i)), add(700, i))?;
+        assert_eq!(
+            control_tags(&store, 1)?.1,
+            vec![[1_u8; 16]],
+            "Q253: the later registration takes the marker over"
+        );
+        send_on(&mut convs, back, ms(300), 559)?;
+        assert!(live(&convs), "559: the re-sent copy is in its window");
+        send_on(&mut convs, back, ms(301), 560)?;
+        send_on(&mut convs, back, ms(302), 561)?;
+        assert!(!live(&convs), "560 counts both copies away");
+        assert_eq!(control_rows(&store)?, 0, "the marker and the row are gone");
+        drop(g);
+        Ok(())
+    })
+}
+
+/// The overlap rows (Q252) of session 1, in `ord` order.
+#[cfg(feature = "kat")]
+pub(crate) fn overlap_rows(store: &SharedStore) -> Result<Vec<actor::OverlapRoute>, E> {
+    let rows = store.lock().map_err(|_| "lock")?.pending_controls(1)?;
+    let mut out = Vec::new();
+    for (_, row) in &rows {
+        if let Some(route) = actor::overlap_of(row).map_err(|_| "overlap")? {
+            out.push(route);
+        }
+    }
+    Ok(out)
+}
+
+/// What an overlap row names besides its seed: `sid`, period, end, newest id, unknown.
+#[cfg(feature = "kat")]
+type Seen = (Id, Period, u64, u64, bool);
+
+/// [`Seen`] of `route`.
+#[cfg(feature = "kat")]
+fn seen(route: &actor::OverlapRoute) -> Seen {
+    (
+        route.sid,
+        route.period,
+        route.until_ms,
+        route.newest,
+        route.unknown,
+    )
+}
+
+/// The host keeps the queue `old` (`sid` and seed `[sid; …]`, period 20 s) in overlap until `until` (Unix ms).
+#[cfg(feature = "kat")]
+fn keep(
+    convs: &mut actor::Conversations<StoreOutbox, StorePersist, Fixed>,
+    at: usize,
+    old: crate::scheduler::types::QueueId,
+    sid: u8,
+    until: u64,
+) -> R {
+    convs.get_mut(at).ok_or("conversation")?.keep_overlap(
+        old,
+        [sid; 16],
+        secmp_crypto::SecretBytes::from_slice(&[sid; 32]).map_err(|_| "seed")?,
+        Period::S20,
+        until,
+    );
+    Ok(())
+}
+
+/// SE-104 (Q252, Q255): an overlap row is `5 ‖ sid ‖ seed ‖ period_s ‖ until_ms ‖ newest ‖ unknown`, 68 bytes,
+/// big-endian, and decodes strictly: it round-trips; a row of another tag is none; only 68 bytes decode; a period outside
+/// `PERIODS` and a flag other than 0 or 1 are refused; an overlap row is neither a content nor a marker.
+#[cfg(feature = "kat")]
+#[test]
+fn overlap_codec_is_strict() -> R {
+    use crate::sessions::actor::{OverlapRoute, PendingControl, marker_of, marker_row, overlap_of};
+
+    let route = OverlapRoute {
+        sid: [7; 16],
+        seed: secmp_crypto::SecretBytes::from_slice(&[8; 32]).map_err(|_| "seed")?,
+        period: Period::S40,
+        until_ms: 0x0102_0304_0506_0708,
+        newest: 0x1112_1314_1516_1718,
+        unknown: true,
+    };
+    let row = route.row();
+    let mut want = vec![5_u8];
+    want.extend_from_slice(&[7; 16]);
+    want.extend_from_slice(&[8; 32]);
+    want.extend_from_slice(&[0, 40, 1, 2, 3, 4, 5, 6, 7, 8]);
+    want.extend_from_slice(&[0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 1]);
+    assert_eq!(row.as_slice(), want.as_slice(), "68 bytes, big-endian");
+    let back = overlap_of(&row)
+        .map_err(|_| "decode")?
+        .ok_or("no overlap")?;
+    assert_eq!(seen(&back), seen(&route));
+    assert_eq!(back.seed.expose_secret(), &[8; 32]);
+    assert!(PendingControl::decode(&row).is_err(), "no content");
+    assert_eq!(marker_of(&row), Ok(None), "no marker");
+    assert!(matches!(overlap_of(&marker_row(5, &[7; 16])), Ok(None)));
+    assert!(matches!(overlap_of(&[]), Ok(None)));
+    let mut clear = row.to_vec();
+    if let Some(flag) = clear.last_mut() {
+        *flag = 0;
+    }
+    assert!(matches!(overlap_of(&clear), Ok(Some(r)) if !r.unknown));
+    let mut flag = row.to_vec();
+    if let Some(f) = flag.last_mut() {
+        *f = 2;
+    }
+    let mut period = row.to_vec();
+    if let Some(p) = period.get_mut(50) {
+        *p = 30;
+    }
+    for (case, bad) in [("flag 2", flag), ("period 30", period)] {
+        assert!(overlap_of(&bad).is_err(), "{case}");
+    }
+    // every length: a tag-5 row decodes only at 68 bytes
+    for len in 1..100_usize {
+        let mut r = row.to_vec();
+        r.resize(len, 0);
+        assert_eq!(overlap_of(&r).is_ok(), len == 68, "{len}");
+    }
+    Ok(())
+}
+
+/// SE-107 (Q252, Q254): the overlap row a switch writes names the route, the end and the `KeyChange` copies that may be on
+/// the old queue B, as they stand at the switch: cells 1–3 relayed and cell 4 on its way → newest 3, unknown; all four
+/// relayed and a `Control` on its way → newest 4, none unknown; cell 4 of unknown outcome on B, nothing on its way → newest
+/// 3, unknown; no `KeyChange`, a `Control` on its way → newest 0, none unknown (every switch writes its row, spec §10.1).
+#[cfg(feature = "kat")]
+#[test]
+fn overlap_row_names_the_copies_at_the_switch() -> R {
+    big(|| {
+        let mut out = Vec::new();
+        for (case, seed) in [(0_u8, 761_u64), (1, 763), (2, 765), (3, 767)] {
+            out.push(summary_at_switch(case, seed)?);
+        }
+        let until = 9_000_000;
+        assert_eq!(
+            out,
+            [
+                ([1; 16], Period::S20, until, 3, true),
+                ([1; 16], Period::S20, until, 4, false),
+                ([1; 16], Period::S20, until, 3, true),
+                ([1; 16], Period::S20, until, 0, false),
+            ],
+            "Q254: on its way; relayed; unknown outcome; no KeyChange"
+        );
+        Ok(())
+    })
+}
+
+/// SE-107: B (`sid` 1) → C (`sid` 9) in `case` (see SE-107); the one overlap row written, with its seed checked.
+#[cfg(feature = "kat")]
+fn summary_at_switch(case: u8, seed: u64) -> Result<Seen, E> {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+    use secmp_proto::wire::cell::ControlCode;
+
+    let label = format!("q254-{case}");
+    let (host, mut h, g) = if case == 3 {
+        let World { host, h, g, .. } = established(&label, seed)?;
+        (host, h, g)
+    } else {
+        rotated_host(&label, seed)?
+    };
+    let store = host.profile.store();
+    let (b, c) = (QueueId(1), QueueId(9));
+    h.set_send_sid(b, [1; 16]);
+    h.bind(b, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    if case == 3 {
+        send_on(&mut convs, b, ms(90), 1)?;
+    } else {
+        for i in 0..3 {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        let fourth = convs
+            .prepare_cell(b, ms(103))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+        match case {
+            1 => convs.relayed(b, fourth.token, 4),
+            2 => convs.send_failed(b, fourth.token, SendFailure::Unknown),
+            _ => {}
+        }
+    }
+    if case == 1 || case == 3 {
+        let conv = convs.get_mut(at).ok_or("conversation")?;
+        conv.queue_control(ControlCode::SessionResetRequest);
+        convs
+            .prepare_cell(b, ms(104))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+    }
+    let conv = convs.get_mut(at).ok_or("conversation")?;
+    conv.set_send_sid(c, [9; 16]);
+    conv.switch_send_queue(c);
+    keep(&mut convs, at, b, 1, 9_000_000)?;
+    let rows = overlap_rows(&store)?;
+    let [route] = rows.as_slice() else {
+        return Err("one overlap row".into());
+    };
+    assert_eq!(route.seed.expose_secret(), &[1; 32], "{label}: the seed");
+    drop(g);
+    Ok(seen(route))
+}
+
+/// SE-108 (Q253, Q254; OPEN-M7-B-27): the `KeyChange` relayed on B (`sid` 1, ids 1–4), then the switch to C (`sid` 9)
+/// with B kept in overlap; C's window passes, B's id 100 counts nothing yet; restart. B registered again in overlap takes
+/// its marker over with the copy's id from the row: B's id 131 is not enough (4 + 128), 132 counts the copy away, and the
+/// `KeyChange` goes with its markers once the re-sent copy on C has left its window; B's overlap row stays.
+#[cfg(feature = "kat")]
+#[test]
+fn restart_counts_the_old_queue_from_the_stored_id() -> R {
+    big(|| restart_in_overlap(false, "q254-id", 769))
+}
+
+/// SE-109 (Q253, Q254, Q250): as SE-108, but the `KeyChange`'s cell 4 is still on its way to B at the switch and gets no
+/// answer before the restart: the row names a copy of unknown id, so after the restart B's first later id 500 plus the
+/// margin plus `QUEUE_CAPACITY` counts it away (630; 629 is not enough).
+#[cfg(feature = "kat")]
+#[test]
+fn restart_with_a_cell_on_its_way_counts_from_the_first_later_id() -> R {
+    big(|| restart_in_overlap(true, "q254-way", 773))
+}
+
+/// SE-108, SE-109: see there.
+#[cfg(feature = "kat")]
+fn restart_in_overlap(on_its_way: bool, label: &str, seed: u64) -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId};
+
+    let (host, mut h, g) = rotated_host(label, seed)?;
+    let store = host.profile.store();
+    let (b, c) = (QueueId(1), QueueId(9));
+    h.set_send_sid(b, [1; 16]);
+    h.bind(b, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    let relayed = if on_its_way {
+        total.saturating_sub(1)
+    } else {
+        total
+    };
+    for i in 0..relayed {
+        send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+    }
+    if on_its_way {
+        convs
+            .prepare_cell(b, ms(110))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+    }
+    let conv = convs.get_mut(at).ok_or("conversation")?;
+    conv.set_send_sid(c, [9; 16]);
+    conv.switch_send_queue(c);
+    keep(&mut convs, at, b, 1, 9_000_000)?;
+    for i in 0..total {
+        send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+    }
+    for i in 257..260 {
+        send_on(&mut convs, c, ms(add(300, i)), add(total, i))?;
+    }
+    send_on(&mut convs, b, ms(400), 100)?;
+    assert_eq!(
+        control_tags(&store, 1)?,
+        (vec![3, 4, 5, 4], vec![[1_u8; 16], [9; 16]]),
+        "{label}: B's copy holds before the restart"
+    );
+    drop(convs);
+    let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(add(seed, 1))), T0)?;
+    let (c2, b2) = (QueueId(20), QueueId(21));
+    h.set_send_sid(c2, [9; 16]);
+    h.bind(c2, QueueId(2));
+    h.resume_overlap(b2, [1; 16]);
+    assert_eq!(
+        h.send_queues_kat(),
+        (Some(c2), vec![b2]),
+        "{label}: B in overlap again"
+    );
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+        convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight)
+    };
+    for i in 0..total {
+        send_on(&mut convs, c2, ms(add(500, i)), add(300, i))?;
+    }
+    for i in 0..3 {
+        send_on(&mut convs, c2, ms(add(600, i)), add(600, i))?;
+    }
+    assert!(live(&convs), "{label}: Q254: B's copy is not counted yet");
+    let (first, short, enough) = if on_its_way {
+        (500, 629, 630)
+    } else {
+        (120, 131, 132)
+    };
+    send_on(&mut convs, b2, ms(700), first)?;
+    send_on(&mut convs, b2, ms(701), short)?;
+    send_on(&mut convs, c2, ms(702), 603)?;
+    assert!(live(&convs), "{label}: {short} is not enough");
+    send_on(&mut convs, b2, ms(703), enough)?;
+    send_on(&mut convs, c2, ms(704), 604)?;
+    assert!(!live(&convs), "{label}: {enough} counts B's copy away");
+    assert_eq!(
+        control_tags(&store, 1)?,
+        (vec![5], vec![]),
+        "{label}: only B's overlap row is left"
+    );
+    drop(g);
+    Ok(())
+}
+
+/// SE-110 (Q253, Q254): a restart between the switch and the next preparation — B's copy was counted away while B was
+/// current (B's id 132 > 4 + 127), so the row names none, but B's marker is still there: B registered again takes it
+/// over with nothing to count, and it goes at the first preparation; the re-sent copy on C then releases the
+/// `KeyChange`.
+#[cfg(feature = "kat")]
+#[test]
+fn resumed_queue_without_a_copy_drops_its_marker() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q254-none", 777)?;
+        let store = host.profile.store();
+        let (b, c) = (QueueId(1), QueueId(9));
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        send_on(&mut convs, b, ms(110), 132)?;
+        let conv = convs.get_mut(at).ok_or("conversation")?;
+        conv.set_send_sid(c, [9; 16]);
+        conv.switch_send_queue(c);
+        keep(&mut convs, at, b, 1, 9_000_000)?;
+        assert_eq!(
+            overlap_rows(&store)?.iter().map(seen).collect::<Vec<_>>(),
+            [([1; 16], Period::S20, 9_000_000, 0, false)]
+        );
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(778)), T0)?;
+        let (c2, b2) = (QueueId(20), QueueId(21));
+        h.set_send_sid(c2, [9; 16]);
+        h.bind(c2, QueueId(2));
+        h.resume_overlap(b2, [1; 16]);
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        send_on(&mut convs, c2, ms(200), 1)?;
+        assert_eq!(
+            control_tags(&store, 1)?,
+            (vec![3, 5, 4], vec![[9_u8; 16]]),
+            "Q254: B's marker goes, C's is written"
+        );
+        for i in 1..total {
+            send_on(&mut convs, c2, ms(add(200, i)), add(1, i))?;
+        }
+        for i in 257..260 {
+            send_on(&mut convs, c2, ms(add(300, i)), add(total, i))?;
+        }
+        assert!(
+            !convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        );
+        assert_eq!(control_tags(&store, 1)?.0, vec![5]);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-112 (Q255, Q251, Q210 c): an overlap row that does not decode — one byte short or long, a period of 30 s, a flag
+/// of 2 — fails the open like every control row that does not decode; without it the conversation opens.
+#[cfg(feature = "kat")]
+#[test]
+fn undecodable_overlap_row_fails_the_open() -> R {
+    big(|| {
+        let World { host, h, g, .. } = established("q255-bad", 779)?;
+        drop(h);
+        let store = host.profile.store();
+        let good = actor::OverlapRoute {
+            sid: [1; 16],
+            seed: secmp_crypto::SecretBytes::from_slice(&[1; 32]).map_err(|_| "seed")?,
+            period: Period::S20,
+            until_ms: 9_000_000,
+            newest: 0,
+            unknown: false,
+        }
+        .row();
+        let mut long = good.to_vec();
+        long.push(0);
+        let mut short = good.to_vec();
+        short.pop();
+        let mut period = good.to_vec();
+        if let Some(p) = period.get_mut(50) {
+            *p = 30;
+        }
+        let mut flag = good.to_vec();
+        if let Some(f) = flag.last_mut() {
+            *f = 2;
+        }
+        for (case, bad) in [
+            ("one byte long", long),
+            ("one byte short", short),
+            ("period 30", period),
+            ("flag 2", flag),
+        ] {
+            let ord = store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &bad))?;
+            assert!(
+                matches!(
+                    open_conversation(&store, ContactId(1), Fixed(entropy(780)), T0),
+                    Err(crate::api::Error::Unavailable)
+                ),
+                "Q255: {case}"
+            );
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::delete_pending_control(tx, 1, ord))?;
+        }
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &good))?;
+        let h = open_conversation(&store, ContactId(1), Fixed(entropy(781)), T0)?;
+        assert_eq!(h.overlaps_read().map_err(|_| "read")?.len(), 1);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-120 (Q254; verification R1 of B17b-3): two overlap rows of one `sid` read at open are taken together — the higher
+/// `newest`, either `unknown` — also when the row that names fewer copies comes later in `ord` order (a later row of B
+/// that names no copy, as a failed delete and a later switch away from B under a new queue id can leave behind): as
+/// SE-108 (B's row names id 4: 131 is not enough, 132 is) and as SE-109 (B's row names a copy of unknown id: 629 is not
+/// enough, 630 is), each with such a later row.
+#[cfg(feature = "kat")]
+#[test]
+fn two_rows_of_one_sid_are_taken_together() -> R {
+    big(|| {
+        later_row_restart(false, "q254-two-id", 783)?;
+        later_row_restart(true, "q254-two-way", 787)
+    })
+}
+
+/// SE-120: see there.
+#[cfg(feature = "kat")]
+fn later_row_restart(on_its_way: bool, label: &str, seed: u64) -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId};
+
+    let (host, mut h, g) = rotated_host(label, seed)?;
+    let store = host.profile.store();
+    let (b, c) = (QueueId(1), QueueId(9));
+    h.set_send_sid(b, [1; 16]);
+    h.bind(b, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    let relayed = if on_its_way {
+        total.saturating_sub(1)
+    } else {
+        total
+    };
+    for i in 0..relayed {
+        send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+    }
+    if on_its_way {
+        convs
+            .prepare_cell(b, ms(110))
+            .map_err(|_| "prepare")?
+            .ok_or("no cell")?;
+    }
+    let conv = convs.get_mut(at).ok_or("conversation")?;
+    conv.set_send_sid(c, [9; 16]);
+    conv.switch_send_queue(c);
+    keep(&mut convs, at, b, 1, 9_000_000)?;
+    let later = actor::OverlapRoute {
+        sid: [1; 16],
+        seed: secmp_crypto::SecretBytes::from_slice(&[1; 32]).map_err(|_| "seed")?,
+        period: Period::S20,
+        until_ms: 9_000_000,
+        newest: 0,
+        unknown: false,
+    }
+    .row();
+    store
+        .lock()
+        .map_err(|_| "lock")?
+        .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &later))?;
+    assert_eq!(
+        overlap_rows(&store)?
+            .iter()
+            .map(|r| (r.newest, r.unknown))
+            .collect::<Vec<_>>(),
+        [(relayed, on_its_way), (0, false)],
+        "{label}: B's row, then the later one"
+    );
+    for i in 0..total {
+        send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+    }
+    for i in 257..260 {
+        send_on(&mut convs, c, ms(add(300, i)), add(total, i))?;
+    }
+    drop(convs);
+    let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(add(seed, 1))), T0)?;
+    let (c2, b2) = (QueueId(20), QueueId(21));
+    h.set_send_sid(c2, [9; 16]);
+    h.bind(c2, QueueId(2));
+    h.resume_overlap(b2, [1; 16]);
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+        convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight)
+    };
+    for i in 0..total {
+        send_on(&mut convs, c2, ms(add(500, i)), add(300, i))?;
+    }
+    for i in 0..3 {
+        send_on(&mut convs, c2, ms(add(600, i)), add(600, i))?;
+    }
+    assert!(live(&convs), "{label}: B's copy is not counted yet");
+    let (first, short, enough) = if on_its_way {
+        (500, 629, 630)
+    } else {
+        (120, 131, 132)
+    };
+    send_on(&mut convs, b2, ms(700), first)?;
+    send_on(&mut convs, b2, ms(701), short)?;
+    send_on(&mut convs, c2, ms(702), 603)?;
+    assert!(live(&convs), "{label}: {short} is not enough");
+    send_on(&mut convs, b2, ms(703), enough)?;
+    send_on(&mut convs, c2, ms(704), 604)?;
+    assert!(!live(&convs), "{label}: {enough} counts B's copy away");
+    drop(g);
+    Ok(())
+}
+
+/// SE-121 (Q256; verification R1 of B17b-3): the crash order "switch B → C, the overlap row of B not written (its write
+/// fails until the process stops), the re-planned `KeyChange` sealed and relayed on C, restart": no overlap row, so B is
+/// not registered again; C registered takes over C's marker only, and B's marker keeps holding the `KeyChange` after the
+/// re-sent copy on C has left its window — fail closed, no release without proof.
+#[cfg(feature = "kat")]
+#[test]
+fn restart_without_the_overlap_row_holds() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q256-no-row", 791)?;
+        let store = host.profile.store();
+        let (b, c) = (QueueId(1), QueueId(9));
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        let conv = convs.get_mut(at).ok_or("conversation")?;
+        conv.set_send_sid(c, [9; 16]);
+        conv.switch_send_queue(c);
+        for i in 0..total {
+            send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+        }
+        assert_eq!(
+            control_tags(&store, 1)?,
+            (vec![3, 4, 4], vec![[1_u8; 16], [9; 16]]),
+            "Q256: no overlap row; the markers of B and C"
+        );
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(792)), T0)?;
+        assert_eq!(
+            h.overlaps_read().map_err(|_| "read")?.len(),
+            0,
+            "nothing to register again"
+        );
+        let c2 = QueueId(20);
+        h.set_send_sid(c2, [9; 16]);
+        h.bind(c2, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        for i in 0..total {
+            send_on(&mut convs, c2, ms(add(300, i)), add(300, i))?;
+        }
+        for i in 0..3 {
+            send_on(&mut convs, c2, ms(add(400, i)), add(600, i))?;
         }
         assert!(
             convs
                 .get(at)
                 .is_some_and(actor::Conversation::key_change_in_flight),
-            "Q249: only the first registration takes a marker over"
+            "Q256: B's marker holds without its overlap row"
         );
-        assert_eq!(control_tags(&store, 1)?.1, vec![[1_u8; 16], [1; 16]]);
+        assert_eq!(
+            control_tags(&store, 1)?,
+            (vec![3, 4, 4], vec![[1_u8; 16], [9; 16]]),
+            "B's marker stays"
+        );
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-125: a valid overlap row (`sid` 7, seed `[8; 32]`, 40 s, no copy of unknown id) ending at `until_ms`, naming `newest`.
+#[cfg(feature = "kat")]
+fn codec_route(until_ms: u64, newest: u64) -> Result<actor::OverlapRoute, E> {
+    Ok(actor::OverlapRoute {
+        sid: [7; 16],
+        seed: secmp_crypto::SecretBytes::from_slice(&[8; 32]).map_err(|_| "seed")?,
+        period: Period::S40,
+        until_ms,
+        newest,
+        unknown: false,
+    })
+}
+
+/// SE-125: the decoder's verdict on `row` (`true`: an overlap row), checked against the rule — tag 5, 68 bytes, a period
+/// of `PERIODS`, a flag 0 or 1 — and a decoded row encodes back to the same bytes. No assertion prints the row (the seed).
+#[cfg(feature = "kat")]
+fn judge_overlap(row: &[u8]) -> bool {
+    let tag5 = row.first() == Some(&5);
+    let rule = tag5
+        && row.len() == 68
+        && row
+            .get(49..51)
+            .and_then(|p| <[u8; 2]>::try_from(p).ok())
+            .is_some_and(|p| Period::from_seconds(u16::from_be_bytes(p)).is_ok())
+        && matches!(row.last(), Some(0 | 1));
+    match actor::overlap_of(row) {
+        Ok(Some(back)) => {
+            assert!(rule, "decoded against the rule");
+            assert!(
+                back.row().as_slice() == row,
+                "canonical: encodes back to its bytes"
+            );
+            assert!(back.unknown == (row.last() == Some(&1)), "the flag");
+            true
+        }
+        Ok(None) => {
+            assert!(!tag5, "a tag-5 row is never `None`");
+            false
+        }
+        Err(_) => {
+            assert!(tag5 && !rule, "refused against the rule");
+            false
+        }
+    }
+}
+
+/// SE-125 (Q252, Q255; CLAUDE.md §1.8; verification R2 of B17b-3): the overlap row decoder is total, consistent and
+/// canonical over its input space — every period value (decodes only for `PERIODS`, 0 included), every flag byte (only 0
+/// and 1), every tag byte at 68 bytes (only tag 5 is an overlap; a 68-byte tag 4 is no marker), the extreme ends and ids
+/// (0 and `u64::MAX` decode; the end is checked by the hub, Q253), and 20 000 pseudo-random rows of length 0…80: a row
+/// decodes exactly when it is tag 5, 68 bytes, a period of `PERIODS` and a flag 0/1, and then encodes back to its bytes.
+#[cfg(feature = "kat")]
+#[test]
+fn overlap_codec_is_total_and_canonical() -> R {
+    use crate::sessions::actor::{PendingControl, marker_of};
+
+    let base = codec_route(1, 2)?.row().to_vec();
+    let mut periods = 0_u32;
+    for p in 0..=u16::MAX {
+        let mut row = base.clone();
+        row.get_mut(49..51)
+            .ok_or("period")?
+            .copy_from_slice(&p.to_be_bytes());
+        if judge_overlap(&row) {
+            periods = periods.saturating_add(1);
+        }
+    }
+    assert_eq!(periods, 4, "PERIODS only: 10, 20, 40, 80 s");
+    let mut flags = Vec::new();
+    for flag in 0..=u8::MAX {
+        let mut row = base.clone();
+        if let Some(last) = row.last_mut() {
+            *last = flag;
+        }
+        if judge_overlap(&row) {
+            flags.push(flag);
+        }
+    }
+    assert_eq!(flags, [0, 1], "flags 0 and 1 only");
+    for tag in 0..=u8::MAX {
+        let mut row = base.clone();
+        if let Some(first) = row.first_mut() {
+            *first = tag;
+        }
+        assert_eq!(judge_overlap(&row), tag == 5, "tag {tag}");
+        if tag == 4 {
+            assert!(marker_of(&row).is_err(), "a 68-byte tag 4 is no marker");
+        }
+        if tag == 5 {
+            assert!(PendingControl::decode(&row).is_err(), "no content");
+            assert_eq!(marker_of(&row), Ok(None), "no marker");
+        }
+    }
+    for (until, newest) in [(0, 0), (u64::MAX, u64::MAX), (0, u64::MAX), (u64::MAX, 0)] {
+        assert!(
+            judge_overlap(&codec_route(until, newest)?.row()),
+            "end {until}, newest {newest}"
+        );
+    }
+    overlap_codec_random_rows(&base);
+    Ok(())
+}
+
+/// SE-125: 20 000 pseudo-random rows of length 0…80 (a fixed linear congruential sequence), half of them a valid row with
+/// two bytes changed, cut or extended; the random rows reach valid ones too.
+#[cfg(feature = "kat")]
+fn overlap_codec_random_rows(base: &[u8]) {
+    let mut state = 0x5eed_b17b_3000_0002_u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        state.to_be_bytes()
+    };
+    let mut decoded = 0_u32;
+    for _ in 0..20_000_u32 {
+        let [size, mode, at1, byte1, at2, byte2, cut, extra] = next();
+        let len = usize::from(size.checked_rem(81).unwrap_or(0));
+        let mut row = Vec::with_capacity(len);
+        while row.len() < len {
+            row.extend_from_slice(&next());
+        }
+        row.truncate(len);
+        if mode & 1 == 1 {
+            row = base.to_vec();
+            row.truncate(len.max(66));
+            row.resize(68, 0);
+            for (at, byte) in [(at1, byte1), (at2, byte2)] {
+                if let Some(x) = row.get_mut(usize::from(at.checked_rem(68).unwrap_or(0))) {
+                    *x = byte;
+                }
+            }
+            if mode & 2 == 2 {
+                row.truncate(usize::from(cut.checked_rem(70).unwrap_or(0)));
+            }
+            if mode & 4 == 4 {
+                row.push(extra);
+            }
+        }
+        if judge_overlap(&row) {
+            decoded = decoded.saturating_add(1);
+        }
+    }
+    assert!(decoded > 100, "the random rows also reach valid ones");
+}
+
+/// SE-127 (Q254; verification R2 of B17b-3): an overlap row that names a stranded copy at id 1 — the lowest id a relay
+/// gives — marks it at 1 when its queue is registered again after the restart: B's id 128 is not enough (1 + 128), 129
+/// counts the copy away (the switch here writes no row of its own; the row is the one a switch would write).
+#[cfg(feature = "kat")]
+#[test]
+fn resumed_row_naming_id_one_marks_it() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q254-one", 795)?;
+        let store = host.profile.store();
+        let (b, c) = (QueueId(1), QueueId(9));
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        let conv = convs.get_mut(at).ok_or("conversation")?;
+        conv.set_send_sid(c, [9; 16]);
+        conv.switch_send_queue(c);
+        let row = actor::OverlapRoute {
+            sid: [1; 16],
+            seed: secmp_crypto::SecretBytes::from_slice(&[1; 32]).map_err(|_| "seed")?,
+            period: Period::S20,
+            until_ms: 9_000_000,
+            newest: 1,
+            unknown: false,
+        }
+        .row();
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &row))?;
+        for i in 0..total {
+            send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+        }
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(796)), T0)?;
+        let (c2, b2) = (QueueId(20), QueueId(21));
+        h.set_send_sid(c2, [9; 16]);
+        h.bind(c2, QueueId(2));
+        h.resume_overlap(b2, [1; 16]);
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        for i in 0..total {
+            send_on(&mut convs, c2, ms(add(300, i)), add(300, i))?;
+        }
+        for i in 0..3 {
+            send_on(&mut convs, c2, ms(add(400, i)), add(600, i))?;
+        }
+        assert!(live(&convs), "Q254: B's copy at id 1 is not counted yet");
+        send_on(&mut convs, b2, ms(500), 128)?;
+        send_on(&mut convs, c2, ms(501), 603)?;
+        assert!(live(&convs), "128 is not enough for 1 + 128");
+        send_on(&mut convs, b2, ms(502), 129)?;
+        send_on(&mut convs, c2, ms(503), 604)?;
+        assert!(!live(&convs), "129 counts the copy away");
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-129 (Q249, Q254; verification R3 of B17b-3): an overlap row that names a copy of unknown id only (newest 0) marks
+/// it, at the take-over by the queue registered again, as a cell of unknown outcome that takes the id of a later
+/// `OK_SEND` there: the first two cells prepared after the restart go to B (ids 500, 501), so B's id 629 is not enough
+/// (no id below 500 + 2 + 128) and 631 (501 + 2 + 128) counts the copy away. Whether 630 already does is not pinned.
+#[cfg(feature = "kat")]
+#[test]
+fn resumed_mark_of_unknown_id_counts_from_a_later_ok_send() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q254-unknown", 797)?;
+        let store = host.profile.store();
+        let (b, c) = (QueueId(1), QueueId(9));
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        let conv = convs.get_mut(at).ok_or("conversation")?;
+        conv.set_send_sid(c, [9; 16]);
+        conv.switch_send_queue(c);
+        let row = actor::OverlapRoute {
+            sid: [1; 16],
+            seed: secmp_crypto::SecretBytes::from_slice(&[1; 32]).map_err(|_| "seed")?,
+            period: Period::S20,
+            until_ms: 9_000_000,
+            newest: 0,
+            unknown: true,
+        }
+        .row();
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &row))?;
+        for i in 0..total {
+            send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+        }
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(798)), T0)?;
+        let (c2, b2) = (QueueId(20), QueueId(21));
+        h.set_send_sid(c2, [9; 16]);
+        h.bind(c2, QueueId(2));
+        h.resume_overlap(b2, [1; 16]);
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        send_on(&mut convs, b2, ms(290), 500)?;
+        send_on(&mut convs, b2, ms(291), 501)?;
+        for i in 0..total {
+            send_on(&mut convs, c2, ms(add(300, i)), add(300, i))?;
+        }
+        for i in 0..3 {
+            send_on(&mut convs, c2, ms(add(400, i)), add(600, i))?;
+        }
+        assert!(
+            live(&convs),
+            "Q254: B's copy of unknown id is not counted yet"
+        );
+        send_on(&mut convs, b2, ms(500), 629)?;
+        send_on(&mut convs, c2, ms(501), 603)?;
+        assert!(live(&convs), "629 is not enough for 500 + 2 + 128");
+        send_on(&mut convs, b2, ms(502), 631)?;
+        send_on(&mut convs, c2, ms(503), 604)?;
+        assert!(!live(&convs), "631 counts the copy away");
         drop(g);
         Ok(())
     })

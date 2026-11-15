@@ -1,0 +1,402 @@
+head bf06e60c570306c273f1b2b771cace9fb132ba65
+diff --git a/crates/secmp-client-core/src/sessions/mod.rs b/crates/secmp-client-core/src/sessions/mod.rs
+index 99c2ed5..a7aac9a 100644
+--- a/crates/secmp-client-core/src/sessions/mod.rs
++++ b/crates/secmp-client-core/src/sessions/mod.rs
+@@ -410,7 +410,7 @@ pub fn open_conversation<S: EntropySource>(
+         }
+         // an old send queue's overlap (Q252); one that does not decode fails the open as well (Q255)
+         if let Some(route) = overlap_of(&row).map_err(|_| Error::Unavailable)? {
+-            conversation.restore_overlap(ord, route);
++            let _ = (ord, route);
+             continue;
+         }
+         let content = PendingControl::decode(&row).map_err(|_| Error::Unavailable)?;
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.21s
+────────────
+ Nextest run ID 56aa8b88-7d13-41d6-ace9-5075433824b2 with nextest profile: default
+    Starting 42 tests across 1 binary (251 tests skipped)
+        PASS [   0.008s] ( 1/42) secmp-client-core sessions::tests::overlap_codec_is_strict
+        PASS [   0.009s] ( 2/42) secmp-client-core sessions::tests::marker_codec_is_strict
+        PASS [   0.107s] ( 3/42) secmp-client-core sessions::tests::overlap_codec_is_total_and_canonical
+        PASS [   0.129s] ( 4/42) secmp-client-core sessions::actor::tests::dropped_overlap_deletes_its_row
+        PASS [   0.164s] ( 5/42) secmp-client-core sessions::actor::tests::overlap_rows_not_registered_again_go
+        PASS [   0.173s] ( 6/42) secmp-client-core sessions::actor::tests::overlap_row_is_written_at_the_switch
+        PASS [   0.203s] ( 7/42) secmp-client-core sessions::actor::tests::dropped_overlap_writes_no_late_row
+        PASS [   0.236s] ( 8/42) secmp-client-core sessions::actor::tests::dropped_queue_marker_is_not_taken_over_in_the_same_process
+        PASS [   0.230s] ( 9/42) secmp-client-core sessions::actor::tests::markers_go_before_their_key_change
+        PASS [   0.241s] (10/42) secmp-client-core sessions::actor::tests::key_change_cell_waits_for_its_marker
+        PASS [   0.251s] (11/42) secmp-client-core sessions::actor::tests::old_queue_marker_goes_when_nothing_can_be_there
+        PASS [   0.269s] (12/42) secmp-client-core sessions::actor::tests::copies_on_names_the_highest_mark_of_that_queue
+        PASS [   0.295s] (13/42) secmp-client-core sessions::actor::tests::dropped_queue_with_a_key_change_cell_on_its_way_holds
+        PASS [   2.148s] (14/42) secmp-client-core sessions::tests::orphan_marker_holds_nothing_and_goes
+        FAIL [   2.356s] (15/42) secmp-client-core sessions::tests::two_rows_of_one_sid_are_taken_together
+  stdout ───
+
+    running 1 test
+    test sessions::tests::two_rows_of_one_sid_are_taken_together ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::two_rows_of_one_sid_are_taken_together
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.35s
+
+  stderr ───
+
+    thread '<unnamed>' (141143) panicked at crates/secmp-client-core/src/sessions/tests.rs:4585:5:
+    q254-two-id: B's copy is not counted yet
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.476s] (16/42) secmp-client-core sessions::tests::resumed_mark_of_unknown_id_counts_from_a_later_ok_send
+  stdout ───
+
+    running 1 test
+    test sessions::tests::resumed_mark_of_unknown_id_counts_from_a_later_ok_send ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::resumed_mark_of_unknown_id_counts_from_a_later_ok_send
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.47s
+
+  stderr ───
+
+    thread '<unnamed>' (141131) panicked at crates/secmp-client-core/src/sessions/tests.rs:4945:9:
+    Q254: B's copy of unknown id is not counted yet
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.702s] (17/42) secmp-client-core hub::tests::restart_keeps_one_sender_per_physical_queue
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_keeps_one_sender_per_physical_queue ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_keeps_one_sender_per_physical_queue
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.69s
+
+  stderr ───
+
+    thread '<unnamed>' (141060) panicked at crates/secmp-client-core/src/hub.rs:2583:13:
+    assertion `left == right` failed: Q236: 22 once
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [162, 9, 152, 161, 83, 42, 159, 181, 141, 114, 59, 220, 232, 4, 211, 102], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.717s] (18/42) secmp-client-core hub::tests::restart_later_keeps_the_stored_end
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_later_keeps_the_stored_end ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_later_keeps_the_stored_end
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.69s
+
+  stderr ───
+    Error: "A again"
+
+        PASS [   2.589s] (19/42) secmp-client-core sessions::tests::restart_without_the_overlap_row_holds
+        FAIL [   2.783s] (20/42) secmp-client-core hub::tests::restart_registers_each_old_queue_with_its_own_route
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_registers_each_old_queue_with_its_own_route ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_registers_each_old_queue_with_its_own_route
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.76s
+
+  stderr ───
+
+    thread '<unnamed>' (141096) panicked at crates/secmp-client-core/src/hub.rs:2533:13:
+    assertion `left == right` failed: B and the old queues, once each
+      left: 1
+     right: 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.785s] (21/42) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.78s
+
+  stderr ───
+
+    thread '<unnamed>' (141052) panicked at crates/secmp-client-core/src/hub.rs:2285:13:
+    assertion `left == right` failed: Q253: 22 and 23 only, and B once
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [133, 164, 182, 51, 97, 95, 45, 23, 150, 110, 255, 2, 193, 69, 150, 172], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22], [23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.571s] (22/42) secmp-client-core sessions::tests::resumed_row_naming_id_one_marks_it
+  stdout ───
+
+    running 1 test
+    test sessions::tests::resumed_row_naming_id_one_marks_it ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::resumed_row_naming_id_one_marks_it
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.56s
+
+  stderr ───
+
+    thread '<unnamed>' (141137) panicked at crates/secmp-client-core/src/sessions/tests.rs:4872:9:
+    Q254: B's copy at id 1 is not counted yet
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.837s] (23/42) secmp-client-core hub::tests::restart_after_a_stale_route_registers_the_current_queue
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_after_a_stale_route_registers_the_current_queue ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_after_a_stale_route_registers_the_current_queue
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.83s
+
+  stderr ───
+
+    thread '<unnamed>' (141064) panicked at crates/secmp-client-core/src/hub.rs:1694:13:
+    assertion `left == right` failed: after a restart: B, then the old queues in overlap (Q253)
+      left: (Some([4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]), Some([]))
+     right: (Some([4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]), Some([[29, 143, 26, 176, 185, 182, 17, 127, 92, 24, 47, 133, 104, 157, 62, 192], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]]))
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.825s] (24/42) secmp-client-core sessions::tests::later_registration_of_a_marked_sid_counts_its_copy
+        FAIL [   2.870s] (25/42) secmp-client-core hub::tests::restart_registers_the_old_send_queue_until_its_end
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_registers_the_old_send_queue_until_its_end ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_registers_the_old_send_queue_until_its_end
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.85s
+
+  stderr ───
+    Error: "sends"
+
+        FAIL [   2.755s] (26/42) secmp-client-core sessions::tests::restart_with_a_cell_on_its_way_counts_from_the_first_later_id
+  stdout ───
+
+    running 1 test
+    test sessions::tests::restart_with_a_cell_on_its_way_counts_from_the_first_later_id ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::restart_with_a_cell_on_its_way_counts_from_the_first_later_id
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.75s
+
+  stderr ───
+
+    thread '<unnamed>' (141125) panicked at crates/secmp-client-core/src/sessions/tests.rs:4348:5:
+    q254-way: Q254: B's copy is not counted yet
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.800s] (27/42) secmp-client-core sessions::tests::restart_on_the_marked_queue_then_a_switch_holds
+        FAIL [   2.893s] (28/42) secmp-client-core sessions::tests::restart_counts_the_old_queue_from_the_stored_id
+  stdout ───
+
+    running 1 test
+    test sessions::tests::restart_counts_the_old_queue_from_the_stored_id ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::restart_counts_the_old_queue_from_the_stored_id
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.89s
+
+  stderr ───
+
+    thread '<unnamed>' (141117) panicked at crates/secmp-client-core/src/sessions/tests.rs:4348:5:
+    q254-id: Q254: B's copy is not counted yet
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.956s] (29/42) secmp-client-core hub::tests::restart_registers_the_rows_after_a_skipped_one
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_registers_the_rows_after_a_skipped_one ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_registers_the_rows_after_a_skipped_one
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.95s
+
+  stderr ───
+
+    thread '<unnamed>' (141063) panicked at crates/secmp-client-core/src/hub.rs:2841:13:
+    assertion `left == right` failed: Q253: 22 after the skipped row of B
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [55, 187, 159, 58, 142, 58, 149, 214, 157, 231, 93, 147, 59, 125, 167, 222], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.730s] (30/42) secmp-client-core sessions::tests::second_restart_elsewhere_keeps_an_uncounted_marker
+        FAIL [   2.983s] (31/42) secmp-client-core hub::tests::restart_after_routes_in_one_pump_registers_the_new_one
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_after_routes_in_one_pump_registers_the_new_one ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_after_routes_in_one_pump_registers_the_new_one
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.97s
+
+  stderr ───
+
+    thread '<unnamed>' (141055) panicked at crates/secmp-client-core/src/hub.rs:1911:17:
+    assertion `left == right` failed: hub-rca: the old queues in overlap (Q253)
+      left: Some([])
+     right: Some([[159, 162, 182, 252, 246, 4, 215, 180, 211, 199, 97, 39, 195, 168, 45, 8], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]])
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.780s] (32/42) secmp-client-core sessions::tests::resumed_queue_without_a_copy_drops_its_marker
+        FAIL [   2.744s] (33/42) secmp-client-core sessions::tests::undecodable_overlap_row_fails_the_open
+  stdout ───
+
+    running 1 test
+    test sessions::tests::undecodable_overlap_row_fails_the_open ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::undecodable_overlap_row_fails_the_open
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.74s
+
+  stderr ───
+
+    thread '<unnamed>' (141149) panicked at crates/secmp-client-core/src/sessions/tests.rs:4488:9:
+    assertion `left == right` failed
+      left: 0
+     right: 1
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.746s] (34/42) secmp-client-core sessions::tests::undecodable_marker_fails_the_open
+        FAIL [   3.037s] (35/42) secmp-client-core hub::tests::restart_in_overlap_counts_the_copy_away
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_in_overlap_counts_the_copy_away ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_in_overlap_counts_the_copy_away
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 3.01s
+
+  stderr ───
+    Error: "B"
+
+        PASS [   2.726s] (36/42) secmp-client-core sessions::tests::unknown_marks_on_the_head_keep_its_row
+        FAIL [   3.092s] (37/42) secmp-client-core hub::tests::overlap_end_before_the_count_holds
+  stdout ───
+
+    running 1 test
+    test hub::tests::overlap_end_before_the_count_holds ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::overlap_end_before_the_count_holds
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 3.08s
+
+  stderr ───
+    Error: "B"
+
+        FAIL [   3.202s] (38/42) secmp-client-core hub::tests::end_passed_while_down_holds
+  stdout ───
+
+    running 1 test
+    test hub::tests::end_passed_while_down_holds ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::end_passed_while_down_holds
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 3.19s
+
+  stderr ───
+
+    thread '<unnamed>' (141066) panicked at crates/secmp-client-core/src/hub.rs:2438:13:
+    assertion failed: !overlaps_of(&again, contact)?.iter().any(|r| r.0 == [4; 16])
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   4.738s] (39/42) secmp-client-core sessions::tests::restart_keeps_the_marker_of_an_uncounted_old_queue
+        PASS [   5.033s] (40/42) secmp-client-core hub::tests::restart_reads_the_marker_of_the_sent_queue
+        PASS [   7.080s] (41/42) secmp-client-core sessions::tests::overlap_row_names_the_copies_at_the_switch
+        PASS [  15.306s] (42/42) secmp-client-core sessions::tests::unknown_send_at_the_switch_is_held
+────────────
+     Summary [  17.471s] 42 tests run: 25 passed, 17 failed, 251 skipped
+        FAIL [   2.356s] (15/42) secmp-client-core sessions::tests::two_rows_of_one_sid_are_taken_together
+        FAIL [   2.476s] (16/42) secmp-client-core sessions::tests::resumed_mark_of_unknown_id_counts_from_a_later_ok_send
+        FAIL [   2.702s] (17/42) secmp-client-core hub::tests::restart_keeps_one_sender_per_physical_queue
+        FAIL [   2.717s] (18/42) secmp-client-core hub::tests::restart_later_keeps_the_stored_end
+        FAIL [   2.783s] (20/42) secmp-client-core hub::tests::restart_registers_each_old_queue_with_its_own_route
+        FAIL [   2.785s] (21/42) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+        FAIL [   2.571s] (22/42) secmp-client-core sessions::tests::resumed_row_naming_id_one_marks_it
+        FAIL [   2.837s] (23/42) secmp-client-core hub::tests::restart_after_a_stale_route_registers_the_current_queue
+        FAIL [   2.870s] (25/42) secmp-client-core hub::tests::restart_registers_the_old_send_queue_until_its_end
+        FAIL [   2.755s] (26/42) secmp-client-core sessions::tests::restart_with_a_cell_on_its_way_counts_from_the_first_later_id
+        FAIL [   2.893s] (28/42) secmp-client-core sessions::tests::restart_counts_the_old_queue_from_the_stored_id
+        FAIL [   2.956s] (29/42) secmp-client-core hub::tests::restart_registers_the_rows_after_a_skipped_one
+        FAIL [   2.983s] (31/42) secmp-client-core hub::tests::restart_after_routes_in_one_pump_registers_the_new_one
+        FAIL [   2.744s] (33/42) secmp-client-core sessions::tests::undecodable_overlap_row_fails_the_open
+        FAIL [   3.037s] (35/42) secmp-client-core hub::tests::restart_in_overlap_counts_the_copy_away
+        FAIL [   3.092s] (37/42) secmp-client-core hub::tests::overlap_end_before_the_count_holds
+        FAIL [   3.202s] (38/42) secmp-client-core hub::tests::end_passed_while_down_holds
+error: test run failed

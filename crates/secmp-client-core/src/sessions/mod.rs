@@ -26,7 +26,7 @@ use crate::persist::{SharedStore, StorePersist};
 use crate::scheduler::outbox::{MsgId, OutMessage, Outbox as _, trust_code};
 use actor::{
     Conversation, EntropySource, PendingControl, Received, Refusal, block_code, block_of,
-    initial_parts, marker_of,
+    initial_parts, marker_of, overlap_of,
 };
 
 /// A conversation over the profile store: the session's rows, the contact's outbox.
@@ -406,6 +406,11 @@ pub fn open_conversation<S: EntropySource>(
     for (ord, row) in pending {
         if let Some((key_change, sid)) = marker_of(&row).map_err(|_| Error::Unavailable)? {
             conversation.restore_marker(ord, key_change, sid);
+            continue;
+        }
+        // an old send queue's overlap (Q252); one that does not decode fails the open as well (Q255)
+        if let Some(route) = overlap_of(&row).map_err(|_| Error::Unavailable)? {
+            conversation.restore_overlap(ord, route);
             continue;
         }
         let content = PendingControl::decode(&row).map_err(|_| Error::Unavailable)?;

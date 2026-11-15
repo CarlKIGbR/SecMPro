@@ -309,6 +309,52 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         if let Some(bytes) = routes {
             self.register_route(contact, at, &bytes)?;
         }
+        self.resume_overlaps(contact, at)
+    }
+
+    /// Q253 (B17b-3, OPEN-M7-B-27): the old send queues of `contact` whose send overlap a restart interrupted are
+    /// registered again, in overlap, until the end their row keeps (Q252) — only an end still ahead and at most
+    /// [`OLD_SEND_MS`] away (the longest overlap the hub draws): an end that passed while the client was down, or one
+    /// further away than any drawn (the clock went back), registers nothing, the row goes and a `KeyChange` marker of that
+    /// queue keeps holding (fail closed); and only a physical queue not registered already (spec §10.2, Q236). The set of
+    /// send queues therefore does not depend on whether a `KeyChange` exists (spec §10.1): every switch writes its row.
+    fn resume_overlaps(&mut self, contact: ContactId, at: usize) -> Result<(), Error> {
+        let read = match self.core.convs.get(at) {
+            Some(conversation) => conversation
+                .overlaps_read()
+                .map_err(|_| Error::Unavailable)?,
+            None => return Ok(()),
+        };
+        let now = self.core.now_ms();
+        let mono = self.core.clock.mono_ms();
+        for route in read {
+            let Some(left) = route
+                .until_ms
+                .checked_sub(now)
+                .filter(|left| *left > 0 && *left <= OLD_SEND_MS)
+            else {
+                continue;
+            };
+            let target = (self.config.relay, route.sid);
+            if self.send_targets.values().any(|known| *known == target) {
+                continue;
+            }
+            let queue = self.alloc_send();
+            self.actions.push(Action::AddSend {
+                queue,
+                relay: self.config.relay,
+                sid: route.sid,
+                seed: route.seed,
+                period_ms: u64::from(route.period.seconds()).saturating_mul(1_000),
+            });
+            self.registered.insert(queue);
+            self.send_targets.insert(queue, target);
+            self.previous_sends.insert(contact.0, queue);
+            self.retiring_sends.push((mono.saturating_add(left), queue));
+            if let Some(conversation) = self.core.convs.get_mut(at) {
+                conversation.resume_overlap(queue, route.sid);
+            }
+        }
         Ok(())
     }
 
@@ -348,7 +394,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.registered.insert(queue);
         self.send_targets.insert(queue, target);
         let previous = self.send_ids.insert(contact.0, queue);
-        self.send_routes.insert(contact.0, encoded);
+        let previous_route = self.send_routes.insert(contact.0, encoded);
         if let Some(conversation) = self.core.convs.get_mut(at) {
             // `T_RS` follows the queue it is sent to (SE-13b, Q210 d)
             conversation.set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(
@@ -371,6 +417,15 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 .unwrap_or(OLD_SEND_MS);
             let until = self.core.clock.mono_ms().saturating_add(overlap);
             self.retiring_sends.push((until, old));
+            // Q252: the overlap is durable — its route and its end — so a restart sends to `old` again until then (Q253)
+            let end = self.core.now_ms().saturating_add(overlap);
+            if let (Some(bytes), Some(conversation)) = (previous_route, self.core.convs.get_mut(at))
+                && let RouteDescriptor::RelayQueue(r) =
+                    &<RouteDescriptor as secmp_proto::Decode>::decode(&bytes)?
+            {
+                let seed: SecretBytes<32> = SecretBytes::from_slice(r.send_seed.expose_secret())?;
+                conversation.keep_overlap(old, r.sid, seed, r.period_s, end);
+            }
         }
         Ok(())
     }
@@ -1631,11 +1686,17 @@ mod tests {
             // a restart: the profile is opened again from its files
             let guest = guest.reopen()?;
             let mut again = hub_over(&guest, "guest", 900)?;
+            let rows: Vec<Id> = overlaps_of(&again, contact)?.iter().map(|r| r.0).collect();
             let sids: Vec<Id> = add_sends(&mut again)
                 .into_iter()
                 .map(|(_, sid)| sid)
                 .collect();
-            assert_eq!(sids, [[4_u8; 16]], "after a restart");
+            assert_eq!(
+                (sids.first(), sids.get(1..)),
+                (Some(&[4_u8; 16]), Some(rows.as_slice())),
+                "after a restart: B, then the old queues in overlap (Q253)"
+            );
+            assert!(rows.contains(&[9; 16]), "A is one of them");
             Ok(())
         })
     }
@@ -1837,7 +1898,7 @@ mod tests {
             let mut after = Vec::new();
             for (label, seed, order) in [("hub-rca", 113_u64, [7_u8, 9]), ("hub-rac", 117, [9, 7])]
             {
-                let (mut sc, guest, _contact) = on_b(label, seed)?;
+                let (mut sc, guest, contact) = on_b(label, seed)?;
                 for (n, now) in order.into_iter().zip([40, 50]) {
                     send_route(&mut sc, n, ms(now))?;
                 }
@@ -1845,9 +1906,21 @@ mod tests {
                 drop(sc);
                 let guest = guest.reopen()?;
                 let mut again = hub_over(&guest, "guest", 900)?;
-                after.push(sids(&mut again));
+                let rows: Vec<Id> = overlaps_of(&again, contact)?.iter().map(|r| r.0).collect();
+                let added = sids(&mut again);
+                assert_eq!(
+                    added.get(1..),
+                    Some(rows.as_slice()),
+                    "{label}: the old queues in overlap (Q253)"
+                );
+                assert!(rows.ends_with(&[[9; 16], [4; 16]]), "{label}: A, then B");
+                after.push(added.first().copied());
             }
-            assert_eq!(after, [[[7_u8; 16]], [[7; 16]]], "Q242: after a restart");
+            assert_eq!(
+                after,
+                [Some([7_u8; 16]), Some([7; 16])],
+                "Q242: after a restart"
+            );
             Ok(())
         })
     }
@@ -2006,8 +2079,8 @@ mod tests {
                 on(hub, b, ms(60), 1)?;
                 assert_eq!(
                     control_tags(&hub.profile_store(), contact.0)?,
-                    (vec![3, 4], vec![[4_u8; 16]]),
-                    "{label}: the marker names B"
+                    (vec![5, 5, 3, 4], vec![[4_u8; 16]]),
+                    "{label}: the marker names B (after the overlap rows of the two earlier switches, Q252)"
                 );
                 for i in 1..4_u64 {
                     on(hub, b, ms(60 + i), 1 + i)?;
@@ -2018,8 +2091,8 @@ mod tests {
                 drop(sc);
                 let guest = guest.reopen()?;
                 let mut again = hub_over(&guest, "guest", 900)?;
-                let [(q, sid)] = add_sends(&mut again)[..] else {
-                    return Err("one send queue".into());
+                let Some(&(q, sid)) = add_sends(&mut again).first() else {
+                    return Err("a send queue".into());
                 };
                 let at = *again.core.index.get(&contact.0).ok_or("index")?;
                 for i in 0..4_u64 {
@@ -2046,6 +2119,485 @@ mod tests {
                 ],
                 "Q249: same queue released by its window; moved: held by B's marker"
             );
+            Ok(())
+        })
+    }
+
+    /// What an overlap row (Q252) names besides its seed: `sid`, period, end, newest id, unknown.
+    #[cfg(feature = "kat")]
+    type Seen = (Id, Period, u64, u64, bool);
+
+    /// The overlap rows (Q252) of `contact`'s session in `ord` order: what each names besides its seed.
+    #[cfg(feature = "kat")]
+    fn overlaps_of(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<Vec<Seen>, crate::testutil::E> {
+        let rows = hub
+            .profile_store()
+            .lock()
+            .map_err(|_| "lock")?
+            .pending_controls(contact.0)?;
+        let mut out = Vec::new();
+        for (_, row) in &rows {
+            if let Some(r) = crate::sessions::actor::overlap_of(row).map_err(|_| "overlap")? {
+                out.push((r.sid, r.period, r.until_ms, r.newest, r.unknown));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One cell of `q` prepared at `now` with its `OK_SEND` as cell `id`.
+    #[cfg(feature = "kat")]
+    fn on(hub: &mut Hub<ManualClock, Fixed>, q: QueueId, now: u64, id: u64) -> R {
+        let p = hub
+            .prepare_cell(q, now)
+            .map_err(|_| "prepare")?
+            .ok_or("cell")?;
+        hub.relayed(q, p.token, id);
+        Ok(())
+    }
+
+    /// Whether `contact`'s `KeyChange` is live.
+    #[cfg(feature = "kat")]
+    fn kc_live(hub: &Hub<ManualClock, Fixed>, contact: ContactId) -> bool {
+        hub.core
+            .index
+            .get(&contact.0)
+            .and_then(|at| hub.core.convs.get(*at))
+            .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight)
+    }
+
+    /// SE-113 (Q252, Q253; spec §10.1, §10.6 (1), (4)): every switch writes the old queue's overlap row — here without any
+    /// `KeyChange` — with its route and the end drawn at the switch (the same as the hub's own retirement); a restart
+    /// registers that queue again, in overlap, until that end: it carries cells, the tick 1 ms before the end keeps it,
+    /// the tick at the end removes it and deletes its row.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_registers_the_old_send_queue_until_its_end() -> R {
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-ov", 151)?;
+            let hub = &sc.invitee;
+            let a = *hub.previous_sends.get(&contact.0).ok_or("A")?;
+            let (end, _) = *hub
+                .retiring_sends
+                .iter()
+                .find(|(_, q)| *q == a)
+                .ok_or("A retires")?;
+            let left = end.saturating_sub(hub.core.clock.mono_ms());
+            let until = hub.core.now_ms().saturating_add(left);
+            let rows = overlaps_of(hub, contact)?;
+            assert_eq!(
+                rows.last(),
+                Some(&([9; 16], Period::S80, until, 0, false)),
+                "Q252: A's route and the drawn end"
+            );
+            let before = rows.len();
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = add_sends(&mut again);
+            let (a2, b2) = again.sends_of(contact).ok_or("sends")?;
+            assert_eq!(
+                (queue_of(&added, 4), queue_of(&added, 9)),
+                (Some(b2), Some(a2)),
+                "Q253: B current, A in overlap again"
+            );
+            assert!(
+                again
+                    .prepare_cell(a2, ms(10))
+                    .map_err(|_| "prepare")?
+                    .is_some(),
+                "A carries cells"
+            );
+            let mono = again.core.clock.mono_ms();
+            let left = until.saturating_sub(again.core.now_ms());
+            again.tick(mono.saturating_add(left).saturating_sub(1));
+            assert!(
+                !again
+                    .take_actions()
+                    .iter()
+                    .any(|x| matches!(x, Action::Remove { queue } if *queue == a2)),
+                "1 ms before the end"
+            );
+            again.tick(mono.saturating_add(left));
+            assert!(
+                again
+                    .take_actions()
+                    .iter()
+                    .any(|x| matches!(x, Action::Remove { queue } if *queue == a2)),
+                "at the end"
+            );
+            assert_eq!(
+                overlaps_of(&again, contact)?.len(),
+                before.saturating_sub(1),
+                "A's row goes with it"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-114 (Q253, Q236): only an end still ahead and at most `OLD_SEND_MS` away registers its queue again (rows of
+    /// `sid` 21: the end now; 22: 1 ms ahead; 23: `OLD_SEND_MS` ahead; 24: 1 ms more; 25: 1 ms ago), and only a physical
+    /// queue not registered already (26 = B's `sid` 4, the current queue). The rows not registered go at the first
+    /// preparation; the others stay.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_registers_only_an_end_ahead_within_the_longest_overlap() -> R {
+        use crate::clock::Clock as _;
+        use crate::sessions::actor::OverlapRoute;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-ov-end", 153)?;
+            let before = overlaps_of(&sc.invitee, contact)?;
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let store = guest.profile.store();
+            for (sid, until) in [
+                (21_u8, now),
+                (22, now.saturating_add(1)),
+                (23, now.saturating_add(OLD_SEND_MS)),
+                (24, now.saturating_add(OLD_SEND_MS).saturating_add(1)),
+                (25, now.saturating_sub(1)),
+                (4, now.saturating_add(1_000)),
+            ] {
+                let row = OverlapRoute {
+                    sid: [sid; 16],
+                    seed: SecretBytes::from_slice(&[sid; 32])?,
+                    period: Period::S20,
+                    until_ms: until,
+                    newest: 0,
+                    unknown: false,
+                }
+                .row();
+                store
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+            }
+            drop(store);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added: Vec<Id> = add_sends(&mut again).into_iter().map(|(_, s)| s).collect();
+            let mut want: Vec<Id> = vec![[4; 16]];
+            want.extend(before.iter().map(|r| r.0));
+            want.extend([[22; 16], [23; 16]]);
+            assert_eq!(added, want, "Q253: 22 and 23 only, and B once");
+            let (_, b2) = again.sends_of(contact).ok_or("sends")?;
+            on(&mut again, b2, ms(10), 1)?;
+            let mut left: Vec<Id> = before.iter().map(|r| r.0).collect();
+            left.extend([[22; 16], [23; 16]]);
+            assert_eq!(
+                overlaps_of(&again, contact)?
+                    .iter()
+                    .map(|r| r.0)
+                    .collect::<Vec<_>>(),
+                left,
+                "the rows not registered go"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-115 (Q252–Q254; OPEN-M7-B-27, D-B81): through the hub, the `KeyChange` relayed on B (`sid` 4, ids 1–4), then the
+    /// route C (`sid` 7) — B in overlap, its row naming the copy's id 4; C's window passes, B's id 100 counts nothing; restart.
+    /// B is registered again and counts the pre-restart copy away (131 is not enough, 132 is), and the `KeyChange` goes
+    /// with its markers after the re-sent copy on C has left its window. (Before B17b-3 this held for good.)
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_in_overlap_counts_the_copy_away() -> R {
+        big(|| {
+            let (mut sc, guest, contact) = kc_on_b_then_c("hub-kc-ov", 157)?;
+            let rows = overlaps_of(&sc.invitee, contact)?;
+            assert_eq!(
+                rows.last().map(|r| (r.0, r.3, r.4)),
+                Some(([4; 16], 4, false)),
+                "Q254: B's copy, id 4"
+            );
+            let hub = &mut sc.invitee;
+            let (b, _) = hub.sends_of(contact).ok_or("sends")?;
+            on(hub, b, ms(150), 100)?;
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = add_sends(&mut again);
+            let (c2, b2) = (
+                queue_of(&added, 7).ok_or("C")?,
+                queue_of(&added, 4).ok_or("B")?,
+            );
+            for i in 0..4_u64 {
+                on(&mut again, c2, ms(200 + i), 300 + i)?;
+            }
+            for i in 0..3_u64 {
+                on(&mut again, c2, ms(210 + i), 600 + i)?;
+            }
+            assert!(
+                kc_live(&again, contact),
+                "Q254: B's copy is not counted yet"
+            );
+            on(&mut again, b2, ms(220), 131)?;
+            on(&mut again, c2, ms(221), 603)?;
+            assert!(kc_live(&again, contact), "131 is not enough for 4 + 128");
+            on(&mut again, b2, ms(222), 132)?;
+            on(&mut again, c2, ms(223), 604)?;
+            assert!(!kc_live(&again, contact), "132 counts B's copy away");
+            assert_eq!(
+                crate::sessions::tests::control_tags(&again.profile_store(), contact.0)?.1,
+                Vec::<Id>::new(),
+                "no marker left"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-116 (Q253, Q241, Q250; D-B81 remaining trigger): as SE-115 up to the restart; B's overlap then ends before the
+    /// count (the tick at its end): the marks stay, the `KeyChange` holds, B's row goes; a second restart registers no
+    /// B and the `KeyChange` still holds (fail closed, no release by time).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn overlap_end_before_the_count_holds() -> R {
+        big(|| {
+            let (sc, guest, contact) = kc_on_b_then_c("hub-kc-end", 163)?;
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = add_sends(&mut again);
+            let (c2, b2) = (
+                queue_of(&added, 7).ok_or("C")?,
+                queue_of(&added, 4).ok_or("B")?,
+            );
+            let (end, _) = *again
+                .retiring_sends
+                .iter()
+                .find(|(_, q)| *q == b2)
+                .ok_or("B retires")?;
+            again.tick(end);
+            for i in 0..4_u64 {
+                on(&mut again, c2, ms(200 + i), 300 + i)?;
+            }
+            for i in 0..3_u64 {
+                on(&mut again, c2, ms(210 + i), 600 + i)?;
+            }
+            assert!(
+                kc_live(&again, contact),
+                "Q241: the end of B's overlap does not clear its mark"
+            );
+            assert!(
+                !overlaps_of(&again, contact)?.iter().any(|r| r.0 == [4; 16]),
+                "B's row is gone"
+            );
+            drop(again);
+            let guest = guest.reopen()?;
+            let mut third = hub_over(&guest, "guest", 900)?;
+            assert_eq!(
+                queue_of(&add_sends(&mut third), 4),
+                None,
+                "no B after the end"
+            );
+            let c3 = *third.send_ids.get(&contact.0).ok_or("C")?;
+            for i in 0..4_u64 {
+                on(&mut third, c3, ms(300 + i), 700 + i)?;
+            }
+            for i in 0..3_u64 {
+                on(&mut third, c3, ms(310 + i), 1_000 + i)?;
+            }
+            assert!(kc_live(&third, contact), "held for good (D-B81)");
+            Ok(())
+        })
+    }
+
+    /// SE-117 (Q253; D-B81 remaining trigger): as SE-115 up to the restart, but the client stays down past B's end: the
+    /// restart registers no B, B's row goes at the first preparation, B's marker stays and the `KeyChange` holds.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn end_passed_while_down_holds() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (sc, guest, contact) = kc_on_b_then_c("hub-kc-down", 167)?;
+            let until = overlaps_of(&sc.invitee, contact)?
+                .iter()
+                .find(|r| r.0 == [4; 16])
+                .map(|r| r.2)
+                .ok_or("B's row")?;
+            drop(sc);
+            let ahead = until.saturating_sub(guest.clock.unix_secs().saturating_mul(1_000));
+            guest.clock.advance_ms(ahead.saturating_add(1_000));
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = add_sends(&mut again);
+            assert_eq!(queue_of(&added, 4), None, "Q253: the end has passed");
+            let c2 = queue_of(&added, 7).ok_or("C")?;
+            for i in 0..4_u64 {
+                on(&mut again, c2, ms(200 + i), 300 + i)?;
+            }
+            for i in 0..3_u64 {
+                on(&mut again, c2, ms(210 + i), 600 + i)?;
+            }
+            assert!(kc_live(&again, contact), "B's copy holds");
+            assert!(!overlaps_of(&again, contact)?.iter().any(|r| r.0 == [4; 16]));
+            assert!(
+                crate::sessions::tests::control_tags(&again.profile_store(), contact.0)?
+                    .1
+                    .contains(&[4; 16]),
+                "B's marker stays"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-115…SE-117: `on_b`, `RotateIdentity`, the `KeyChange` relayed on B (ids 1–4), the route C (`sid` 7) pumped (B in
+    /// overlap), the re-sent copy on C relayed (ids 1–4) and out of its window (261, 262).
+    #[cfg(feature = "kat")]
+    fn kc_on_b_then_c(
+        label: &str,
+        seed: u64,
+    ) -> Result<(Scene, Fixture, ContactId), crate::testutil::E> {
+        let (mut sc, guest, contact) = on_b(label, seed)?;
+        let hub = &mut sc.invitee;
+        let b = *hub.send_ids.get(&contact.0).ok_or("B")?;
+        assert!(matches!(
+            hub.core_mut().handle(Request::RotateIdentity)?,
+            Response::IdentityRotated(_)
+        ));
+        for i in 0..4_u64 {
+            on(hub, b, ms(60_u64.saturating_add(i)), i.saturating_add(1))?;
+        }
+        send_route(&mut sc, 7, ms(70))?;
+        let hub = &mut sc.invitee;
+        hub.pump()?;
+        let c = queue_of(&add_sends(hub), 7).ok_or("C")?;
+        for i in 0..4_u64 {
+            on(hub, c, ms(90_u64.saturating_add(i)), i.saturating_add(1))?;
+        }
+        on(hub, c, ms(100), 261)?;
+        on(hub, c, ms(101), 262)?;
+        assert!(kc_live(hub, contact), "B's copy holds before the restart");
+        Ok((sc, guest, contact))
+    }
+
+    /// SE-119 (Q252, Q253; verification R1 of B17b-3): every overlap row keeps the old route it was switched away from —
+    /// A (`sid` 9, seed `[9; 32]`, 80 s) and the queue before it (10 s, its own seed), not the new route's seed or period —
+    /// and a restart registers B and each old queue again with exactly that seed and period.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_registers_each_old_queue_with_its_own_route() -> R {
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-ov-own", 171)?;
+            let mut rows: Vec<(Id, SecretBytes<32>, u64)> = Vec::new();
+            for (_, row) in &sc
+                .invitee
+                .profile_store()
+                .lock()
+                .map_err(|_| "lock")?
+                .pending_controls(contact.0)?
+            {
+                if let Some(r) = crate::sessions::actor::overlap_of(row).map_err(|_| "overlap")? {
+                    rows.push((
+                        r.sid,
+                        r.seed,
+                        u64::from(r.period.seconds()).saturating_mul(1_000),
+                    ));
+                }
+            }
+            let a = rows.iter().find(|r| r.0 == [9; 16]).ok_or("A's row")?;
+            assert!(
+                a.1.expose_secret() == &[9_u8; 32] && a.2 == 80_000,
+                "Q252: A's row keeps A's seed and period"
+            );
+            let x = rows
+                .iter()
+                .find(|r| r.0 != [9; 16])
+                .ok_or("the row before A")?;
+            assert!(
+                x.1.expose_secret() != &[9_u8; 32] && x.2 == 10_000,
+                "Q252: the first row keeps its own seed and its period of 10 s"
+            );
+            rows.push(([4; 16], SecretBytes::from_slice(&[4; 32])?, 80_000));
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let sends: Vec<(Id, SecretBytes<32>, u64)> = again
+                .take_actions()
+                .into_iter()
+                .filter_map(|a| match a {
+                    Action::AddSend {
+                        sid,
+                        seed,
+                        period_ms,
+                        ..
+                    } => Some((sid, seed, period_ms)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(sends.len(), rows.len(), "B and the old queues, once each");
+            for (sid, seed, period) in &rows {
+                assert!(
+                    sends.iter().any(|s| s.0 == *sid
+                        && s.1.expose_secret() == seed.expose_secret()
+                        && s.2 == *period),
+                    "Q253: registered again with its own seed and period"
+                );
+            }
+            Ok(())
+        })
+    }
+
+    /// SE-122 (Q253, Q236; spec §10.2; verification R1 of B17b-3): after a restart one physical queue has one sender — two
+    /// overlap rows of one `sid` (22), both with an end ahead (as a failed delete can leave behind), register it once and
+    /// both rows stay with it; a route to A (`sid` 9), registered again in overlap, registers nothing and B stays current.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_keeps_one_sender_per_physical_queue() -> R {
+        use crate::clock::Clock as _;
+        use crate::sessions::actor::OverlapRoute;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-ov-once", 173)?;
+            let before = overlaps_of(&sc.invitee, contact)?;
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let store = guest.profile.store();
+            for until in [now.saturating_add(5_000), now.saturating_add(9_000)] {
+                let row = OverlapRoute {
+                    sid: [22; 16],
+                    seed: SecretBytes::from_slice(&[22; 32])?,
+                    period: Period::S20,
+                    until_ms: until,
+                    newest: 0,
+                    unknown: false,
+                }
+                .row();
+                store
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+            }
+            drop(store);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added: Vec<Id> = add_sends(&mut again).into_iter().map(|(_, s)| s).collect();
+            let mut want: Vec<Id> = vec![[4; 16]];
+            want.extend(before.iter().map(|r| r.0));
+            want.push([22; 16]);
+            assert_eq!(added, want, "Q236: 22 once");
+            let (_, b2) = again.sends_of(contact).ok_or("sends")?;
+            on(&mut again, b2, ms(10), 1)?;
+            assert_eq!(
+                overlaps_of(&again, contact)?
+                    .iter()
+                    .filter(|r| r.0 == [22; 16])
+                    .count(),
+                2,
+                "both rows of 22 stay with it"
+            );
+            let at = *again.core.index.get(&contact.0).ok_or("index")?;
+            again.register_route(contact, at, &route_body(9, Period::S80)?)?;
+            assert!(
+                add_sends(&mut again).is_empty(),
+                "Q236: A in overlap again is not registered a second time"
+            );
+            assert_eq!(again.send_ids.get(&contact.0), Some(&b2), "B stays current");
             Ok(())
         })
     }
@@ -2243,6 +2795,107 @@ mod tests {
             assert!(
                 queue_dels(&hub.take_actions(), inv_queue).is_empty(),
                 "once"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-126 (Q253, Q236; verification R2 of B17b-3): a row skipped at the restart because its physical queue is
+    /// registered already (here one of B, the current queue) does not end the re-registration: the row after it in `ord`
+    /// order (`sid` 22, its end ahead) is still registered, and both rows of the restart stay until the first preparation
+    /// decides (B's goes, 22's stays with its queue).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_registers_the_rows_after_a_skipped_one() -> R {
+        use crate::clock::Clock as _;
+        use crate::sessions::actor::OverlapRoute;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-ov-skip", 179)?;
+            let before = overlaps_of(&sc.invitee, contact)?;
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let store = guest.profile.store();
+            for sid in [4_u8, 22] {
+                let row = OverlapRoute {
+                    sid: [sid; 16],
+                    seed: SecretBytes::from_slice(&[sid; 32])?,
+                    period: Period::S20,
+                    until_ms: now.saturating_add(5_000),
+                    newest: 0,
+                    unknown: false,
+                }
+                .row();
+                store
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+            }
+            drop(store);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added: Vec<Id> = add_sends(&mut again).into_iter().map(|(_, s)| s).collect();
+            let mut want: Vec<Id> = vec![[4; 16]];
+            want.extend(before.iter().map(|r| r.0));
+            want.push([22; 16]);
+            assert_eq!(added, want, "Q253: 22 after the skipped row of B");
+            let (_, b2) = again.sends_of(contact).ok_or("sends")?;
+            on(&mut again, b2, ms(10), 1)?;
+            let mut left: Vec<Id> = before.iter().map(|r| r.0).collect();
+            left.push([22; 16]);
+            assert_eq!(
+                overlaps_of(&again, contact)?
+                    .iter()
+                    .map(|r| r.0)
+                    .collect::<Vec<_>>(),
+                left,
+                "B's row goes, 22's stays"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-128 (Q253, D-B88; verification R2 of B17b-3): a restart a minute into A's overlap keeps A's stored end: the queue
+    /// registered again retires at the restart's monotonic time plus what is left of the overlap on the core clock (the
+    /// minute the client was off counts against it), not measured from monotonic 0: the tick 1 ms before keeps it, the tick
+    /// at that end removes it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_later_keeps_the_stored_end() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-ov-later", 181)?;
+            let until = overlaps_of(&sc.invitee, contact)?
+                .iter()
+                .find(|r| r.0 == [9; 16])
+                .map(|r| r.2)
+                .ok_or("A's row")?;
+            drop(sc);
+            guest.clock.advance_ms(60_000);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let a2 = queue_of(&add_sends(&mut again), 9).ok_or("A again")?;
+            let mono = again.core.clock.mono_ms();
+            assert!(mono >= 60_000, "the restart is a minute later");
+            let left = until
+                .checked_sub(again.core.now_ms())
+                .ok_or("A's end is ahead")?;
+            again.tick(mono.saturating_add(left).saturating_sub(1));
+            assert!(
+                !again
+                    .take_actions()
+                    .iter()
+                    .any(|x| matches!(x, Action::Remove { queue } if *queue == a2)),
+                "1 ms before the stored end"
+            );
+            again.tick(mono.saturating_add(left));
+            assert!(
+                again
+                    .take_actions()
+                    .iter()
+                    .any(|x| matches!(x, Action::Remove { queue } if *queue == a2)),
+                "at the stored end"
             );
             Ok(())
         })

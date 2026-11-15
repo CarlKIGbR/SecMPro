@@ -11,16 +11,16 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use secmp_crypto::{HybridVerifyingKey, Zeroizing};
+use secmp_crypto::{HybridVerifyingKey, SecretBytes, Zeroizing};
 use secmp_proto::Encode;
 use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy, split_chunks};
 use secmp_proto::tr::{Entropy, OsEntropy, RatchetParts, RatchetState};
-use secmp_proto::wire::Id;
 use secmp_proto::wire::cell::{
     AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, ControlCode, Fragment,
     FragmentPayload, KeyChangeBody, ReceiptBody, ReceiptKind, RouteDescriptor, RouteUpdateBody,
 };
 use secmp_proto::wire::inv::IksPublic;
+use secmp_proto::wire::{Id, Period};
 
 use crate::scheduler::outbox::{
     CommitParts, DeliveredMessage, MsgId, OutMessage, Outbox, Persist, PersistError, PersistKind,
@@ -198,8 +198,8 @@ struct Marker {
     sid: Id,
     /// Its row; `None`: this durability keeps no rows (`MemPersist` without mirror).
     ord: Option<i64>,
-    /// The queue of this process it names; `None`: read at open and not the queue the conversation was registered on
-    /// first — nothing here can count its copy away, so it holds the `KeyChange` for good (Q249).
+    /// The queue of this process it names; `None`: read at open and not taken over by a registration of its `sid` (Q249,
+    /// Q253) — nothing here can count its copy away, so it holds the `KeyChange` until one takes it over.
     queue: Option<QueueId>,
 }
 
@@ -248,6 +248,102 @@ pub fn marker_of(row: &[u8]) -> Result<Option<(i64, Id)>, SourceError> {
     Ok(Some((ord, sid)))
 }
 
+/// The row tag of an [`OverlapRoute`] (Q252).
+const OVERLAP_TAG: u8 = 5;
+
+/// Q252: the length of an overlap row — tag, `sid`, seed, period, end, newest id, flag.
+const OVERLAP_LEN: usize = 68;
+
+/// Q252 (B17b-3, OPEN-M7-B-27): an old send queue in overlap, as its CONTROL row keeps it across a restart — the route
+/// the host sends to (`sid`, sender seed, period), the end of its overlap (Unix ms) and, for the `KeyChange`s that may
+/// have a copy there, the newest id of such a copy and whether one of unknown id may be there (Q254).
+pub struct OverlapRoute {
+    /// The queue's sender id (spec §9.1).
+    pub sid: Id,
+    /// The Ed25519 seed of the sender key (a secret: typed, zeroized, sealed in the row).
+    pub seed: SecretBytes<32>,
+    /// Its period (spec §10.2).
+    pub period: Period,
+    /// The end of the overlap the host drew at the switch, Unix ms.
+    pub until_ms: u64,
+    /// Q254: the newest cell id on that queue a `KeyChange` copy may have; 0: none known.
+    pub newest: u64,
+    /// Q254: a `KeyChange` copy of unknown id may be there.
+    pub unknown: bool,
+}
+
+impl OverlapRoute {
+    /// Q252: the row `5 ‖ sid[16] ‖ seed[32] ‖ period_s u16 ‖ until_ms u64 ‖ newest u64 ‖ unknown u8`, big-endian, 68
+    /// bytes; it holds the send seed (zeroized).
+    #[must_use]
+    pub fn row(&self) -> Zeroizing<Vec<u8>> {
+        let mut row = Zeroizing::new(Vec::with_capacity(OVERLAP_LEN));
+        row.push(OVERLAP_TAG);
+        row.extend_from_slice(&self.sid);
+        row.extend_from_slice(self.seed.expose_secret());
+        row.extend_from_slice(&self.period.seconds().to_be_bytes());
+        row.extend_from_slice(&self.until_ms.to_be_bytes());
+        row.extend_from_slice(&self.newest.to_be_bytes());
+        row.push(u8::from(self.unknown));
+        row
+    }
+
+    /// A copy (the seed copied into a new typed secret).
+    ///
+    /// # Errors
+    /// [`SourceError`] never in practice (the seed has its length).
+    pub fn copy(&self) -> Result<Self, SourceError> {
+        Ok(Self {
+            sid: self.sid,
+            seed: SecretBytes::from_slice(self.seed.expose_secret()).map_err(|_| SourceError)?,
+            period: self.period,
+            until_ms: self.until_ms,
+            newest: self.newest,
+            unknown: self.unknown,
+        })
+    }
+}
+
+/// Q252: the overlap of a row; `Ok(None)` for a row of another tag. Strict: exactly 67 bytes after the tag, a period of
+/// `PERIODS`, a flag 0 or 1.
+///
+/// # Errors
+/// [`SourceError`] for an overlap row that does not decode.
+pub fn overlap_of(row: &[u8]) -> Result<Option<OverlapRoute>, SourceError> {
+    let Some((&OVERLAP_TAG, body)) = row.split_first() else {
+        return Ok(None);
+    };
+    let (sid, body) = body.split_first_chunk::<16>().ok_or(SourceError)?;
+    let (seed, body) = body.split_first_chunk::<32>().ok_or(SourceError)?;
+    let (period, body) = body.split_first_chunk::<2>().ok_or(SourceError)?;
+    let (until, body) = body.split_first_chunk::<8>().ok_or(SourceError)?;
+    let (newest, body) = body.split_first_chunk::<8>().ok_or(SourceError)?;
+    let unknown = match body {
+        [0] => false,
+        [1] => true,
+        _ => return Err(SourceError),
+    };
+    Ok(Some(OverlapRoute {
+        sid: *sid,
+        seed: SecretBytes::from_slice(seed).map_err(|_| SourceError)?,
+        period: Period::from_seconds(u16::from_be_bytes(*period)).map_err(|_| SourceError)?,
+        until_ms: u64::from_be_bytes(*until),
+        newest: u64::from_be_bytes(*newest),
+        unknown,
+    }))
+}
+
+/// Q252: an old send queue's overlap and its row.
+struct Overlap {
+    route: OverlapRoute,
+    /// The queue of this process; `None`: read at open and not registered again — its row goes at the next preparation.
+    queue: Option<QueueId>,
+    /// Its row; `None`: not written yet, or this durability keeps no rows.
+    ord: Option<i64>,
+    /// The row is still to be written (a failed write is tried again at the next preparation).
+    unwritten: bool,
+}
+
 /// Q240: a `KeyChange` (row tag 3).
 fn is_key_change(row: &[u8]) -> bool {
     row.first() == Some(&3)
@@ -273,7 +369,7 @@ pub const SUCCESSION_WARN_MS: u64 = 24 * 60 * 60 * 1000;
 /// (Q210 c, Q222): the rotation's `RouteUpdate`, the `KeyChange` of an identity rotation, the `Control{1|2}` of a removal or
 /// a reset. Its row (the store's CONTROL part, sealed) is `tag u8 ‖ body`: 1 `RouteUpdateBody`, 2 `ControlBody` (no
 /// argument), 3 `KeyChangeBody` — the bodies in their wire encodings; the decoding is strict. Tag 4 is a `KeyChange`'s
-/// marker (Q248, [`marker_of`]), not a content.
+/// marker (Q248, [`marker_of`]), tag 5 an old send queue's overlap (Q252, [`overlap_of`]), not a content.
 pub enum PendingControl {
     /// A `RouteUpdate`.
     Routes(RouteUpdateBody),
@@ -511,8 +607,11 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     succession: Option<(u64, bool)>,
     /// Q248: the physical queue (`sid`) of the latest send queue the host registered, with that queue.
     send_sid: Option<(QueueId, Id)>,
-    /// Q248: marker rows read at open that name no live `KeyChange`: deleted at the next preparation.
+    /// Q248: marker rows read at open that name no live `KeyChange`: deleted at the next preparation; also the rows of
+    /// dropped overlaps whose delete failed (Q252).
     orphans: Vec<i64>,
+    /// Q252: the send queues in overlap whose end is durable, and the overlap rows read at open.
+    overlaps: Vec<Overlap>,
     /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
     #[cfg(feature = "kat")]
     mk_digests: Vec<[u8; 32]>,
@@ -577,6 +676,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             succession: None,
             send_sid: None,
             orphans: Vec::new(),
+            overlaps: Vec::new(),
             #[cfg(feature = "kat")]
             mk_digests: Vec::new(),
         }
@@ -654,7 +754,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// The marker row at `ord` (Q248), read at open after the rows before it: it joins the `KeyChange` read from the row
-    /// at `key_change`; it holds that `KeyChange` until the host registers the send queue `sid` first (Q249). A marker
+    /// at `key_change`; it holds that `KeyChange` until the host registers a send queue of `sid` (Q249, Q253). A marker
     /// that names no live `KeyChange` row is deleted at the next preparation.
     pub fn restore_marker(&mut self, ord: i64, key_change: i64, sid: Id) {
         match self
@@ -672,28 +772,145 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// The send queue `queue` the host registers next is the physical queue `sid` (Q248); called before
-    /// [`Conversation::set_send_queue`] or [`Conversation::switch_send_queue`]. At the first registration of this process
-    /// a marker read at open that names `sid` belongs to `queue`: a copy that was stored there before the restart has a
-    /// lower id than every cell sent now, so it takes, as a cell of unknown outcome, the id of the first `OK_SEND` there of
-    /// a later cell (Q249); every other marker read at open keeps holding its `KeyChange`.
+    /// [`Conversation::set_send_queue`] or [`Conversation::switch_send_queue`]. At every registration (Q253, not only the
+    /// first of the process as Q249 had it) a marker read at open that names `sid` belongs to `queue`: a copy that was
+    /// stored there before the restart has a lower id than every cell sent now, so it takes, as a cell of unknown outcome,
+    /// the id of the first `OK_SEND` there of a later cell (Q249); every other marker read at open keeps holding its
+    /// `KeyChange`.
     pub fn set_send_sid(&mut self, queue: QueueId, sid: Id) {
-        if self.send_queue.is_none() {
-            for e in self.controls.values_mut() {
-                let mut adopted = false;
-                for m in e
-                    .markers
-                    .iter_mut()
-                    .filter(|m| m.queue.is_none() && m.sid == sid)
-                {
-                    m.queue = Some(queue);
-                    adopted = true;
+        self.adopt(queue, sid, 0, true);
+        self.send_sid = Some((queue, sid));
+    }
+
+    /// Q249, Q253, Q254: every marker read at open that names `sid` belongs to the queue `queue` the host registers for
+    /// `sid` now; its `KeyChange` is marked on `queue` with the copies that may be there: one of id up to `newest` (> 0)
+    /// as stranded, one of unknown id (`unknown`) as of unknown outcome, which takes the id of the first later `OK_SEND`
+    /// there (Q241, Q250).
+    fn adopt(&mut self, queue: QueueId, sid: Id, newest: u64, unknown: bool) {
+        for e in self.controls.values_mut() {
+            let mut adopted = false;
+            for m in e
+                .markers
+                .iter_mut()
+                .filter(|m| m.queue.is_none() && m.sid == sid)
+            {
+                m.queue = Some(queue);
+                adopted = true;
+            }
+            if adopted {
+                if newest > 0 {
+                    e.stranded.push((queue, newest));
                 }
-                if adopted {
+                if unknown {
                     e.unknown.push((queue, 0));
                 }
             }
         }
-        self.send_sid = Some((queue, sid));
+    }
+
+    /// Q252 (B17b-3, OPEN-M7-B-27): the host switched away from the send queue `old` — the physical queue `sid` with the
+    /// sender seed `seed` and the period `period` — and keeps it in overlap until `until_ms` (Unix ms, drawn at the
+    /// switch). The overlap is written as a CONTROL row now, before the first preparation for the new queue, so that a
+    /// restart registers `old` again until that end (Q253); a failed write is tried again at every preparation. The row
+    /// also names the newest id of a `KeyChange` copy that may be on `old` and whether one of unknown id may be there
+    /// (Q254) — the state at the switch: no `KeyChange` cell goes to `old` after it, and a cell on its way counts as one
+    /// of unknown id.
+    pub fn keep_overlap(
+        &mut self,
+        old: QueueId,
+        sid: Id,
+        seed: SecretBytes<32>,
+        period: Period,
+        until_ms: u64,
+    ) {
+        let (newest, unknown) = self.copies_on(old);
+        self.overlaps.push(Overlap {
+            route: OverlapRoute {
+                sid,
+                seed,
+                period,
+                until_ms,
+                newest,
+                unknown,
+            },
+            queue: Some(old),
+            ord: None,
+            unwritten: true,
+        });
+        self.write_overlaps();
+    }
+
+    /// Q254: the newest id on `queue` that a `KeyChange` copy may have (its stranded marks), and whether a copy of unknown
+    /// id may be there (a mark of unknown outcome, or a `KeyChange` cell still on its way to `queue`).
+    fn copies_on(&self, queue: QueueId) -> (u64, bool) {
+        let mut newest = 0;
+        let mut unknown = false;
+        for (id, e) in &self.controls {
+            for (q, n) in &e.stranded {
+                if *q == queue {
+                    newest = newest.max(*n);
+                }
+            }
+            let on_its_way = self.inflight.values().any(|s| {
+                s.queue == Some(queue) && matches!(s.owner, Owner::Control(c) if c.id == *id)
+            });
+            if e.unknown.iter().any(|(q, _)| *q == queue) || (is_key_change(&e.row) && on_its_way) {
+                unknown = true;
+            }
+        }
+        (newest, unknown)
+    }
+
+    /// Q252: write the overlap rows not written yet; a failed write stays for the next preparation.
+    fn write_overlaps(&mut self) {
+        for o in self.overlaps.iter_mut().filter(|o| o.unwritten) {
+            if let Ok(ord) = self.persist.control_requeued(&o.route.row()) {
+                o.ord = ord;
+                o.unwritten = false;
+            }
+        }
+    }
+
+    /// Q252: the overlap row at `ord`, read at open. The host registers its queue again while its end is ahead
+    /// ([`Conversation::resume_overlap`], Q253); a row it does not register goes at the next preparation.
+    pub fn restore_overlap(&mut self, ord: i64, route: OverlapRoute) {
+        self.overlaps.push(Overlap {
+            route,
+            queue: None,
+            ord: Some(ord),
+            unwritten: false,
+        });
+    }
+
+    /// Q253: the overlaps read at open and not registered again (copies, in `ord` order), for the host.
+    ///
+    /// # Errors
+    /// [`SourceError`] if a seed does not copy.
+    pub fn overlaps_read(&self) -> Result<Vec<OverlapRoute>, SourceError> {
+        self.overlaps
+            .iter()
+            .filter(|o| o.queue.is_none())
+            .map(|o| o.route.copy())
+            .collect()
+    }
+
+    /// Q253: the host registered `queue` again, in send overlap, for the overlap rows read at open that name `sid`: the
+    /// queue carries dummies until the host drops it (spec §10.6 (4)); a marker read at open that names `sid` belongs to it,
+    /// with the copies the rows name (Q254).
+    pub fn resume_overlap(&mut self, queue: QueueId, sid: Id) {
+        let mut newest = 0;
+        let mut unknown = false;
+        for o in self
+            .overlaps
+            .iter_mut()
+            .filter(|o| o.queue.is_none() && o.route.sid == sid)
+        {
+            o.queue = Some(queue);
+            newest = newest.max(o.route.newest);
+            unknown |= o.route.unknown;
+        }
+        self.overlap_send.push(queue);
+        self.adopt(queue, sid, newest, unknown);
     }
 
     /// The current send queue, when its `sid` is known (Q248).
@@ -988,6 +1205,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
         self.orphans
             .retain(|o| self.persist.control_relayed(*o).is_err());
+        // Q253: an overlap read at open that the host did not register again has ended: its row goes (a failed delete is
+        // tried again at the next preparation)
+        self.overlaps.retain(|o| {
+            o.queue.is_some()
+                || o.ord
+                    .is_some_and(|ord| self.persist.control_relayed(ord).is_err())
+        });
         self.controls.retain(|id, e| {
             if e.retired {
                 e.ord.is_some()
@@ -1345,9 +1569,18 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
 
     /// The old queue `queue` is no longer sent to. A `KeyChange` copy marked stranded there stays marked (Q241): nothing
     /// shows that it has left the queue. A `KeyChange` cell still on its way there gets no answer any more: it is marked
-    /// as of unknown outcome, for good (Q250).
+    /// as of unknown outcome, for good (Q250). Its overlap row goes (Q252; a failed delete is tried again at the next
+    /// preparation).
     pub fn drop_send_queue(&mut self, queue: QueueId) {
         self.overlap_send.retain(|q| *q != queue);
+        for o in self.overlaps.iter().filter(|o| o.queue == Some(queue)) {
+            if let Some(ord) = o.ord
+                && self.persist.control_relayed(ord).is_err()
+            {
+                self.orphans.push(ord);
+            }
+        }
+        self.overlaps.retain(|o| o.queue != Some(queue));
         let open: Vec<(u64, u64)> = self
             .inflight
             .iter()
@@ -1726,6 +1959,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
         // the rows of control contents whose cells all have their `OK_SEND` go before the next seal (Q222 (2))
         self.settle_controls();
+        self.write_overlaps(); // Q252: an overlap row whose write failed, before the next seal
         self.last_now_ms = self.last_now_ms.max(now_ms);
         self.outbox.expire(now_ms);
         self.note_unconfirmed(now_ms);
@@ -3981,6 +4215,227 @@ mod tests {
             row_calls(a.persist()),
             (2, vec![]),
             "no marker and no row goes"
+        );
+        Ok(())
+    }
+
+    /// An overlap route of `sid` `[n; 16]` (seed `[n; 32]`, period 20 s) until `until_ms`, naming no copy (Q252).
+    #[cfg(feature = "kat")]
+    fn overlap(n: u8, until_ms: u64) -> Result<super::OverlapRoute, Fail> {
+        Ok(super::OverlapRoute {
+            sid: [n; 16],
+            seed: secmp_crypto::SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?,
+            period: secmp_proto::wire::Period::S20,
+            until_ms,
+            newest: 0,
+            unknown: false,
+        })
+    }
+
+    /// `keep_overlap` of `old` with [`overlap`] `n`.
+    #[cfg(feature = "kat")]
+    fn keep(
+        a: &mut super::Conversation<crate::scheduler::outbox::MemOutbox, Script, Fixed>,
+        old: u32,
+        n: u8,
+    ) -> Result<(), Fail> {
+        let o = overlap(n, 5_000)?;
+        a.keep_overlap(
+            crate::scheduler::types::QueueId(old),
+            o.sid,
+            o.seed,
+            o.period,
+            o.until_ms,
+        );
+        Ok(())
+    }
+
+    /// SE-105 (Q252): the host's switch writes the old queue's overlap row at once, before any preparation for the new
+    /// queue; a failed write is tried again at the next preparation, and a written row is not written again.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn overlap_row_is_written_at_the_switch() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        assert_eq!(
+            row_calls(a.persist()).0,
+            1,
+            "Q252: written at the switch (this write fails)"
+        );
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()).0,
+            2,
+            "tried again at the next preparation"
+        );
+        a.prepare(1_000).map_err(|_| "seal")?;
+        assert_eq!(row_calls(a.persist()), (2, vec![]), "written once");
+        Ok(())
+    }
+
+    /// SE-106 (Q252): dropping a send queue deletes its overlap row and no other; a failed delete is tried again at the
+    /// next preparation, once.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_overlap_deletes_its_row() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        a.switch_send_queue(QueueId(10));
+        keep(&mut a, 9, 9)?;
+        a.drop_send_queue(QueueId(5));
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![]),
+            "another queue: nothing"
+        );
+        a.drop_send_queue(QueueId(1));
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100]),
+            "Q252: the row of the dropped queue (this delete fails)"
+        );
+        a.prepare(0).map_err(|_| "seal")?;
+        a.prepare(1_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100, 100]),
+            "tried again, once"
+        );
+        a.drop_send_queue(QueueId(9));
+        assert_eq!(row_calls(a.persist()), (2, vec![100, 100, 101]));
+        assert_eq!(a.send_queues_kat(), (Some(QueueId(10)), vec![]));
+        Ok(())
+    }
+
+    /// SE-111 (Q253): overlap rows read at open that the host does not register again go at the first preparation (a
+    /// failed delete is tried again); the rows of a registered `sid` — both, if two name it — stay, and its queue carries
+    /// the overlap until it is dropped, which deletes them.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn overlap_rows_not_registered_again_go() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        for (ord, n) in [(50, 5), (51, 6), (52, 6)] {
+            a.restore_overlap(ord, overlap(n, 1)?);
+        }
+        let sids = |a: &super::Conversation<crate::scheduler::outbox::MemOutbox, Script, Fixed>| -> Result<Vec<secmp_proto::wire::Id>, Fail> {
+            Ok(a.overlaps_read().map_err(|_| "read")?.iter().map(|r| r.sid).collect())
+        };
+        assert_eq!(sids(&a)?, vec![[5; 16], [6; 16], [6; 16]]);
+        a.bind(QueueId(1), QueueId(2));
+        a.resume_overlap(QueueId(30), [6; 16]);
+        assert_eq!(sids(&a)?, vec![[5; 16]], "Q253: both rows of 6 taken");
+        assert_eq!(a.send_queues_kat(), (Some(QueueId(1)), vec![QueueId(30)]));
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (0, vec![50]),
+            "the unregistered row (this delete fails)"
+        );
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.prepare(2_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (0, vec![50, 50]),
+            "tried again, once; 6 stays"
+        );
+        a.drop_send_queue(QueueId(30));
+        assert_eq!(row_calls(a.persist()), (0, vec![50, 50, 51, 52]));
+        Ok(())
+    }
+
+    /// SE-118 (Q253; D-B92): a marker of a send queue dropped in this process is not taken over by a later registration of
+    /// its `sid` in the same process (only markers read at open are): when the peer's route moves the sender back to B
+    /// (`sid` 1, a new queue id) after B's overlap ended with B's copy marked, the new queue id gets a marker of its own
+    /// before the re-sent copy's first cell, B's dropped marker stays, and the guard holds.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_queue_marker_is_not_taken_over_in_the_same_process() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (old, new, back) = (QueueId(1), QueueId(9), QueueId(21));
+        let (mut a, _convs) = pair(script(0, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(old, [1; 16]);
+        a.bind(old, QueueId(2));
+        for id in 1..5_u64 {
+            let p = a.prepare(id * 1_000).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.set_send_sid(new, [9; 16]);
+        a.switch_send_queue(new);
+        a.prepare(10_000).map_err(|_| "seal")?;
+        a.drop_send_queue(old);
+        a.set_send_sid(back, [1; 16]);
+        a.switch_send_queue(back);
+        a.prepare(20_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (3, vec![]),
+            "D-B92: the dropped queue's marker stays; the new queue id gets its own"
+        );
+        assert!(a.key_change_in_flight());
+        Ok(())
+    }
+
+    /// SE-123 (Q254; verification R1 of B17b-3): `copies_on` names, for one queue only, the highest stranded id of a
+    /// `KeyChange` there — whatever the order of its marks — and a copy of unknown id when a mark of unknown outcome is on
+    /// that queue or a cell of that `KeyChange` is on its way to it; marks and cells of other queues do not count.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn copies_on_names_the_highest_mark_of_that_queue() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (q1, q2, q3) = (QueueId(1), QueueId(2), QueueId(3));
+        let (mut a, _convs) = pair(script(0, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        let (&id, e) = a.controls.iter_mut().next().ok_or("entry")?;
+        e.stranded = vec![(q1, 9), (q1, 5), (q2, 50)];
+        e.unknown = vec![(q2, 0)];
+        let attempt = e.attempt;
+        a.inflight.insert(
+            99,
+            super::Sent {
+                owner: super::Owner::Control(super::ControlRef { id, attempt }),
+                total: 1,
+                queue: Some(q3),
+            },
+        );
+        assert_eq!(
+            (
+                a.copies_on(q1),
+                a.copies_on(q2),
+                a.copies_on(q3),
+                a.copies_on(QueueId(4))
+            ),
+            ((9, false), (50, true), (0, true), (0, false)),
+            "Q254: per queue, the highest mark; unknown by a mark or by a cell on its way"
+        );
+        Ok(())
+    }
+
+    /// SE-124 (Q252; verification R1 of B17b-3): a queue dropped before its overlap row could be written leaves nothing to
+    /// write: the next preparation writes no late row for it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_overlap_writes_no_late_row() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        a.drop_send_queue(QueueId(1));
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![]),
+            "Q252: no late write for a dropped queue"
         );
         Ok(())
     }

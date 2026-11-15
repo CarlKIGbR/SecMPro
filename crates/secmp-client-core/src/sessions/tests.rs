@@ -3,6 +3,8 @@
 //! entropy and the test key is gated inside.
 
 #[cfg(feature = "kat")]
+use secmp_proto::wire::Id;
+#[cfg(feature = "kat")]
 #[cfg(feature = "kat")]
 use secmp_proto::wire::Period;
 #[cfg(feature = "kat")]
@@ -2793,12 +2795,12 @@ fn failed_replan_is_planned_at_the_next_preparation() -> R {
 /// SE-75 (Q241): a `KeyChange` cell whose `SEND` ends without an answer (`SendFailure::Unknown`: the link went down) may
 /// still have been stored: it is marked and takes the id of the next `OK_SEND` on that queue of a cell prepared after it.
 /// Reported on the old queue after the switch, on the current queue just before it, or before the late answer of the
-/// cell prepared just before it (id 3, which names no id for it), the mark takes 5 and holds the guard until the old
-/// queue's id 133 (132 releases the cells 1–3 only). With all four cells of unknown outcome, those marks alone hold the
-/// guard, also through the loss of the new queue, after the new attempt has left its window; they take the id of the next
-/// old-queue `OK_SEND` (1) and go at 129.
-/// Reported on the current queue without a switch, it takes the id of the re-sent attempt's first `OK_SEND` (4), and the
-/// guard lifts with that attempt's window.
+/// cell prepared just before it (id 3, which names no id for it), the mark takes 5 and the in-flight margin 2 (Q250), 7,
+/// and holds the guard until the old queue's id 135 (132 releases the cells 1–3 only, 134 is not enough). With all four
+/// cells of unknown outcome, those marks alone hold the guard, also through the loss of the new queue, after the new
+/// attempt has left its window; they take the id of the next old-queue `OK_SEND` and the margin (1 + 2) and go at 131.
+/// Reported on the current queue without a switch, it takes the id of the re-sent attempt's first `OK_SEND` and the
+/// margin (4 + 2), and the guard lifts with that attempt's window.
 #[cfg(feature = "kat")]
 #[test]
 fn unknown_send_at_the_switch_is_held() -> R {
@@ -2881,8 +2883,11 @@ fn unknown_send_of_the_last_cell(before: bool, late: bool, label: &str, seed: u6
         live(&convs),
         "132 releases the cells 1-3, not the unknown one (before the switch: {before}, late answer: {late})"
     );
-    send_on(&mut convs, old, ms(214), add(total, 129))?;
+    send_on(&mut convs, old, ms(214), add(total, 130))?;
     send_on(&mut convs, new, ms(215), add(total, 260))?;
+    assert!(live(&convs), "Q250: 134 is inside the in-flight margin");
+    send_on(&mut convs, old, ms(216), add(total, 131))?;
+    send_on(&mut convs, new, ms(217), add(total, 261))?;
     assert!(!live(&convs));
     assert_eq!(control_rows(&store)?, 0);
     drop(g);
@@ -2935,10 +2940,13 @@ fn unknown_send_of_every_cell() -> R {
         "Q241: the marks of unknown outcome hold alone"
     );
     send_on(&mut convs, old, ms(212), 1)?;
-    send_on(&mut convs, old, ms(213), 128)?;
+    send_on(&mut convs, old, ms(213), 130)?;
     send_on(&mut convs, new, ms(214), add(total, 259))?;
-    assert!(live(&convs), "128 is not enough for the id 1");
-    send_on(&mut convs, old, ms(215), 129)?;
+    assert!(
+        live(&convs),
+        "Q250: 130 is not enough for the id 1 and the margin 2"
+    );
+    send_on(&mut convs, old, ms(215), 131)?;
     send_on(&mut convs, new, ms(216), add(total, 260))?;
     assert!(!live(&convs));
     assert_eq!(control_rows(&store)?, 0);
@@ -2983,7 +2991,7 @@ fn unknown_send_on_the_current_queue() -> R {
 }
 
 /// SE-75: cell 4 ends with `SendFailure::Unknown` on the old queue after the switch, then the first cell of the new
-/// attempt ends so on the new queue: each queue keeps its own mark (the old one takes 5, the new one 1), and the new
+/// attempt ends so on the new queue: each queue keeps its own mark (the old one takes 5 + 2, the new one 1 + 2), and the new
 /// mark resolved and gone does not take the old one with it.
 #[cfg(feature = "kat")]
 fn unknown_send_on_both_queues(new_first: bool) -> R {
@@ -3047,8 +3055,11 @@ fn unknown_send_on_both_queues(new_first: bool) -> R {
         live(&convs),
         "132 releases the cells 1-3, not the unknown one"
     );
-    send_on(&mut convs, old, ms(214), add(total, 129))?;
+    send_on(&mut convs, old, ms(214), add(total, 130))?;
     send_on(&mut convs, new, ms(215), add(total, 260))?;
+    assert!(live(&convs), "Q250: 134 is inside the in-flight margin");
+    send_on(&mut convs, old, ms(216), add(total, 131))?;
+    send_on(&mut convs, new, ms(217), add(total, 261))?;
     assert!(!live(&convs));
     assert_eq!(control_rows(&store)?, 0);
     drop(g);
@@ -3378,6 +3389,677 @@ fn late_eviction_rewrites_the_control_row() -> R {
             w.g.take_events().as_slice(),
             [SessionEvent::Routes(_)]
         ));
+        Ok(())
+    })
+}
+
+/// The host after two identity rotations through one core, opened again from its rows: contact 1 has two `KeyChange`
+/// rows, KC1 (signed by the first identity) and KC2 (signed by the identity KC1 announced), in this `ord` order.
+#[cfg(feature = "kat")]
+fn rotated_twice(
+    label: &str,
+    seed: u64,
+) -> Result<(Fixture, StoreConversation<Fixed>, StoreConversation<Fixed>), E> {
+    use crate::api::{Core, Request, Response};
+
+    let World { host, h, g, .. } = established(label, seed)?;
+    drop(h);
+    // an odd base: the open and the two rotations take the streams base + 1, + 2, + 3, and `entropy` makes 2k and 2k + 1 one
+    // stream, so the two new identities differ
+    let mut core = Core::with_profile(
+        host.profile.clone(),
+        host.clock.clone(),
+        core_sources(seed | 1),
+    )?;
+    let Response::IdentityRotated(fp1) = core.handle(Request::RotateIdentity)? else {
+        return Err("first rotation".into());
+    };
+    let Response::IdentityRotated(fp2) = core.handle(Request::RotateIdentity)? else {
+        return Err("Q244: a live KeyChange refuses no rotation".into());
+    };
+    assert_ne!(fp1, fp2);
+    drop(core);
+    let h = open_conversation(
+        &host.profile.store(),
+        ContactId(1),
+        Fixed(entropy(seed.wrapping_add(2))),
+        T0,
+    )?;
+    assert_eq!(control_rows(&host.profile.store())?, 2);
+    Ok((host, h, g))
+}
+
+/// The `KeyChanged` events among `g`'s events, and whether there was any other.
+#[cfg(feature = "kat")]
+fn key_changes(g: &mut StoreConversation<Fixed>) -> (usize, bool) {
+    let events = g.take_events();
+    let changed = events
+        .iter()
+        .filter(|e| matches!(e, SessionEvent::KeyChanged(_)))
+        .count();
+    (changed, changed != events.len())
+}
+
+/// SE-85 (Q244, ADR-060 (4), (5); ADR-058): after two rotations only the head of contact 1's chain (KC1) is planned. While
+/// KC1 is in its eviction window the following cells are dummies — KC2 is not sent; the preparation after KC1's window
+/// has passed (`OK_SEND` id 4 + 256 + 1) deletes KC1's row and seals KC2's first cell, and the peer accepts KC2 under the
+/// identity KC1 announced (two `KeyChanged`, never frozen).
+#[cfg(feature = "kat")]
+#[test]
+fn later_key_change_waits_for_the_head() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_twice("q244-chain", 721)?;
+        let store = host.profile.store();
+        let total = key_change_cells()?;
+        assert_eq!(h.successions_pending(), 2);
+        for i in 0..total {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(key_changes(&mut g), (1, false), "KC1 reaches the peer");
+        for i in 0..total {
+            let p = h.prepare_direct(ms(110 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 5 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (0, false),
+            "Q244: KC2 waits while KC1 is in its window"
+        );
+        assert_eq!(control_rows(&store)?, 2);
+        let p = h.prepare_direct(ms(120)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 4 + 256);
+        deliver(&mut g, &p.cell)?;
+        assert_eq!(h.successions_pending(), 2, "4 + 256 is still in the window");
+        let p = h.prepare_direct(ms(121)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 4 + 257);
+        deliver(&mut g, &p.cell)?;
+        assert_eq!(key_changes(&mut g), (0, false));
+        for i in 0..total {
+            let p = h.prepare_direct(ms(130 + i)).map_err(|_| "prepare")?;
+            if i == 0 {
+                assert_eq!(control_rows(&store)?, 1, "KC1's row went before KC2's seal");
+                assert_eq!(h.successions_pending(), 1);
+            }
+            h.relayed_direct(p.token, 262 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (1, false),
+            "KC2 verifies under the identity KC1 announced"
+        );
+        assert_eq!(g.trust(), Trust::KeyChanged, "never frozen");
+        Ok(())
+    })
+}
+
+/// SE-86 (Q244): a send-queue switch and the loss of the queue re-plan the head of the chain only: KC2 stays unplanned
+/// behind KC1, so the peer gets KC1 once (one `KeyChanged`) and then dummies.
+#[cfg(feature = "kat")]
+#[test]
+fn switch_and_loss_leave_the_waiting_link_unplanned() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (_host, mut h, mut g) = rotated_twice("q244-replan", 723)?;
+        let total = key_change_cells()?;
+        h.switch_send_queue(QueueId(9));
+        h.lost_direct();
+        for i in 0..2 * total {
+            deliver(&mut g, &next(&mut h, ms(100 + i))?)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (1, false),
+            "Q244: only the head is planned again"
+        );
+        assert_eq!(h.successions_pending(), 2);
+        Ok(())
+    })
+}
+
+/// SE-87 (Q244, ADR-060 (5); OPEN-M7-B-12): the chain order survives restarts. A restart after two of KC1's cells plans
+/// KC1 again (head) and leaves KC2 waiting; the peer gets KC1, then dummies. A restart inside KC1's window sends KC1 once
+/// more — a no-op at the peer (ADR-058) — and KC2 still waits; after KC1's window KC2 follows and is accepted.
+#[cfg(feature = "kat")]
+#[test]
+fn chain_order_survives_restarts() -> R {
+    use secmp_proto::tr::content::Trust;
+
+    big(|| {
+        let (host, mut h, mut g) = rotated_twice("q244-restart", 725)?;
+        let store = host.profile.store();
+        let total = key_change_cells()?;
+        for i in 0..2 {
+            let p = h.prepare_direct(ms(100 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 1 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        drop(h);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(726)), T0)?;
+        assert_eq!(h.successions_pending(), 2, "both rows come back, in order");
+        for i in 0..2 * total {
+            let p = h.prepare_direct(ms(200 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 3 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(key_changes(&mut g), (1, false), "KC1 first, then dummies");
+        drop(h);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(727)), T0)?;
+        assert_eq!(h.successions_pending(), 2);
+        for i in 0..2 * total {
+            let p = h.prepare_direct(ms(300 + i)).map_err(|_| "prepare")?;
+            h.relayed_direct(p.token, 11 + i);
+            deliver(&mut g, &p.cell)?;
+        }
+        assert_eq!(
+            key_changes(&mut g),
+            (0, false),
+            "ADR-058: KC1 again is a no-op; KC2 still waits"
+        );
+        assert_eq!(g.trust(), Trust::KeyChanged, "not frozen");
+        let p = h.prepare_direct(ms(320)).map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 14 + 257);
+        deliver(&mut g, &p.cell)?;
+        for i in 0..total {
+            deliver(&mut g, &next(&mut h, ms(330 + i))?)?;
+        }
+        assert_eq!(key_changes(&mut g), (1, false), "KC2 after KC1's window");
+        assert_eq!(g.trust(), Trust::KeyChanged);
+        assert_eq!(control_rows(&store)?, 1);
+        Ok(())
+    })
+}
+
+/// SE-88 (Q246, ADR-060 (6)): `SuccessionPending` is raised once, at the first preparation `SUCCESSION_WARN_MS` after the
+/// first one that saw the pending `KeyChange` (none at + `SUCCESSION_WARN_MS` − 1, none again later); once the
+/// `KeyChange` has left, a new one is timed from its own first preparation (a pending `Control` beside it counts as no
+/// succession). Two pending successions raise it at once, and only once. Monotonic test times only (no wall clock).
+#[cfg(feature = "kat")]
+#[test]
+fn succession_pending_is_raised_once_at_its_time() -> R {
+    use crate::sessions::actor::SUCCESSION_WARN_MS;
+    use secmp_proto::prekeys::IdentityKeys;
+    use secmp_proto::tr::content::key_change_body;
+
+    // 24 h written out: a test in terms of the constant would follow a mutated one
+    assert_eq!(SUCCESSION_WARN_MS, 86_400_000);
+    big(|| {
+        let (host, mut h, _g) = rotated_host("q246-warn", 729)?;
+        let warned = |h: &mut StoreConversation<Fixed>| {
+            h.take_events()
+                .iter()
+                .filter(|e| matches!(e, SessionEvent::SuccessionPending))
+                .count()
+        };
+        let t0 = ms(100);
+        let total = key_change_cells()?;
+        let mut tokens = Vec::new();
+        for i in 0..total {
+            tokens.push(h.prepare_direct(t0 + i).map_err(|_| "prepare")?.token);
+        }
+        assert_eq!(warned(&mut h), 0);
+        next(&mut h, t0 + SUCCESSION_WARN_MS - 1)?;
+        assert_eq!(warned(&mut h), 0, "not before T");
+        next(&mut h, t0 + SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h), 1, "at T");
+        next(&mut h, t0 + 2 * SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h), 0, "once");
+        for (i, token) in (1..).zip(tokens) {
+            h.relayed_direct(token, i);
+        }
+        let p = h
+            .prepare_direct(t0 + 2 * SUCCESSION_WARN_MS + 1)
+            .map_err(|_| "prepare")?;
+        h.relayed_direct(p.token, 4 + 257);
+        next(&mut h, t0 + 2 * SUCCESSION_WARN_MS + 2)?;
+        assert_eq!(h.successions_pending(), 0);
+        // a control content other than a `KeyChange` is no succession
+        h.queue_control(secmp_proto::wire::cell::ControlCode::SessionResetRequest);
+        assert_eq!(h.successions_pending(), 0, "a Control is no succession");
+        // a new succession is timed from its own first preparation
+        let t1 = t0 + 3 * SUCCESSION_WARN_MS;
+        let new = IdentityKeys::generate(&mut entropy(730))?;
+        let body = key_change_body(&host.profile.signing_key()?, new.public())?;
+        h.queue_key_change(body.clone()).map_err(|_| "queue")?;
+        next(&mut h, t1)?;
+        next(&mut h, t1 + SUCCESSION_WARN_MS - 1)?;
+        assert_eq!(warned(&mut h), 0, "re-armed, not raised at once");
+        next(&mut h, t1 + SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h), 1, "the new one at its own T");
+        // two pending successions: at once, once
+        let (_host, mut h2, _g2) = rotated_twice("q246-two", 731)?;
+        next(&mut h2, t0)?;
+        assert_eq!(warned(&mut h2), 1, "two pending: at the first preparation");
+        next(&mut h2, t0 + SUCCESSION_WARN_MS)?;
+        assert_eq!(warned(&mut h2), 0, "and only once");
+        Ok(())
+    })
+}
+
+/// The tags of the pending control rows of `session` in `ord` order, and the `sid`s its marker rows name (Q248).
+#[cfg(feature = "kat")]
+pub(crate) fn control_tags(store: &SharedStore, session: i64) -> Result<(Vec<u8>, Vec<Id>), E> {
+    let rows = store
+        .lock()
+        .map_err(|_| "lock")?
+        .pending_controls(session)?;
+    let mut tags = Vec::new();
+    let mut sids = Vec::new();
+    for (_, row) in &rows {
+        tags.push(row.first().copied().ok_or("empty row")?);
+        if let Some((_, sid)) = actor::marker_of(row).map_err(|_| "marker")? {
+            sids.push(sid);
+        }
+    }
+    Ok((tags, sids))
+}
+
+/// SE-91 (Q248): a marker row is `4 ‖ ord i64 BE ‖ sid[16]` and decodes strictly — it round-trips; a row of another
+/// tag is no marker; a marker of another length or with a negative `ord` is refused, and no marker row is a content.
+#[cfg(feature = "kat")]
+#[test]
+fn marker_codec_is_strict() {
+    use crate::sessions::actor::{PendingControl, marker_of, marker_row};
+
+    let row = marker_row(5, &[7; 16]);
+    assert_eq!(row.len(), 25);
+    assert_eq!(row.get(..9), Some(&[4, 0, 0, 0, 0, 0, 0, 0, 5][..]));
+    assert_eq!(marker_of(&row), Ok(Some((5, [7; 16]))));
+    assert!(PendingControl::decode(&row).is_err());
+    assert_eq!(marker_of(&[3, 0]), Ok(None));
+    assert_eq!(marker_of(&[]), Ok(None));
+    let mut long = row.clone();
+    long.push(0);
+    let mut short = row.clone();
+    short.pop();
+    let negative = marker_row(-1, &[7; 16]);
+    for bad in [&[4][..], &short, &long, &negative] {
+        assert!(marker_of(bad).is_err(), "{bad:?}");
+    }
+    // every length: a tag-4 row decodes only at 25 bytes
+    for len in 1..64_usize {
+        let mut row = vec![0_u8; len];
+        if let Some(tag) = row.first_mut() {
+            *tag = 4;
+        }
+        assert_eq!(marker_of(&row).is_ok(), len == 25, "{len}");
+    }
+}
+
+/// SE-96 (Q248, Q249; D-B73, D-B74): a `KeyChange` sent on B (`sid` 1) and, after a switch, on C (`sid` 9). A restart
+/// registered on C reads both markers back: B's copy was not counted away, so its marker holds the `KeyChange` for good —
+/// the re-read copy on C leaving its window releases nothing, both markers stay. Once B's `OK_SEND` of id 132 has counted
+/// the copy away before the restart, B's marker goes, and after the restart the window on C alone releases the
+/// `KeyChange` with its markers.
+#[cfg(feature = "kat")]
+#[test]
+fn restart_keeps_the_marker_of_an_uncounted_old_queue() -> R {
+    big(|| {
+        restart_after_a_switch(false, "q249-uncounted", 721)?;
+        restart_after_a_switch(true, "q249-counted", 727)
+    })
+}
+
+/// SE-96: the `KeyChange` on B then C; with `counted`, B's id 132 before the restart; the restart is registered on C.
+#[cfg(feature = "kat")]
+fn restart_after_a_switch(counted: bool, label: &str, seed: u64) -> R {
+    use crate::scheduler::types::QueueId;
+
+    let (host, mut h, g) = rotated_host(label, seed)?;
+    let store = host.profile.store();
+    let (b, c) = (QueueId(1), QueueId(9));
+    h.set_send_sid(b, [1; 16]);
+    h.bind(b, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    let total = key_change_cells()?;
+    for i in 0..total {
+        send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+    }
+    let conv = convs.get_mut(at).ok_or("conversation")?;
+    conv.set_send_sid(c, [9; 16]);
+    conv.switch_send_queue(c);
+    for i in 0..total {
+        send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+    }
+    if counted {
+        send_on(&mut convs, b, ms(210), add(total, 128))?;
+        send_on(&mut convs, c, ms(211), add(total, 1))?;
+    }
+    let before: Vec<Id> = if counted {
+        vec![[9; 16]]
+    } else {
+        vec![[1; 16], [9; 16]]
+    };
+    assert_eq!(
+        control_tags(&store, 1)?.1,
+        before,
+        "{label}: before the restart"
+    );
+    drop(convs);
+    let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(add(seed, 1))), T0)?;
+    let again = QueueId(20);
+    h.set_send_sid(again, [9; 16]);
+    h.bind(again, QueueId(2));
+    let mut convs = actor::Conversations::new();
+    let at = convs.add(h);
+    for i in 0..total {
+        send_on(&mut convs, again, ms(add(300, i)), add(1, i))?;
+    }
+    for i in 257..260 {
+        send_on(&mut convs, again, ms(add(400, i)), add(total, i))?;
+    }
+    assert_eq!(
+        convs
+            .get(at)
+            .is_some_and(actor::Conversation::key_change_in_flight),
+        !counted,
+        "{label}: Q249: only an uncounted old queue holds after the restart"
+    );
+    let after: Vec<Id> = if counted { Vec::new() } else { before };
+    assert_eq!(
+        control_tags(&store, 1)?.1,
+        after,
+        "{label}: after the restart"
+    );
+    drop(g);
+    Ok(())
+}
+
+/// SE-97 (Q248): marker rows that name no `KeyChange` row — one naming a `RouteUpdate`'s `ord`, one an `ord` without a
+/// row — hold nothing at open and go at the first preparation; the `RouteUpdate` stays.
+#[cfg(feature = "kat")]
+#[test]
+fn orphan_marker_holds_nothing_and_goes() -> R {
+    big(|| {
+        let World { host, h, mut g, .. } = established("q248-orphan", 731)?;
+        drop(h);
+        let store = host.profile.store();
+        let (route, _) = pend(&store, &routes_of(3)?)?;
+        for row in [
+            actor::marker_row(route, &[3; 16]),
+            actor::marker_row(77, &[4; 16]),
+        ] {
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &row))?;
+        }
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(732)), T0)?;
+        assert!(!h.key_change_in_flight());
+        deliver(&mut g, &next(&mut h, ms(10))?)?;
+        assert_eq!(
+            control_tags(&store, 1)?.0,
+            [1],
+            "Q248: markers without their KeyChange go at the first preparation"
+        );
+        Ok(())
+    })
+}
+
+/// SE-98 (Q251): a marker row that does not decode (one byte too many or too few) fails the open, like every control
+/// row that does not decode; nothing is released, and without it the `KeyChange` opens again.
+#[cfg(feature = "kat")]
+#[test]
+fn undecodable_marker_fails_the_open() -> R {
+    big(|| {
+        let (host, h, g) = rotated_host("q251-bad", 733)?;
+        drop(h);
+        let store = host.profile.store();
+        let key_change = store
+            .lock()
+            .map_err(|_| "lock")?
+            .pending_controls(1)?
+            .first()
+            .map(|(o, _)| *o)
+            .ok_or("row")?;
+        let mut long = actor::marker_row(key_change, &[1; 16]);
+        long.push(0);
+        let mut short = actor::marker_row(key_change, &[1; 16]);
+        short.pop();
+        for bad in [long, short] {
+            let ord = store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, &bad))?;
+            assert!(
+                matches!(
+                    open_conversation(&store, ContactId(1), Fixed(entropy(734)), T0),
+                    Err(crate::api::Error::Unavailable)
+                ),
+                "Q251: {} bytes",
+                bad.len()
+            );
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::delete_pending_control(tx, 1, ord))?;
+        }
+        assert_eq!(control_tags(&store, 1)?.0, [3]);
+        let h = open_conversation(&store, ContactId(1), Fixed(entropy(735)), T0)?;
+        assert!(h.key_change_in_flight());
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-99 (Q241; B17b verification I-03, hand mutant H7): every cell of the `KeyChange` ends with `SendFailure::Unknown`
+/// on the old queue after the switch; the new attempt leaves the new queue's window. The marks of unknown outcome alone
+/// keep the `KeyChange`'s row, so a restart reads it back.
+#[cfg(feature = "kat")]
+#[test]
+fn unknown_marks_on_the_head_keep_its_row() -> R {
+    use crate::scheduler::types::{CellSource as _, QueueId, SendFailure};
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q241-h7", 737)?;
+        let store = host.profile.store();
+        let (old, new) = (QueueId(1), QueueId(9));
+        h.bind(old, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        let total = key_change_cells()?;
+        let mut tokens = Vec::new();
+        for i in 0..total {
+            let p = convs
+                .prepare_cell(old, ms(100 + i))
+                .map_err(|_| "prepare")?
+                .ok_or("no cell")?;
+            tokens.push(p.token);
+        }
+        convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .switch_send_queue(new);
+        for token in tokens {
+            convs.send_failed(old, token, SendFailure::Unknown);
+        }
+        for i in 0..total {
+            send_on(&mut convs, new, ms(200 + i), 1 + i)?;
+        }
+        send_on(&mut convs, new, ms(210), total + 257)?;
+        send_on(&mut convs, new, ms(211), total + 258)?;
+        assert!(
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        );
+        assert_eq!(
+            control_rows(&store)?,
+            1,
+            "Q241: marks of unknown outcome keep the KeyChange row"
+        );
+        drop(convs);
+        let h = open_conversation(&store, ContactId(1), Fixed(entropy(738)), T0)?;
+        assert!(h.key_change_in_flight(), "the restart reads it back");
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-101 (Q249; verification R1): a restart registered on B (`sid` 1) first takes B's marker over with a mark of
+/// unknown outcome; when the peer's route moves the sender to C (`sid` 9) before any `OK_SEND` on B, that mark stays on
+/// B, so C's window alone releases nothing. B's overlap then counts the pre-restart copy away at the first later id plus
+/// the margin plus `QUEUE_CAPACITY` (500 + 2 + 128 = 630; 629 is not enough), and the `KeyChange` goes with its markers.
+#[cfg(feature = "kat")]
+#[test]
+fn restart_on_the_marked_queue_then_a_switch_holds() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q249-switch", 741)?;
+        let store = host.profile.store();
+        let b = QueueId(1);
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        assert_eq!(control_tags(&store, 1)?.1, vec![[1_u8; 16]]);
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(742)), T0)?;
+        let (again, c) = (QueueId(20), QueueId(30));
+        h.set_send_sid(again, [1; 16]);
+        h.bind(again, QueueId(2));
+        h.set_send_sid(c, [9; 16]);
+        h.switch_send_queue(c);
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        for i in 0..total {
+            send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+        }
+        for i in 257..260 {
+            send_on(&mut convs, c, ms(add(300, i)), add(total, i))?;
+        }
+        let live = |convs: &actor::Conversations<StoreOutbox, StorePersist, Fixed>| {
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight)
+        };
+        assert!(
+            live(&convs),
+            "Q249: B's pre-restart copy is not counted yet"
+        );
+        assert_eq!(
+            control_tags(&store, 1)?.1,
+            vec![[1_u8; 16], [9; 16]],
+            "both markers stay"
+        );
+        send_on(&mut convs, again, ms(400), 500)?;
+        send_on(&mut convs, again, ms(401), 629)?;
+        send_on(&mut convs, c, ms(402), add(total, 260))?;
+        assert!(live(&convs), "Q249, Q250: 629 is not enough for 500 + 2");
+        send_on(&mut convs, again, ms(403), 630)?;
+        send_on(&mut convs, c, ms(404), add(total, 261))?;
+        assert!(!live(&convs), "630 counts B's copy away");
+        assert_eq!(control_rows(&store)?, 0, "the markers and the row are gone");
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-102 (Q249; verification R1): two restarts. The first registers B and sends nothing; the second registers C (`sid`
+/// 9): B's marker, taken over by the first run but never counted, is read back once more and now holds the `KeyChange`
+/// for good — C's window releases nothing.
+#[cfg(feature = "kat")]
+#[test]
+fn second_restart_elsewhere_keeps_an_uncounted_marker() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q249-twice", 743)?;
+        let store = host.profile.store();
+        let b = QueueId(1);
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(744)), T0)?;
+        h.set_send_sid(QueueId(20), [1; 16]);
+        h.bind(QueueId(20), QueueId(2));
+        drop(h);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(745)), T0)?;
+        let c = QueueId(30);
+        h.set_send_sid(c, [9; 16]);
+        h.bind(c, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        for i in 0..total {
+            send_on(&mut convs, c, ms(add(200, i)), add(1, i))?;
+        }
+        for i in 257..261 {
+            send_on(&mut convs, c, ms(add(300, i)), add(total, i))?;
+        }
+        assert!(
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight),
+            "Q249: B's copy holds for good"
+        );
+        assert_eq!(control_tags(&store, 1)?.1, vec![[1_u8; 16], [9; 16]]);
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-103 (Q249; verification R2): a restart registered on C (`sid` 9) first; the peer's route then moves the sender back
+/// to B (`sid` 1, a new queue id). B's marker read at open is not taken over by that later registration: it keeps holding
+/// the `KeyChange` for good, also after B's re-sent copy has left its window and B's later ids would have counted a
+/// taken-over copy away (first registration only; D-B81).
+#[cfg(feature = "kat")]
+#[test]
+fn later_registration_of_a_marked_sid_keeps_the_hold() -> R {
+    use crate::scheduler::types::QueueId;
+
+    big(|| {
+        let (host, mut h, g) = rotated_host("q249-back", 747)?;
+        let store = host.profile.store();
+        let b = QueueId(1);
+        h.set_send_sid(b, [1; 16]);
+        h.bind(b, QueueId(2));
+        let mut convs = actor::Conversations::new();
+        convs.add(h);
+        let total = key_change_cells()?;
+        for i in 0..total {
+            send_on(&mut convs, b, ms(add(100, i)), add(1, i))?;
+        }
+        drop(convs);
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(748)), T0)?;
+        let (c, back) = (QueueId(20), QueueId(21));
+        h.set_send_sid(c, [9; 16]);
+        h.bind(c, QueueId(2));
+        h.set_send_sid(back, [1; 16]);
+        h.switch_send_queue(back);
+        let mut convs = actor::Conversations::new();
+        let at = convs.add(h);
+        for i in 0..total {
+            send_on(&mut convs, back, ms(add(200, i)), add(300, i))?;
+        }
+        for i in 0..4 {
+            send_on(&mut convs, back, ms(add(300, i)), add(700, i))?;
+        }
+        assert!(
+            convs
+                .get(at)
+                .is_some_and(actor::Conversation::key_change_in_flight),
+            "Q249: only the first registration takes a marker over"
+        );
+        assert_eq!(control_tags(&store, 1)?.1, vec![[1_u8; 16], [1; 16]]);
+        drop(g);
         Ok(())
     })
 }

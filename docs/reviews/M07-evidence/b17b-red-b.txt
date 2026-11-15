@@ -1,0 +1,52 @@
+head 64650f63fc515e3b72e088ecd253351c42562314
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index cb2032d..90cbcb5 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -716,7 +716,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+     /// attempt, and a durable content whose row went writes it again (its cells wait until it is written, Q225).
+     fn replan_control(&mut self, r: ControlRef) {
+         // a link that waits in its chain has nothing planned to plan again (Q244)
+-        if !plannable(&self.controls, r.id) {
++        if false && !plannable(&self.controls, r.id) {
+             return;
+         }
+         let Some(entry) = self.controls.get_mut(&r.id) else {
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.39s
+────────────
+ Nextest run ID a46eb5d3-e0c0-4d91-a599-a9c136c4a786 with nextest profile: default
+    Starting 8 tests across 1 binary (246 tests skipped)
+        PASS [   1.886s] (1/8) secmp-client-core api::tests::restart_in_the_window_keeps_the_chain
+        PASS [   1.898s] (2/8) secmp-client-core api::tests::second_rotation_waits_behind_the_live_key_change
+        FAIL [   1.978s] (3/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+  stdout ───
+
+    running 1 test
+    test sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 1.97s
+
+  stderr ───
+
+    thread '<unnamed>' (3907244) panicked at crates/secmp-client-core/src/sessions/tests.rs:3505:9:
+    assertion `left == right` failed: Q244: only the head is planned again
+      left: (2, false)
+     right: (1, false)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.104s] (4/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+        PASS [   2.115s] (5/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+        PASS [   2.455s] (6/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+        PASS [   2.820s] (7/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+        PASS [   3.683s] (8/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+────────────
+     Summary [   3.683s] 8 tests run: 7 passed, 1 failed, 246 skipped
+        FAIL [   1.978s] (3/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+error: test run failed

@@ -15,6 +15,7 @@ use secmp_crypto::{HybridVerifyingKey, Zeroizing};
 use secmp_proto::Encode;
 use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy, split_chunks};
 use secmp_proto::tr::{Entropy, OsEntropy, RatchetParts, RatchetState};
+use secmp_proto::wire::Id;
 use secmp_proto::wire::cell::{
     AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, ControlCode, Fragment,
     FragmentPayload, KeyChangeBody, ReceiptBody, ReceiptKind, RouteDescriptor, RouteUpdateBody,
@@ -186,13 +187,65 @@ struct ControlEntry {
     /// stored them under an id not known here. Such a mark becomes a stranded one with the id of the first `OK_SEND` on
     /// that queue of a cell prepared after it.
     unknown: Vec<(QueueId, u64)>,
+    /// Q248: the durable markers of this `KeyChange` — one per physical send queue a cell of it was sealed for.
+    markers: Vec<Marker>,
+}
+
+/// Q248 (ADR-060 (2), OPEN-M7-B-24 (A)): a CONTROL row `4 ‖ ord ‖ sid` — the `KeyChange` at `ord` may have a copy on the
+/// physical send queue `sid`. Written before the first cell of the `KeyChange` is sealed for that queue, deleted when no
+/// copy can be there any more, and before the `KeyChange`'s own row.
+struct Marker {
+    sid: Id,
+    /// Its row; `None`: this durability keeps no rows (`MemPersist` without mirror).
+    ord: Option<i64>,
+    /// The queue of this process it names; `None`: read at open and not the queue the conversation was registered on
+    /// first — nothing here can count its copy away, so it holds the `KeyChange` for good (Q249).
+    queue: Option<QueueId>,
 }
 
 impl ControlEntry {
-    /// Q241: a copy of this content may still wait on a queue it is no longer tracked on.
+    /// Q241, Q249: a copy of this content may still wait on a queue it is no longer tracked on.
     fn marked(&self) -> bool {
-        !self.stranded.is_empty() || !self.unknown.is_empty()
+        !self.stranded.is_empty()
+            || !self.unknown.is_empty()
+            || self.markers.iter().any(|m| m.queue.is_none())
     }
+}
+
+/// The row tag of a [`Marker`] (Q248).
+const MARKER_TAG: u8 = 4;
+
+/// Q250 (ADR-060 Consequences, `docs/03` §10.3): a `SEND` of unknown outcome may reach the relay after a later link's
+/// `SEND`s — at most two requests are outstanding on a link — so its mark takes the id of the first later `OK_SEND` on
+/// its queue plus this margin.
+const IN_FLIGHT_MARGIN: u64 = 2;
+
+/// Q248: the row of a marker for the `KeyChange` at `ord` on the physical queue `sid`.
+#[must_use]
+pub fn marker_row(ord: i64, sid: &Id) -> Vec<u8> {
+    let mut row = Vec::with_capacity(25);
+    row.push(MARKER_TAG);
+    row.extend_from_slice(&ord.to_be_bytes());
+    row.extend_from_slice(sid);
+    row
+}
+
+/// Q248: the `KeyChange` `ord` and the `sid` of a marker row; `Ok(None)` for a row of another tag. Strict: exactly 24
+/// bytes after the tag and a non-negative `ord`.
+///
+/// # Errors
+/// [`SourceError`] for a marker row that does not decode.
+pub fn marker_of(row: &[u8]) -> Result<Option<(i64, Id)>, SourceError> {
+    let Some((&MARKER_TAG, body)) = row.split_first() else {
+        return Ok(None);
+    };
+    let (ord, sid) = body.split_first_chunk::<8>().ok_or(SourceError)?;
+    let ord = i64::from_be_bytes(*ord);
+    let sid: Id = sid.try_into().map_err(|_| SourceError)?;
+    if ord < 0 {
+        return Err(SourceError);
+    }
+    Ok(Some((ord, sid)))
 }
 
 /// Q240: a `KeyChange` (row tag 3).
@@ -200,10 +253,27 @@ fn is_key_change(row: &[u8]) -> bool {
     row.first() == Some(&3)
 }
 
+/// Q244 (ADR-060 (5)): whether the content `id` may be planned. Only the head of a conversation's chain of durable
+/// `KeyChange`s is: one behind an older live one (lower id: added earlier, and at an open in the rows' `ord` order, which
+/// the row seal authenticates) waits until that one's row is gone and its entry dropped, so `KC_{n+1}` is never sent
+/// while a copy of `KC_n` may still reach the peer (ADR-058: the peer keeps one previous identity). The in-memory
+/// `KeyChange` of the test kit (Q245) is outside the chain.
+fn plannable(controls: &BTreeMap<u64, ControlEntry>, id: u64) -> bool {
+    let chained = |e: &ControlEntry| is_key_change(&e.row) && e.durable;
+    controls
+        .get(&id)
+        .is_some_and(|e| !chained(e) || !controls.range(..id).any(|(_, o)| chained(o)))
+}
+
+/// How long a succession may stay pending towards one contact before [`SessionEvent::SuccessionPending`] is raised
+/// (ADR-060 (6), Q246): 24 h, monotonic ms of the conversation's preparations.
+pub const SUCCESSION_WARN_MS: u64 = 24 * 60 * 60 * 1000;
+
 /// A control content that is durable from the commit that makes its effect durable until the last cell's `OK_SEND`
 /// (Q210 c, Q222): the rotation's `RouteUpdate`, the `KeyChange` of an identity rotation, the `Control{1|2}` of a removal or
 /// a reset. Its row (the store's CONTROL part, sealed) is `tag u8 ‖ body`: 1 `RouteUpdateBody`, 2 `ControlBody` (no
-/// argument), 3 `KeyChangeBody` — the bodies in their wire encodings; the decoding is strict.
+/// argument), 3 `KeyChangeBody` — the bodies in their wire encodings; the decoding is strict. Tag 4 is a `KeyChange`'s
+/// marker (Q248, [`marker_of`]), not a content.
 pub enum PendingControl {
     /// A `RouteUpdate`.
     Routes(RouteUpdateBody),
@@ -270,6 +340,8 @@ impl PendingControl {
 struct Sent {
     owner: Owner,
     total: u16,
+    /// The send queue it was prepared for (`None`: a dummy of a queue in send overlap).
+    queue: Option<QueueId>,
 }
 
 /// ADR-054 items 1 and 3 (EXTB2-3): an `AppMessage` of kind 1 (text) or 3 (view-once text) whose payload is
@@ -285,6 +357,20 @@ pub(crate) fn app_payload_ok(kind: AppKind, payload: &[u8]) -> bool {
 /// Q225 (CLAUDE.md §1.7): a cell of a durable control content whose row is not in the store waits.
 fn row_missing(controls: &BTreeMap<u64, ControlEntry>, owner: &Owner) -> bool {
     matches!(owner, Owner::Control(c) if controls.get(&c.id).is_some_and(|e| e.durable && e.ord.is_none()))
+}
+
+/// Q248 (CLAUDE.md §1.7): a cell of a durable `KeyChange` waits while no marker names the send queue `marking` (the
+/// current one, when its `sid` is known) it would be sealed for.
+fn unmarked(
+    controls: &BTreeMap<u64, ControlEntry>,
+    owner: &Owner,
+    marking: Option<QueueId>,
+) -> bool {
+    matches!(owner, Owner::Control(c) if controls.get(&c.id).is_some_and(|e| {
+        e.durable
+            && is_key_change(&e.row)
+            && marking.is_some_and(|q| !e.markers.iter().any(|m| m.queue == Some(q)))
+    }))
 }
 
 /// The largest number of ids in one receipt: `2 + 16·n ≤ 1689` (spec §7.6).
@@ -327,6 +413,10 @@ pub enum SessionEvent {
     ResetRequested,
     /// A message was relayed and no receipt came within `T_RS` (spec §10.4; OPEN-M7-07 A): not re-sent.
     NotConfirmed(MsgId),
+    /// ADR-060 (6), Q246: an identity succession towards this contact has been pending for [`SUCCESSION_WARN_MS`], or two
+    /// or more are pending; raised once until no `KeyChange` is left. It changes nothing: no timeout, no skip, no
+    /// re-invitation (owner-reserved, ADR-060 (7)).
+    SuccessionPending,
 }
 
 /// Why real content is refused at the one send entry ([`Conversation::may_send_real`]).
@@ -416,6 +506,13 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     /// ADR-054 items 1 and 3 at delivery (EXTB2-3): on in every constructor; off only through the test kit's
     /// `raw_app_payloads_kat`.
     app_rules: bool,
+    /// Q246: while a `KeyChange` of this conversation is live — the first preparation (monotonic ms) that saw one since
+    /// none was left, and whether [`SessionEvent::SuccessionPending`] was raised since.
+    succession: Option<(u64, bool)>,
+    /// Q248: the physical queue (`sid`) of the latest send queue the host registered, with that queue.
+    send_sid: Option<(QueueId, Id)>,
+    /// Q248: marker rows read at open that name no live `KeyChange`: deleted at the next preparation.
+    orphans: Vec<i64>,
     /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
     #[cfg(feature = "kat")]
     mk_digests: Vec<[u8; 32]>,
@@ -477,6 +574,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             notified: BTreeSet::new(),
             receipt_timeout_ms: 0,
             app_rules: true,
+            succession: None,
+            send_sid: None,
+            orphans: Vec::new(),
             #[cfg(feature = "kat")]
             mk_digests: Vec::new(),
         }
@@ -532,23 +632,113 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// Announce a new identity (`KeyChange`, spec §7.7): 5390 bytes, always fragmented, signed by the old `IK_sig`; in
-    /// memory only (see [`Conversation::queue_pending`]).
+    /// memory only and outside the succession chain — test kit (Q245, as Q226); the product's `KeyChange`s are durable
+    /// ([`Conversation::queue_pending`]) and chained (Q244).
     ///
     /// # Errors
     /// [`SourceError`] without randomness for the message id or if the body does not encode.
+    #[cfg(any(test, feature = "kat"))]
     pub fn queue_key_change(&mut self, body: KeyChangeBody) -> Result<(), SourceError> {
         self.add_control(PendingControl::KeyChange(body), None)
     }
 
     /// Plan the pending control content stored at `ord` (Q210 c, Q222): planned as a `RouteUpdate`,
-    /// [`Conversation::queue_control`] or [`Conversation::queue_key_change`] plan it; its row lives until the last cell's
-    /// `OK_SEND` and goes at the next preparation. The host calls this after the commit that wrote the row, and on open
-    /// for every row.
+    /// [`Conversation::queue_control`] or `queue_key_change` plan it; its row lives until the last cell's `OK_SEND` and
+    /// goes at the next preparation. The host calls this after the commit that wrote the row, and on open for every row; a
+    /// `KeyChange` behind a live one waits for it (Q244).
     ///
     /// # Errors
-    /// [`SourceError`] as [`Conversation::queue_key_change`].
+    /// [`SourceError`] if the body does not encode (a failed plan keeps a durable content, Q240).
     pub fn queue_pending(&mut self, ord: i64, content: PendingControl) -> Result<(), SourceError> {
         self.add_control(content, Some(ord))
+    }
+
+    /// The marker row at `ord` (Q248), read at open after the rows before it: it joins the `KeyChange` read from the row
+    /// at `key_change`; it holds that `KeyChange` until the host registers the send queue `sid` first (Q249). A marker
+    /// that names no live `KeyChange` row is deleted at the next preparation.
+    pub fn restore_marker(&mut self, ord: i64, key_change: i64, sid: Id) {
+        match self
+            .controls
+            .values_mut()
+            .find(|e| e.ord == Some(key_change) && is_key_change(&e.row))
+        {
+            Some(e) => e.markers.push(Marker {
+                sid,
+                ord: Some(ord),
+                queue: None,
+            }),
+            None => self.orphans.push(ord),
+        }
+    }
+
+    /// The send queue `queue` the host registers next is the physical queue `sid` (Q248); called before
+    /// [`Conversation::set_send_queue`] or [`Conversation::switch_send_queue`]. At the first registration of this process
+    /// a marker read at open that names `sid` belongs to `queue`: a copy that was stored there before the restart has a
+    /// lower id than every cell sent now, so it takes, as a cell of unknown outcome, the id of the first `OK_SEND` there of
+    /// a later cell (Q249); every other marker read at open keeps holding its `KeyChange`.
+    pub fn set_send_sid(&mut self, queue: QueueId, sid: Id) {
+        if self.send_queue.is_none() {
+            for e in self.controls.values_mut() {
+                let mut adopted = false;
+                for m in e
+                    .markers
+                    .iter_mut()
+                    .filter(|m| m.queue.is_none() && m.sid == sid)
+                {
+                    m.queue = Some(queue);
+                    adopted = true;
+                }
+                if adopted {
+                    e.unknown.push((queue, 0));
+                }
+            }
+        }
+        self.send_sid = Some((queue, sid));
+    }
+
+    /// The current send queue, when its `sid` is known (Q248).
+    fn marking(&self) -> Option<QueueId> {
+        self.send_sid
+            .and_then(|(q, _)| (Some(q) == self.send_queue).then_some(q))
+    }
+
+    /// Q248 (persist-before-send): before a cell of a durable `KeyChange` is sealed for the current send queue, a marker
+    /// row names that queue's `sid`; a failed write leaves the cell waiting ([`unmarked`]) and is tried again at the next
+    /// preparation.
+    fn write_markers(&mut self) {
+        let (Some(queue), Some((_, sid))) = (self.marking(), self.send_sid) else {
+            return;
+        };
+        let planned: BTreeSet<u64> = self
+            .plan
+            .iter()
+            .filter_map(|p| match p.owner {
+                Owner::Control(c) => Some(c.id),
+                _ => None,
+            })
+            .collect();
+        for id in planned {
+            let Some(e) = self.controls.get_mut(&id) else {
+                continue;
+            };
+            if !e.durable
+                || !is_key_change(&e.row)
+                || e.markers.iter().any(|m| m.queue == Some(queue))
+            {
+                continue;
+            }
+            // its own row first (Q225): the marker names it by its `ord`
+            let Some(key_change) = e.ord else {
+                continue;
+            };
+            if let Ok(ord) = self.persist.control_requeued(&marker_row(key_change, &sid)) {
+                e.markers.push(Marker {
+                    sid,
+                    ord,
+                    queue: Some(queue),
+                });
+            }
+        }
     }
 
     /// Whether a `KeyChange` of this conversation is live: unplanned, planned, on the way, relayed and still in the eviction
@@ -557,6 +747,16 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     #[must_use]
     pub fn key_change_in_flight(&self) -> bool {
         self.controls.values().any(|e| is_key_change(&e.row))
+    }
+
+    /// How many `KeyChange`s of this conversation are live: the head of its succession chain and the links that wait behind
+    /// it (Q244, ADR-060 (4), (5)).
+    #[must_use]
+    pub fn successions_pending(&self) -> usize {
+        self.controls
+            .values()
+            .filter(|e| is_key_change(&e.row))
+            .count()
     }
 
     /// Keep `content` as a control content until its last `OK_SEND` and plan its first attempt (Q222 (1); spec §9.5,
@@ -585,8 +785,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 retired: false,
                 stranded: Vec::new(),
                 unknown: Vec::new(),
+                markers: Vec::new(),
             },
         );
+        if !plannable(&self.controls, id) {
+            // Q244: a later link of the chain waits for the head (`settle_controls` plans it when the head is gone)
+            return Ok(());
+        }
         match self.plan_content(ControlRef { id, attempt: 0 }, content) {
             Ok(total) => {
                 if let Some(e) = self.controls.get_mut(&id) {
@@ -675,6 +880,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// or of a retired `RouteUpdate` (Q224) plans nothing; else every cell of the content is sealed anew under a new
     /// attempt, and a durable content whose row went writes it again (its cells wait until it is written, Q225).
     fn replan_control(&mut self, r: ControlRef) {
+        // a link that waits in its chain has nothing planned to plan again (Q244)
+        if !plannable(&self.controls, r.id) {
+            return;
+        }
         let Some(entry) = self.controls.get_mut(&r.id) else {
             return;
         };
@@ -720,15 +929,6 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// queue. Its row then goes, and the entry with it — so a restart before that re-reads the row (one more copy, a no-op at
     /// the peer, ADR-058), and a restart after it re-sends nothing.
     fn settle_controls(&mut self) {
-        let unplanned: Vec<u64> = self
-            .controls
-            .iter()
-            .filter(|(_, e)| e.total == 0 && !e.retired)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in unplanned {
-            self.plan_unplanned(id);
-        }
         let by_cell = &self.by_cell;
         let windowed = |id: u64, e: &ControlEntry| {
             by_cell.values().any(
@@ -738,8 +938,29 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let held =
             |id: u64, e: &ControlEntry| is_key_change(&e.row) && (windowed(id, e) || e.marked());
         let retired_row = self.controls.values().any(|e| e.retired && e.ord.is_some());
+        let (inflight, send) = (&self.inflight, self.send_queue);
         for (id, e) in &mut self.controls {
             let id = *id;
+            // Q248: the marker of an old send queue goes once no copy of this content can be there: no mark on it and no
+            // cell on its way to it
+            let ControlEntry {
+                markers,
+                stranded,
+                unknown,
+                ..
+            } = &mut *e;
+            markers.retain(|m| {
+                let Some(q) = m.queue.filter(|q| Some(*q) != send) else {
+                    return true;
+                };
+                let gone = !stranded.iter().chain(unknown.iter()).any(|(s, _)| *s == q)
+                    && !inflight.values().any(|s| {
+                        s.queue == Some(q) && matches!(s.owner, Owner::Control(c) if c.id == id)
+                    });
+                !(gone
+                    && m.ord
+                        .is_none_or(|o| self.persist.control_relayed(o).is_ok()))
+            });
             if !e.done && e.durable && e.ord.is_none() {
                 match self.persist.control_requeued(&e.row) {
                     Ok(Some(o)) => e.ord = Some(o),
@@ -752,11 +973,21 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             if (e.retired
                 || (e.done && !held(id, e) && !(retired_row && e.row.first() == Some(&1))))
                 && let Some(o) = e.ord
+                && {
+                    // Q248: its markers before its row — a crash in between leaves no marker without its `KeyChange`
+                    e.markers.retain(|m| {
+                        m.ord
+                            .is_some_and(|o| self.persist.control_relayed(o).is_err())
+                    });
+                    e.markers.is_empty()
+                }
                 && self.persist.control_relayed(o).is_ok()
             {
                 e.ord = None;
             }
         }
+        self.orphans
+            .retain(|o| self.persist.control_relayed(*o).is_err());
         self.controls.retain(|id, e| {
             if e.retired {
                 e.ord.is_some()
@@ -764,6 +995,32 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 !e.done || e.ord.is_some() || windowed(*id, e) || e.marked()
             }
         });
+        // after the drop above, so the next link of a chain whose head just went is planned for this very slot (Q244)
+        let unplanned: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|(id, e)| e.total == 0 && !e.retired && plannable(&self.controls, **id))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in unplanned {
+            self.plan_unplanned(id);
+        }
+    }
+
+    /// Q246 (ADR-060 (6)): raise [`SessionEvent::SuccessionPending`] once when a succession has been pending for
+    /// [`SUCCESSION_WARN_MS`] since the first preparation that saw it, or when two or more are pending; reset once no
+    /// `KeyChange` is left. Nothing else changes.
+    fn note_succession(&mut self, now_ms: u64) {
+        let pending = self.successions_pending();
+        if pending == 0 {
+            self.succession = None;
+            return;
+        }
+        let (since, warned) = self.succession.get_or_insert((now_ms, false));
+        if !*warned && (pending >= 2 || now_ms.saturating_sub(*since) >= SUCCESSION_WARN_MS) {
+            *warned = true;
+            self.events.push(SessionEvent::SuccessionPending);
+        }
     }
 
     fn plan_key_change(&mut self, body: KeyChangeBody, owner: Owner) -> Result<u16, SourceError> {
@@ -1053,7 +1310,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             let before = e.unknown.len();
             e.unknown.retain(|(q, t)| *q != queue || *t >= token.0);
             if e.unknown.len() < before {
-                e.stranded.push((queue, cell_id));
+                // Q250: a `SEND` still on its way on a dropped link may arrive after this one
+                e.stranded
+                    .push((queue, cell_id.saturating_add(IN_FLIGHT_MARGIN)));
             }
             e.stranded
                 .retain(|(q, stranded)| *q != queue || cell_id < stranded.saturating_add(capacity));
@@ -1085,9 +1344,25 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     /// The old queue `queue` is no longer sent to. A `KeyChange` copy marked stranded there stays marked (Q241): nothing
-    /// shows that it has left the queue.
+    /// shows that it has left the queue. A `KeyChange` cell still on its way there gets no answer any more: it is marked
+    /// as of unknown outcome, for good (Q250).
     pub fn drop_send_queue(&mut self, queue: QueueId) {
         self.overlap_send.retain(|q| *q != queue);
+        let open: Vec<(u64, u64)> = self
+            .inflight
+            .iter()
+            .filter_map(|(token, s)| match s.owner {
+                Owner::Control(c) if s.queue == Some(queue) => Some((*token, c.id)),
+                _ => None,
+            })
+            .collect();
+        for (token, id) in open {
+            if let Some(e) = self.controls.get_mut(&id)
+                && is_key_change(&e.row)
+            {
+                e.unknown.push((queue, token));
+            }
+        }
     }
 
     /// The queue we receive on and the ones in overlap (tests only).
@@ -1442,6 +1717,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             Sent {
                 owner: Owner::Dummy,
                 total: 1,
+                queue: None,
             },
         );
         Ok(PreparedCell::committed(cell, CellToken(token)))
@@ -1453,6 +1729,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.last_now_ms = self.last_now_ms.max(now_ms);
         self.outbox.expire(now_ms);
         self.note_unconfirmed(now_ms);
+        self.note_succession(now_ms);
+        self.write_markers();
+        let marking = self.marking();
         // an initiator's handshake cells go first, as persisted (they are already sealed and durable, §6.5)
         if let Some(bytes) = self.handshake_out.pop_front() {
             let cell = Cell::from_bytes(&bytes).map_err(|_| SourceError)?;
@@ -1463,6 +1742,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 Sent {
                     owner: Owner::Handshake(bytes),
                     total: 1,
+                    queue: self.send_queue,
                 },
             );
             return Ok(PreparedCell::committed(cell, CellToken(token)));
@@ -1475,10 +1755,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         ) {
             self.hold_planned_real();
         }
-        let sendable = self
-            .plan
-            .iter()
-            .position(|p| !row_missing(&self.controls, &p.owner));
+        let sendable = self.plan.iter().position(|p| {
+            !row_missing(&self.controls, &p.owner) && !unmarked(&self.controls, &p.owner, marking)
+        });
         if sendable.is_none() && self.may_send_real().is_ok() {
             if self.send_receipts && !self.receipts_due.is_empty() {
                 self.plan_receipt(now_ms);
@@ -1492,7 +1771,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         } else {
             self.plan
                 .iter()
-                .position(|p| !row_missing(&self.controls, &p.owner))
+                .position(|p| {
+                    !row_missing(&self.controls, &p.owner)
+                        && !unmarked(&self.controls, &p.owner, marking)
+                })
                 .and_then(|i| self.plan.remove(i))
         };
         let from_plan = next.is_some();
@@ -1510,6 +1792,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     Sent {
                         owner: planned.owner,
                         total: planned.total,
+                        queue: self.send_queue,
                     },
                 );
                 Ok(PreparedCell::committed(cell, CellToken(token)))
@@ -3470,6 +3753,235 @@ mod tests {
         assert!(matches!(delivery, Delivery::KeyChange(_)));
         assert_eq!(trust, Trust::KeyChanged);
         assert_eq!(key, Some(ik_sig(&iks).map_err(|_| "ik_sig")?));
+        Ok(())
+    }
+
+    /// A `KeyChange` body for the Q248 tests: a fresh identity signed by a fixed key (never verified here).
+    #[cfg(feature = "kat")]
+    fn kc_body() -> Result<super::KeyChangeBody, Fail> {
+        use secmp_proto::prekeys::IdentityKeys;
+        use secmp_proto::tr::{Entropy as _, FixedEntropy};
+        let old = FixedEntropy::new(&stream(931, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "key")?;
+        let new = IdentityKeys::generate(&mut FixedEntropy::new(&stream(932, 1 << 20)))
+            .map_err(|_| "keys")?;
+        secmp_proto::tr::content::key_change_body(&old, new.public()).map_err(|_| "body")
+    }
+
+    /// How many control rows `a`'s durability was asked to write (`requeued`) or to delete (`relayed`, their `ord`s).
+    #[cfg(feature = "kat")]
+    fn row_calls(a: &Script) -> (usize, Vec<i64>) {
+        let writes = a.log.iter().filter(|(k, _)| *k == "requeued").count();
+        let deletes = a
+            .log
+            .iter()
+            .filter(|(k, _)| *k == "relayed")
+            .map(|(_, o)| *o)
+            .collect();
+        (writes, deletes)
+    }
+
+    /// SE-92 (Q248, CLAUDE.md §1.7): with the send queue's `sid` known, a cell of a durable `KeyChange` is sealed only
+    /// after a marker row for that queue was written: a failed write lets a queued message take the slot and is tried
+    /// again at the next preparation; one marker per queue and none for another control content; after a switch the new
+    /// queue's marker comes before its first cell.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn key_change_cell_waits_for_its_marker() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(QueueId(1), [1; 16]);
+        a.bind(QueueId(1), QueueId(2));
+        a.outbox_mut().enqueue(text_message(7, 10), 0);
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&a.prepare(0).map_err(|_| "seal")?.cell)
+            .map_err(|_| "deliver")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(
+            (ids, b.partials(), row_calls(a.persist()).0),
+            (vec![[7; 16]], 0, 1),
+            "Q248: no KeyChange cell before its marker is durable; the message takes the slot"
+        );
+        for (now, want) in [(1_000, (1, 2)), (2_000, (1, 2))] {
+            b.deliver_direct(&a.prepare(now).map_err(|_| "seal")?.cell)
+                .map_err(|_| "deliver")?;
+            assert_eq!(
+                (b.partials(), row_calls(a.persist()).0),
+                want,
+                "the marker written once, then the cells"
+            );
+        }
+        a.queue_pending(
+            8,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        b.deliver_direct(&a.prepare(3_000).map_err(|_| "seal")?.cell)
+            .map_err(|_| "deliver")?;
+        assert_eq!(
+            row_calls(a.persist()).0,
+            2,
+            "no marker for a content that is not a KeyChange"
+        );
+        a.set_send_sid(QueueId(9), [9; 16]);
+        a.switch_send_queue(QueueId(9));
+        b.deliver_direct(&a.prepare(4_000).map_err(|_| "seal")?.cell)
+            .map_err(|_| "deliver")?;
+        assert_eq!(
+            (b.partials(), row_calls(a.persist()).0),
+            (2, 3),
+            "the new queue's marker, then the new attempt's first cell"
+        );
+        Ok(())
+    }
+
+    /// SE-93 (Q248): a released `KeyChange` deletes its markers before its row, and a failed delete is tried again at
+    /// the next preparation — while a marker is left the row stays; so is the failed delete of a marker that names no
+    /// `KeyChange` (an orphan, as read at open).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn markers_go_before_their_key_change() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(2, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(QueueId(1), [1; 16]);
+        a.bind(QueueId(1), QueueId(2));
+        for (i, id) in [1_u64, 2, 3, 4, 261].into_iter().enumerate() {
+            let p = a
+                .prepare(u64::try_from(i).map_err(|_| "index")? * 1_000)
+                .map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.restore_marker(50, 99, [5; 16]);
+        a.prepare(10_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![100, 50]),
+            "Q248: the marker first; its failed delete keeps the KeyChange row"
+        );
+        assert!(a.key_change_in_flight());
+        a.prepare(11_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![100, 50, 100, 7, 50]),
+            "each failed delete tried again"
+        );
+        assert!(!a.key_change_in_flight());
+        Ok(())
+    }
+
+    /// SE-94 (Q248, Q250): the marker of an old send queue goes once no copy can be there — no mark on it and no
+    /// `KeyChange` cell on its way to it — while the `KeyChange` still waits for the new queue (a cell on its way there);
+    /// a failed delete is tried again; the row stays. The end of the old queue's overlap then marks nothing for a cell on its way to the current queue:
+    /// the new queue's window releases the `KeyChange`, its marker first.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn old_queue_marker_goes_when_nothing_can_be_there() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (old, new) = (QueueId(1), QueueId(9));
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(old, [1; 16]);
+        a.bind(old, QueueId(2));
+        for id in 1..4_u64 {
+            let p = a.prepare(id * 1_000).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        let last = a.prepare(4_000).map_err(|_| "seal")?;
+        a.set_send_sid(new, [9; 16]);
+        a.switch_send_queue(new);
+        for id in 1..4_u64 {
+            let p = a.prepare(10_000 + id).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        let fourth = a.prepare(15_000).map_err(|_| "seal")?;
+        let dummy = a.prepare_overlap(20_000).map_err(|_| "seal")?;
+        a.on_overlap_relayed(old, dummy.token, 131);
+        a.prepare(21_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![]),
+            "Q248: a KeyChange cell on its way to the old queue keeps its marker"
+        );
+        a.on_overlap_relayed(old, last.token, 4);
+        let dummy = a.prepare_overlap(22_000).map_err(|_| "seal")?;
+        a.on_overlap_relayed(old, dummy.token, 132);
+        a.prepare(23_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100]),
+            "the old queue's marker is deleted; the first attempt fails"
+        );
+        a.prepare(23_500).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100, 100]),
+            "tried again; the KeyChange row stays"
+        );
+        assert!(a.key_change_in_flight());
+        a.drop_send_queue(old);
+        a.relayed_direct(fourth.token, 4);
+        for (i, id) in [261_u64, 262].into_iter().enumerate() {
+            let p = a
+                .prepare(24_000 + u64::try_from(i).map_err(|_| "index")?)
+                .map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.prepare(30_000).map_err(|_| "seal")?;
+        assert!(
+            !a.key_change_in_flight(),
+            "Q250: the end of the old queue marks no cell on its way to the current one"
+        );
+        assert_eq!(row_calls(a.persist()), (2, vec![100, 100, 101, 7]));
+        Ok(())
+    }
+
+    /// SE-100 (Q250, B17a-delta D-03): a `KeyChange` cell still on its way to an old send queue when the sender drops that
+    /// queue gets no answer any more (`relayed` and `send_failed` no longer reach the conversation): it is marked for good,
+    /// so neither the new queue's window nor more `OK_SEND`s there release the `KeyChange`, and its marker stays.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_queue_with_a_key_change_cell_on_its_way_holds() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (old, new) = (QueueId(1), QueueId(9));
+        let (mut a, _convs) = pair(script(0, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(old, [1; 16]);
+        a.bind(old, QueueId(2));
+        for id in 1..4_u64 {
+            let p = a.prepare(id * 1_000).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.prepare(4_000).map_err(|_| "seal")?;
+        a.set_send_sid(new, [9; 16]);
+        a.switch_send_queue(new);
+        let dummy = a.prepare_overlap(5_000).map_err(|_| "seal")?;
+        a.on_overlap_relayed(old, dummy.token, 131);
+        a.drop_send_queue(old);
+        for (i, id) in [1_u64, 2, 3, 4, 261, 262, 400].into_iter().enumerate() {
+            let p = a
+                .prepare(10_000 + u64::try_from(i).map_err(|_| "index")?)
+                .map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.prepare(20_000).map_err(|_| "seal")?;
+        assert!(
+            a.key_change_in_flight(),
+            "Q250: the copy may reach the dropped queue after its end"
+        );
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![]),
+            "no marker and no row goes"
+        );
         Ok(())
     }
 }

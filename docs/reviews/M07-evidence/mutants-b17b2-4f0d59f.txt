@@ -1,0 +1,72 @@
+head 4f0d59fe29a3baacd8f1513887ebd630881dd62a
+Found 68 mutants to test
+ok       Unmutated baseline in 107s build + 28s test
+caught   crates/secmp-client-core/src/hub.rs:320:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 3s build + 5s test
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::new()) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::from_iter([Default::default()])) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::new(Default::default())) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::from(Default::default())) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:209:9: replace ControlEntry::marked -> bool with true in 4s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:209:9: replace ControlEntry::marked -> bool with false in 5s build + 39s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:211:13: replace || with && in ControlEntry::marked in 3s build + 44s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:210:13: replace || with && in ControlEntry::marked in 3s build + 37s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:209:9: delete ! in ControlEntry::marked in 2s build + 16s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:210:16: delete ! in ControlEntry::marked in 3s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:226:5: replace marker_row -> Vec<u8> with vec![] in 2s build + 20s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:226:5: replace marker_row -> Vec<u8> with vec![0] in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:226:5: replace marker_row -> Vec<u8> with vec![1] in 2s build + 20s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:239:5: replace marker_of -> Result<Option<(i64, Id)>, SourceError> with Ok(None) in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:239:5: replace marker_of -> Result<Option<(i64, Id)>, SourceError> with Ok(Some((0, Default::default()))) in 2s build + 17s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:239:5: replace marker_of -> Result<Option<(i64, Id)>, SourceError> with Ok(Some((1, Default::default()))) in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:239:5: replace marker_of -> Result<Option<(i64, Id)>, SourceError> with Ok(Some((-1, Default::default()))) in 2s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:245:12: replace < with == in marker_of in 2s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:245:12: replace < with > in marker_of in 2s build + 34s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:245:12: replace < with <= in marker_of in 2s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:369:5: replace unmarked -> bool with true in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:369:5: replace unmarked -> bool with false in 3s build + 32s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:660:9: replace Conversation<O, P, S>::restore_marker with () in 2s build + 29s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:663:49: replace && with || in Conversation<O, P, S>::restore_marker in 2s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:663:29: replace == with != in Conversation<O, P, S>::restore_marker in 2s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:680:9: replace Conversation<O, P, S>::set_send_sid with () in 4s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:686:51: replace && with || in Conversation<O, P, S>::set_send_sid in 3s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:686:60: replace == with != in Conversation<O, P, S>::set_send_sid in 3s build + 32s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:701:9: replace Conversation<O, P, S>::marking -> Option<QueueId> with None in 2s build + 7s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:701:9: replace Conversation<O, P, S>::marking -> Option<QueueId> with Some(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:702:41: replace == with != in Conversation<O, P, S>::marking in 2s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:709:9: replace Conversation<O, P, S>::write_markers with () in 3s build + 12s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:716:17: delete match arm Owner::Control(c) in Conversation<O, P, S>::write_markers in 3s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:726:17: replace || with && in Conversation<O, P, S>::write_markers in 4s build + 35s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:724:16: delete ! in Conversation<O, P, S>::write_markers in 4s build + 12s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:725:20: delete ! in Conversation<O, P, S>::write_markers in 2s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:726:53: replace == with != in Conversation<O, P, S>::write_markers in 2s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:769:9: replace Conversation<O, P, S>::add_control -> Result<(), SourceError> with Ok(()) in 3s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:932:9: replace Conversation<O, P, S>::settle_controls with () in 3s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:953:59: replace != with == in Conversation<O, P, S>::settle_controls in 4s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:725:17: replace || with && in Conversation<O, P, S>::write_markers in 124s build + 21s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:957:21: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:956:28: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 20s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:957:24: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:956:83: replace == with != in Conversation<O, P, S>::settle_controls in 2s build + 34s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:958:44: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:958:33: replace == with != in Conversation<O, P, S>::settle_controls in 2s build + 21s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:960:17: delete ! in Conversation<O, P, S>::settle_controls in 2s build + 22s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:976:17: replace && with || in Conversation<O, P, S>::settle_controls in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:961:21: replace && with || in Conversation<O, P, S>::settle_controls in 2s build + 22s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1308:9: replace Conversation<O, P, S>::count_stranded with () in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1312:32: replace < with == in Conversation<O, P, S>::count_stranded in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1312:32: replace < with > in Conversation<O, P, S>::count_stranded in 2s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1312:32: replace < with <= in Conversation<O, P, S>::count_stranded in 2s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1350:9: replace Conversation<O, P, S>::drop_send_queue with () in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1355:38: replace match guard s.queue == Some(queue) with true in Conversation<O, P, S>::drop_send_queue in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1355:38: replace match guard s.queue == Some(queue) with false in Conversation<O, P, S>::drop_send_queue in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1355:46: replace == with != in Conversation<O, P, S>::drop_send_queue in 2s build + 25s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1361:17: replace && with || in Conversation<O, P, S>::drop_send_queue in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1711:9: replace Conversation<O, P, S>::prepare_overlap -> Result<PreparedCell, SourceError> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:1728:9: replace Conversation<O, P, S>::prepare -> Result<PreparedCell, SourceError> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1759:52: replace && with || in Conversation<O, P, S>::prepare in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1759:13: delete ! in Conversation<O, P, S>::prepare in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1759:55: delete ! in Conversation<O, P, S>::prepare in 2s build + 24s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1776:25: replace && with || in Conversation<O, P, S>::prepare in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1775:21: delete ! in Conversation<O, P, S>::prepare in 2s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1776:28: delete ! in Conversation<O, P, S>::prepare in 2s build + 7s test
+68 mutants tested in 27m: 59 caught, 9 unviable

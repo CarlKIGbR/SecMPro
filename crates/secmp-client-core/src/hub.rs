@@ -354,6 +354,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             conversation.set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(
                 u64::from(route.period_s.seconds()).saturating_mul(1_000),
             ));
+            // the physical queue a `KeyChange`'s marker names (Q248)
+            conversation.set_send_sid(queue, route.sid);
             match previous {
                 Some(_) => {
                     conversation.switch_send_queue(queue);
@@ -1903,6 +1905,146 @@ mod tests {
                     stored_sid(&sc2.invitee, second)?
                 ),
                 (Some([4; 16]), Some([7; 16]))
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-90 (B22-delta D-03, D-B78; Q241, Q242, Q244): the invitee's `KeyChange` relayed on B (ids 1–4), then the routes
+    /// C (`sid` 7) and D (`sid` 5) in one pump — two switches, no cell on C. The copy on B is marked on B and nothing is
+    /// marked on C: after the new copy on D has left its window, B's id 131 releases nothing, and B's id 132 alone — no
+    /// `OK_SEND` on C at all — releases the `KeyChange` (its row goes at the next preparation).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn two_routes_in_one_pump_keep_the_mark_on_the_sent_queue() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-kc-cd", 113)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let b = *hub.send_ids.get(&contact.0).ok_or("B")?;
+            assert!(matches!(
+                hub.core_mut().handle(Request::RotateIdentity)?,
+                Response::IdentityRotated(_)
+            ));
+            let on = |hub: &mut Hub<ManualClock, Fixed>, q: QueueId, now: u64, id: u64| -> R {
+                let p = hub
+                    .prepare_cell(q, now)
+                    .map_err(|_| "prepare")?
+                    .ok_or("cell")?;
+                hub.relayed(q, p.token, id);
+                Ok(())
+            };
+            for i in 0..4_u64 {
+                on(hub, b, ms(60 + i), 1 + i)?;
+            }
+            send_route(&mut sc, 7, ms(70))?;
+            send_route(&mut sc, 5, ms(80))?;
+            let hub = &mut sc.invitee;
+            hub.pump()?;
+            let added = add_sends(hub);
+            let (c, d) = (
+                queue_of(&added, 7).ok_or("C")?,
+                queue_of(&added, 5).ok_or("D")?,
+            );
+            assert_eq!(
+                hub.sends_of(contact),
+                Some((c, d)),
+                "two switches in one pump"
+            );
+            for i in 0..4_u64 {
+                on(hub, d, ms(90 + i), 1 + i)?;
+            }
+            on(hub, d, ms(100), 261)?;
+            on(hub, d, ms(101), 262)?;
+            let live = |hub: &Hub<ManualClock, Fixed>| {
+                hub.core
+                    .convs
+                    .get(at)
+                    .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight)
+            };
+            assert!(live(hub), "the copy on B may still be fetched");
+            on(hub, b, ms(104), 131)?;
+            on(hub, d, ms(105), 264)?;
+            assert!(live(hub), "B's 131 is not enough");
+            on(hub, b, ms(106), 132)?;
+            on(hub, d, ms(107), 265)?;
+            assert!(!live(hub), "B's 132 alone releases: nothing on C");
+            Ok(())
+        })
+    }
+
+    /// SE-95 (Q248, Q249; D-B73): through the hub, the first `KeyChange` cell on B (`sid` 4) is sealed after its marker
+    /// names B. A restart (the profile opened again from its files) registered on B again reads the marker back on the
+    /// queue it names: the re-read copy leaving its window releases the `KeyChange` and its markers. When the peer's
+    /// `RouteUpdate` C (`sid` 7) was committed before the restart (no pump), the restart registers C and B's copy is held
+    /// for good: C's window releases nothing, both markers stay.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_reads_the_marker_of_the_sent_queue() -> R {
+        use crate::sessions::tests::control_tags;
+
+        big(|| {
+            let mut out = Vec::new();
+            for (label, seed, moved) in
+                [("hub-mk-same", 131_u64, false), ("hub-mk-moved", 137, true)]
+            {
+                let (mut sc, guest, contact) = on_b(label, seed)?;
+                let hub = &mut sc.invitee;
+                let b = *hub.send_ids.get(&contact.0).ok_or("B")?;
+                assert!(matches!(
+                    hub.core_mut().handle(Request::RotateIdentity)?,
+                    Response::IdentityRotated(_)
+                ));
+                let on = |hub: &mut Hub<ManualClock, Fixed>, q: QueueId, now: u64, id: u64| -> R {
+                    let p = hub
+                        .prepare_cell(q, now)
+                        .map_err(|_| "prepare")?
+                        .ok_or("cell")?;
+                    hub.relayed(q, p.token, id);
+                    Ok(())
+                };
+                on(hub, b, ms(60), 1)?;
+                assert_eq!(
+                    control_tags(&hub.profile_store(), contact.0)?,
+                    (vec![3, 4], vec![[4_u8; 16]]),
+                    "{label}: the marker names B"
+                );
+                for i in 1..4_u64 {
+                    on(hub, b, ms(60 + i), 1 + i)?;
+                }
+                if moved {
+                    send_route(&mut sc, 7, ms(70))?;
+                }
+                drop(sc);
+                let guest = guest.reopen()?;
+                let mut again = hub_over(&guest, "guest", 900)?;
+                let [(q, sid)] = add_sends(&mut again)[..] else {
+                    return Err("one send queue".into());
+                };
+                let at = *again.core.index.get(&contact.0).ok_or("index")?;
+                for i in 0..4_u64 {
+                    on(&mut again, q, ms(200 + i), 1 + i)?;
+                }
+                for id in [261_u64, 262, 263] {
+                    on(&mut again, q, ms(300 + id), id)?;
+                }
+                out.push((
+                    sid,
+                    again
+                        .core
+                        .convs
+                        .get(at)
+                        .is_some_and(crate::sessions::actor::Conversation::key_change_in_flight),
+                    control_tags(&again.profile_store(), contact.0)?.1,
+                ));
+            }
+            assert_eq!(
+                out,
+                [
+                    ([4_u8; 16], false, vec![]),
+                    ([7; 16], true, vec![[4; 16], [7; 16]])
+                ],
+                "Q249: same queue released by its window; moved: held by B's marker"
             );
             Ok(())
         })

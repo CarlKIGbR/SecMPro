@@ -1,0 +1,11 @@
+head 8e35c4f94977d125fcec0bd167f078f98c104457
+Found 7 mutants to test
+ok       Unmutated baseline in 1s build + 0s test
+unviable crates/secmp-sys-mem/src/secret_page/grow.rs:50:9: replace Growth::working_set -> Result<Self, Error> with Ok(Default::default()) in 0s build
+caught   crates/secmp-sys-mem/src/secret_page/grow.rs:62:5: replace attempt -> Result<bool, Error> with Ok(true) in 0s build + 0s test
+caught   crates/secmp-sys-mem/src/secret_page/grow.rs:62:5: replace attempt -> Result<bool, Error> with Ok(false) in 0s build + 0s test
+caught   crates/secmp-sys-mem/src/secret_page/grow.rs:83:5: replace lock_with_growth -> Result<(), Error> with Ok(()) in 0s build + 0s test
+caught   crates/secmp-sys-mem/src/secret_page/grow.rs:92:28: replace > with == in lock_with_growth in 0s build + 0s test
+caught   crates/secmp-sys-mem/src/secret_page/grow.rs:92:28: replace > with < in lock_with_growth in 0s build + 0s test
+caught   crates/secmp-sys-mem/src/secret_page/grow.rs:92:28: replace > with >= in lock_with_growth in 0s build + 0s test
+7 mutants tested in 16m: 6 caught, 1 unviable

@@ -1,0 +1,38 @@
+head a0e44b892382bff904a6d2befb0c1bf2ade69cd7
+Found 34 mutants to test
+ok       Unmutated baseline in 107s build + 31s test
+caught   crates/secmp-client-core/src/hub.rs:57:53: replace + with - in 2s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:57:53: replace + with * in 2s build + 5s test
+unviable crates/secmp-client-core/src/hub.rs:57:41: replace * with + in 1s build
+unviable crates/secmp-client-core/src/hub.rs:57:41: replace * with / in 1s build
+caught   crates/secmp-client-core/src/hub.rs:63:39: replace * with + in 2s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:63:39: replace * with / in 2s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:370:9: replace Hub<C, S>::resume_overlaps -> Result<(), Error> with Ok(()) in 4s build + 10s test
+caught   crates/secmp-client-core/src/hub.rs:388:42: replace && with || in Hub<C, S>::resume_overlaps in 4s build + 9s test
+caught   crates/secmp-client-core/src/hub.rs:388:38: replace > with == in Hub<C, S>::resume_overlaps in 2s build + 9s test
+caught   crates/secmp-client-core/src/hub.rs:388:38: replace > with < in Hub<C, S>::resume_overlaps in 4s build + 8s test
+caught   crates/secmp-client-core/src/hub.rs:388:38: replace > with >= in Hub<C, S>::resume_overlaps in 2s build + 10s test
+caught   crates/secmp-client-core/src/hub.rs:388:51: replace <= with > in Hub<C, S>::resume_overlaps in 2s build + 9s test
+caught   crates/secmp-client-core/src/hub.rs:425:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 4s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:733:9: replace Hub<C, S>::tick with () in 4s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:742:36: replace <= with > in Hub<C, S>::tick in 4s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:763:9: replace Hub<C, S>::raise_floors with () in 3s build + 8s test
+caught   crates/secmp-client-core/src/hub.rs:780:37: replace == with != in Hub<C, S>::raise_floors in 3s build + 9s test
+unviable crates/secmp-client-core/src/hub.rs:793:21: replace && with || in Hub<C, S>::raise_floors in 1s build
+unviable crates/secmp-client-core/src/hub.rs:799:24: replace && with || in Hub<C, S>::raise_floors in 1s build
+unviable crates/secmp-client-core/src/hub.rs:881:5: replace effective_mode -> Mode with Default::default() in 1s build
+caught   crates/secmp-client-core/src/hub.rs:893:5: replace cell_interval_ms -> Option<u64> with None in 2s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:893:5: replace cell_interval_ms -> Option<u64> with Some(0) in 2s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:893:5: replace cell_interval_ms -> Option<u64> with Some(1) in 2s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:907:5: replace floor_end -> u64 with 0 in 2s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:907:5: replace floor_end -> u64 with 1 in 2s build + 5s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:881:9: replace Conversation<O, P, S>::extend_overlap -> Option<bool> with None in 3s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:881:9: replace Conversation<O, P, S>::extend_overlap -> Option<bool> with Some(true) in 2s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:881:9: replace Conversation<O, P, S>::extend_overlap -> Option<bool> with Some(false) in 2s build + 6s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:881:59: replace == with != in Conversation<O, P, S>::extend_overlap in 3s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:889:53: replace && with || in Conversation<O, P, S>::extend_overlap in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:889:38: replace == with != in Conversation<O, P, S>::extend_overlap in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:889:56: delete ! in Conversation<O, P, S>::extend_overlap in 2s build + 23s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:892:29: replace >= with < in Conversation<O, P, S>::extend_overlap in 2s build + 10s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:903:13: replace && with || in Conversation<O, P, S>::extend_overlap in 1s build
+34 mutants tested in 15m: 28 caught, 6 unviable

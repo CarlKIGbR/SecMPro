@@ -871,6 +871,43 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
     }
 
+    /// B17c (Q265): the host lengthens the overlap of the old send queue `queue` to end at `until_ms` (Unix ms; its floor,
+    /// Q264). The row with the new end is written before the row it replaces goes — a crash between leaves both, and the
+    /// restart takes the later end of a `sid` (Q265); a failed delete is tried again at the next preparation. `None`: no
+    /// overlap of `queue` here; `Some(true)`: the end `until_ms` or a later one is durable (or kept in memory only, by a
+    /// persistence without rows); `Some(false)`: the write failed — the row and the end stay as they were, the host tries
+    /// again. An end is never shortened.
+    pub fn extend_overlap(&mut self, queue: QueueId, until_ms: u64) -> Option<bool> {
+        let o = self.overlaps.iter_mut().find(|o| o.queue == Some(queue))?;
+        if o.unwritten {
+            // not durable yet: the row is written with the later end (Q256)
+            o.route.until_ms = o.route.until_ms.max(until_ms);
+            self.write_overlaps();
+            return Some(
+                self.overlaps
+                    .iter()
+                    .any(|o| o.queue == Some(queue) && !o.unwritten),
+            );
+        }
+        if o.route.until_ms >= until_ms {
+            return Some(true);
+        }
+        let Ok(mut route) = o.route.copy() else {
+            return Some(false);
+        };
+        route.until_ms = until_ms;
+        let Ok(ord) = self.persist.control_requeued(&route.row()) else {
+            return Some(false);
+        };
+        if let Some(old) = core::mem::replace(&mut o.ord, ord)
+            && self.persist.control_relayed(old).is_err()
+        {
+            self.orphans.push(old);
+        }
+        o.route = route;
+        Some(true)
+    }
+
     /// Q252: the overlap row at `ord`, read at open. The host registers its queue again while its end is ahead
     /// ([`Conversation::resume_overlap`], Q253); a row it does not register goes at the next preparation.
     pub fn restore_overlap(&mut self, ord: i64, route: OverlapRoute) {
@@ -4273,6 +4310,93 @@ mod tests {
         );
         a.prepare(1_000).map_err(|_| "seal")?;
         assert_eq!(row_calls(a.persist()), (2, vec![]), "written once");
+        Ok(())
+    }
+
+    /// SE-147 (Q265; CLAUDE.md §1.7): `extend_overlap` writes the row with the later end before it deletes the row it
+    /// replaces (a failed delete is an orphan, tried again at the next preparation), names the new `ord` at the drop, and
+    /// writes nothing for an end that is not later; a failed write keeps the row, its `ord` and its end and answers
+    /// `Some(false)`; a row not written yet is written with the later end; no overlap of the queue: `None`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn extend_overlap_writes_before_it_deletes() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let ends = |a: &super::Conversation<crate::scheduler::outbox::MemOutbox, Script, Fixed>| {
+            a.overlaps
+                .iter()
+                .map(|o| (o.route.until_ms, o.ord, o.unwritten))
+                .collect::<Vec<_>>()
+        };
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        assert_eq!(a.extend_overlap(QueueId(5), 9_000), None, "no overlap of 5");
+        assert_eq!(a.extend_overlap(QueueId(1), 5_000), Some(true), "not later");
+        assert_eq!(a.extend_overlap(QueueId(1), 4_000), Some(true), "earlier");
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![]),
+            "nothing written for them"
+        );
+        assert_eq!(a.extend_overlap(QueueId(1), 9_000), Some(true), "later");
+        assert_eq!(
+            a.persist().log,
+            vec![("requeued", 100), ("requeued", 101), ("relayed", 100)],
+            "Q265: the new row, then the delete of the old one"
+        );
+        assert_eq!(ends(&a), vec![(9_000, Some(101), false)]);
+        assert_eq!(a.orphans, vec![100], "the failed delete is an orphan");
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()).1,
+            vec![100, 100],
+            "tried again at the preparation"
+        );
+        a.persist_mut().fail_requeued = 1;
+        assert_eq!(
+            a.extend_overlap(QueueId(1), 12_000),
+            Some(false),
+            "the write fails"
+        );
+        assert_eq!(
+            ends(&a),
+            vec![(9_000, Some(101), false)],
+            "row, ord and end stay"
+        );
+        assert_eq!(
+            row_calls(a.persist()),
+            (3, vec![100, 100]),
+            "and nothing is deleted"
+        );
+        a.drop_send_queue(QueueId(1));
+        assert_eq!(
+            row_calls(a.persist()).1,
+            vec![100, 100, 101],
+            "the drop deletes the new row"
+        );
+
+        let (mut b, _convs) = pair(script(0, 2), crate::scheduler::outbox::MemPersist::new())?;
+        b.bind(QueueId(1), QueueId(2));
+        b.switch_send_queue(QueueId(9));
+        keep(&mut b, 1, 1)?;
+        assert_eq!(
+            b.extend_overlap(QueueId(1), 9_000),
+            Some(false),
+            "not written, and this write fails"
+        );
+        assert_eq!(
+            ends(&b),
+            vec![(9_000, None, true)],
+            "the later end waits for its write"
+        );
+        assert_eq!(
+            b.extend_overlap(QueueId(1), 7_000),
+            Some(true),
+            "written, with 9 000"
+        );
+        assert_eq!(ends(&b), vec![(9_000, Some(100), false)]);
+        assert_eq!(row_calls(b.persist()), (3, vec![]));
         Ok(())
     }
 

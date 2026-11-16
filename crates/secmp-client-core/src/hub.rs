@@ -28,6 +28,7 @@ use crate::invitations::{
     AcceptRequest, Invitations, Issuance, IssueRequest, LinkPutArgs, uri_link_data,
 };
 use crate::scheduler::control::{OpSpec, When};
+use crate::scheduler::params::{Mode, Params};
 use crate::scheduler::types::{
     CellSource, CellToken, ControlKind, Delivered, PreparedCell, QueueId, RelayId, SendFailure,
     SourceError,
@@ -42,6 +43,49 @@ pub const SEND_BASE: u32 = 0x4000_0000;
 /// old queue, `U[1 h, 24 h]` (§10.6 (4)), and a minute more. The hub draws its own `U[1 h, 24 h]` (the sender stops at a
 /// time of its own, so that the recipient's last `FETCH` of the old queue finds it empty and its `QUEUE_DEL` can follow).
 pub const OLD_SEND_MS: u64 = 24 * 3_600_000 + 60_000;
+
+/// B17c (Q264, OPEN-M7-B-28): the cells an old send queue carries after its anchor before its overlap may end — a
+/// `KeyChange` copy stranded there is counted away by `QUEUE_CAPACITY` (128) later cells (ADR-060 (2)), one of unknown outcome
+/// takes the first later id plus the link's in-flight depth (2) and needs 131; one interval more covers the phase and the
+/// `OK_SEND`. Counted at every switch, with or without a `KeyChange` (spec §10.1).
+pub const FLOOR_CELLS: u64 = 132;
+
+/// B17c (Q266): the longest send overlap from its switch: the drawn share above `U[1 h, 24 h]`'s lower bound (at most
+/// `OLD_SEND_MS − 1 h`, the fallback) and the capped floor term [`FLOOR_TERM_CAP_MS`] together stop here, and a restart
+/// registers no stored end further away (the clock went back). Two days and a minute: past the recipient's longest window
+/// (24 h) its `QUEUE_DEL` can follow, and the `ERR_NOQUEUE` that answers a `SEND` then is the loss proof (Q241).
+pub const MAX_SEND_OVERLAP_MS: u64 = 48 * 3_600_000 + 60_000;
+
+/// B17c (Q266, verification R1 M-2): the longest floor term `FLOOR_CELLS · I`. Only this term is capped, never the drawn
+/// share: the end stays uniform over the 23 h of the draw for every I and n (a cap on the sum would put the end at a fixed
+/// distance from the switch). 25 h = `MAX_SEND_OVERLAP_MS − (OLD_SEND_MS − 1 h)`; above `I` = 681.8 s the floor is cut (fail
+/// closed).
+pub const FLOOR_TERM_CAP_MS: u64 = 25 * 3_600_000;
+
+/// B17c (Q264): an old send queue in overlap. Its end is `max(drawn end, from + blur + min(FLOOR_CELLS · I, cap))`, I the
+/// longest interval between two cells of the queue in the current mode with the send queues on its link now
+/// ([`cell_interval_ms`]); the end only grows, and a longer one is used only after its row is durable (Q265).
+struct Retiring {
+    /// The queue.
+    queue: QueueId,
+    /// The monotonic time the hub drops it (the row keeps it as Unix ms).
+    until: u64,
+    /// The floor's anchor: the switch of this process. `None` for a queue a restart registered again (Q267, option (a)):
+    /// it ends at exactly its stored end, which holds every floor that was durable before the restart; a restart raises
+    /// no floor and rewrites no row, so the relay sees no end at a fixed distance from the restart, and restarts cannot
+    /// keep an old queue beyond the end its switch set.
+    floor: Option<Anchor>,
+}
+
+/// B17c (Q264): the anchor of an old send queue's floor, taken at its switch.
+#[derive(Clone, Copy)]
+struct Anchor {
+    /// The switch (monotonic).
+    from: u64,
+    /// The drawn overlap above `OVERLAP_MS.0`: the floor is shifted by it, so that the end stays as random as the draw
+    /// (spec §10.6 (4)) and never sits at a fixed distance from the switch.
+    blur: u64,
+}
 
 /// What the hub asks of the scheduler.
 pub enum Action {
@@ -104,7 +148,9 @@ pub struct Hub<C: Clock, S: EntropySource> {
     /// The encoded `RouteDescriptor` each contact's current send queue was registered from: a re-sent `RouteUpdate`
     /// registers no second queue (Q222). It holds a send seed: compared in constant time.
     send_routes: BTreeMap<i64, Zeroizing<Vec<u8>>>,
-    retiring_sends: Vec<(u64, QueueId)>,
+    retiring_sends: Vec<Retiring>,
+    /// B17c: the period of every send queue a route registered and not removed (the floor of an old queue after its switch).
+    send_periods: BTreeMap<QueueId, u64>,
     /// The physical queue (relay, `sid`) of every send queue registered and not removed — current or in send overlap: one
     /// sender per physical queue (spec §10.2, Q236).
     send_targets: BTreeMap<QueueId, (RelayId, Id)>,
@@ -139,6 +185,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             send_ids: BTreeMap::new(),
             send_routes: BTreeMap::new(),
             retiring_sends: Vec::new(),
+            send_periods: BTreeMap::new(),
             send_targets: BTreeMap::new(),
             previous_sends: BTreeMap::new(),
             next_send: 0,
@@ -314,8 +361,9 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
 
     /// Q253 (B17b-3, OPEN-M7-B-27): the old send queues of `contact` whose send overlap a restart interrupted are
     /// registered again, in overlap, until the end their row keeps (Q252) — only an end still ahead and at most
-    /// [`OLD_SEND_MS`] away (the longest overlap the hub draws): an end that passed while the client was down, or one
-    /// further away than any drawn (the clock went back), registers nothing, the row goes and a `KeyChange` marker of that
+    /// [`MAX_SEND_OVERLAP_MS`] away (the longest overlap a switch writes, B17c, Q266), and exactly until that end (Q267: no
+    /// floor, no row rewritten): an end that passed while the client was down (or the clock went forward), or one
+    /// further away than any (the clock went back), registers nothing, the row goes and a `KeyChange` marker of that
     /// queue keeps holding (fail closed); and only a physical queue not registered already (spec §10.2, Q236). The set of
     /// send queues therefore does not depend on whether a `KeyChange` exists (spec §10.1): every switch writes its row.
     fn resume_overlaps(&mut self, contact: ContactId, at: usize) -> Result<(), Error> {
@@ -327,11 +375,17 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         };
         let now = self.core.now_ms();
         let mono = self.core.clock.mono_ms();
+        // B17c (Q265): the latest end of each `sid` — a lengthened end is written before the row it replaces goes
+        let mut ends: BTreeMap<Id, u64> = BTreeMap::new();
+        for route in &read {
+            let end = ends.entry(route.sid).or_insert(route.until_ms);
+            *end = (*end).max(route.until_ms);
+        }
         for route in read {
-            let Some(left) = route
-                .until_ms
-                .checked_sub(now)
-                .filter(|left| *left > 0 && *left <= OLD_SEND_MS)
+            let Some(left) = ends
+                .get(&route.sid)
+                .and_then(|until| until.checked_sub(now))
+                .filter(|left| *left > 0 && *left <= MAX_SEND_OVERLAP_MS)
             else {
                 continue;
             };
@@ -350,7 +404,12 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             self.registered.insert(queue);
             self.send_targets.insert(queue, target);
             self.previous_sends.insert(contact.0, queue);
-            self.retiring_sends.push((mono.saturating_add(left), queue));
+            // B17c (Q267): exactly the stored end — no floor, no row rewritten at a restart
+            self.retiring_sends.push(Retiring {
+                queue,
+                until: mono.saturating_add(left),
+                floor: None,
+            });
             if let Some(conversation) = self.core.convs.get_mut(at) {
                 conversation.resume_overlap(queue, route.sid);
             }
@@ -384,15 +443,17 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             return self.store_current_route(contact);
         }
         let queue = self.alloc_send();
+        let period_ms = u64::from(route.period_s.seconds()).saturating_mul(1_000);
         self.actions.push(Action::AddSend {
             queue,
             relay: self.config.relay,
             sid: route.sid,
             seed: SecretBytes::from_slice(route.send_seed.expose_secret())?,
-            period_ms: u64::from(route.period_s.seconds()).saturating_mul(1_000),
+            period_ms,
         });
         self.registered.insert(queue);
         self.send_targets.insert(queue, target);
+        self.send_periods.insert(queue, period_ms);
         let previous = self.send_ids.insert(contact.0, queue);
         let previous_route = self.send_routes.insert(contact.0, encoded);
         if let Some(conversation) = self.core.convs.get_mut(at) {
@@ -415,8 +476,16 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 .rng
                 .uniform(OVERLAP_MS.0, OVERLAP_MS.1)
                 .unwrap_or(OLD_SEND_MS);
-            let until = self.core.clock.mono_ms().saturating_add(overlap);
-            self.retiring_sends.push((until, old));
+            let mono = self.core.clock.mono_ms();
+            // B17c: the floor counts from the switch, shifted by the draw above its lower bound (the next tick applies it)
+            self.retiring_sends.push(Retiring {
+                queue: old,
+                until: mono.saturating_add(overlap),
+                floor: Some(Anchor {
+                    from: mono,
+                    blur: overlap.saturating_sub(OVERLAP_MS.0),
+                }),
+            });
             // Q252: the overlap is durable — its route and its end — so a restart sends to `old` again until then (Q253)
             let end = self.core.now_ms().saturating_add(overlap);
             if let (Some(bytes), Some(conversation)) = (previous_route, self.core.convs.get_mut(at))
@@ -667,18 +736,69 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         {
             let _ = self.maintain();
         }
+        self.raise_floors();
         let (due, keep): (Vec<_>, Vec<_>) = core::mem::take(&mut self.retiring_sends)
             .into_iter()
-            .partition(|(until, _)| *until <= now_ms);
+            .partition(|r| r.until <= now_ms);
         self.retiring_sends = keep;
-        for (_, queue) in due {
+        for Retiring { queue, .. } in due {
             for (_, at) in self.core.index.clone() {
                 if let Some(c) = self.core.convs.get_mut(at) {
                     c.drop_send_queue(queue);
                 }
             }
             self.send_targets.remove(&queue);
+            self.send_periods.remove(&queue);
             self.actions.push(Action::Remove { queue });
+        }
+    }
+
+    /// B17c (Q264, Q265): every old send queue switched in this process ends no earlier than its floor, `from + blur +
+    /// min(FLOOR_CELLS · I, FLOOR_TERM_CAP_MS)`, I its [`cell_interval_ms`] in the effective mode with the send queues on
+    /// its link now — so the floor follows a mode change and a growing N; it never shortens an end. A queue a restart
+    /// registered again has no floor (Q267). A longer end is used only once its
+    /// conversation has written it (CLAUDE.md §1.7); a failed write leaves the end as it was, for the next tick. A function
+    /// of the mode, the periods, the set of send queues and the draw at the switch only (spec §10.1).
+    fn raise_floors(&mut self) {
+        let mode = effective_mode(self.core.settings.mode, self.core.view.direct);
+        let params = Params::default();
+        let base = self.unix_base();
+        for i in 0..self.retiring_sends.len() {
+            let Some(r) = self.retiring_sends.get(i) else {
+                break;
+            };
+            // Q267: a queue a restart registered again keeps its stored end
+            let (queue, Some(Anchor { from, blur })) = (r.queue, r.floor) else {
+                continue;
+            };
+            let Some((relay, _)) = self.send_targets.get(&queue).copied() else {
+                continue;
+            };
+            let n = self
+                .send_targets
+                .values()
+                .filter(|(r, _)| *r == relay)
+                .count();
+            let Some(period) = self.send_periods.get(&queue).copied() else {
+                continue;
+            };
+            let interval =
+                cell_interval_ms(&params, mode, period, u64::try_from(n).unwrap_or(u64::MAX));
+            let floor = floor_end(from, blur, interval);
+            // the row keeps the later end; `extend_overlap` writes only one that is later than the row's
+            let end = base.saturating_add(floor);
+            let mut durable = false;
+            for at in self.core.index.values() {
+                if let Some(c) = self.core.convs.get_mut(*at)
+                    && let Some(written) = c.extend_overlap(queue, end)
+                {
+                    durable = written;
+                    break;
+                }
+            }
+            if durable && let Some(r) = self.retiring_sends.get_mut(i) {
+                r.until = r.until.max(floor);
+            }
         }
     }
 
@@ -754,6 +874,43 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             .find(|(_, e)| e.queue == queue.0)?;
         typed(&entry.seed, entry.send_seed.as_ref())
     }
+}
+
+/// The effective scheduler mode (as `Core` computes it for a rotation): direct transport implies Balanced (spec §10.2).
+const fn effective_mode(mode: Mode, direct: bool) -> Mode {
+    match (mode, direct) {
+        (Mode::Strict, true) => Mode::Balanced,
+        (m, _) => m,
+    }
+}
+
+/// B17c (Q264): the longest interval between two cells of a send queue of period `period_ms` in `mode`, with `n` send queues
+/// on its link (spec §10.2): Strict mode sends it once per period; Balanced and Low-bandwidth mode one queue per slot `T`,
+/// round-robin among the due ones — once due (after `⌈P_q / T⌉` slots), a queue waits at most for the `n − 1` others, so
+/// `(⌈P_q / T⌉ + n − 1) · T` (≥ `max(P_q, n · T)`). `None` on an overflow (the floor is then the cap).
+#[must_use]
+pub fn cell_interval_ms(params: &Params, mode: Mode, period_ms: u64, n: u64) -> Option<u64> {
+    let Some(slot) = params.slot_ms(mode) else {
+        return Some(period_ms);
+    };
+    let due = period_ms
+        .checked_add(slot.checked_sub(1)?)?
+        .checked_div(slot)?;
+    due.checked_add(n.saturating_sub(1))?.checked_mul(slot)
+}
+
+/// B17c (Q264, Q266): the floor of an old send queue anchored at `from` with the drawn share `blur`: `from + blur +
+/// min(FLOOR_CELLS · interval, FLOOR_TERM_CAP_MS)`; an unknown interval or an overflow takes the term's cap. Only the
+/// term is capped, so the end moves with `blur` for every interval (uniform over the draw's 23 h); the span stays at most
+/// `MAX_SEND_OVERLAP_MS` (`blur` ≤ `OLD_SEND_MS − 1 h`; a larger one is cut there).
+fn floor_end(from: u64, blur: u64, interval: Option<u64>) -> u64 {
+    let term = interval
+        .and_then(|i| FLOOR_CELLS.checked_mul(i))
+        .map_or(FLOOR_TERM_CAP_MS, |t| t.min(FLOOR_TERM_CAP_MS));
+    let span = blur
+        .checked_add(term)
+        .map_or(MAX_SEND_OVERLAP_MS, |s| s.min(MAX_SEND_OVERLAP_MS));
+    from.saturating_add(span)
 }
 
 /// Copies of a queue's seeds, typed (`queue_material`).
@@ -2179,10 +2336,11 @@ mod tests {
             let (sc, guest, contact) = on_b("hub-ov", 151)?;
             let hub = &sc.invitee;
             let a = *hub.previous_sends.get(&contact.0).ok_or("A")?;
-            let (end, _) = *hub
+            let end = hub
                 .retiring_sends
                 .iter()
-                .find(|(_, q)| *q == a)
+                .find(|r| r.queue == a)
+                .map(|r| r.until)
                 .ok_or("A retires")?;
             let left = end.saturating_sub(hub.core.clock.mono_ms());
             let until = hub.core.now_ms().saturating_add(left);
@@ -2237,8 +2395,9 @@ mod tests {
         })
     }
 
-    /// SE-114 (Q253, Q236): only an end still ahead and at most `OLD_SEND_MS` away registers its queue again (rows of
-    /// `sid` 21: the end now; 22: 1 ms ahead; 23: `OLD_SEND_MS` ahead; 24: 1 ms more; 25: 1 ms ago), and only a physical
+    /// SE-114 (Q253, Q236, Q266; re-dictated by B17c): only an end still ahead and at most `MAX_SEND_OVERLAP_MS` away
+    /// registers its queue again (rows of `sid` 21: the end now; 22: 1 ms ahead; 23: `MAX_SEND_OVERLAP_MS` ahead; 24: 1 ms
+    /// more; 25: 1 ms ago), and only a physical
     /// queue not registered already (26 = B's `sid` 4, the current queue). The rows not registered go at the first
     /// preparation; the others stay.
     #[test]
@@ -2256,8 +2415,11 @@ mod tests {
             for (sid, until) in [
                 (21_u8, now),
                 (22, now.saturating_add(1)),
-                (23, now.saturating_add(OLD_SEND_MS)),
-                (24, now.saturating_add(OLD_SEND_MS).saturating_add(1)),
+                (23, now.saturating_add(MAX_SEND_OVERLAP_MS)),
+                (
+                    24,
+                    now.saturating_add(MAX_SEND_OVERLAP_MS).saturating_add(1),
+                ),
                 (25, now.saturating_sub(1)),
                 (4, now.saturating_add(1_000)),
             ] {
@@ -2366,10 +2528,11 @@ mod tests {
                 queue_of(&added, 7).ok_or("C")?,
                 queue_of(&added, 4).ok_or("B")?,
             );
-            let (end, _) = *again
+            let end = again
                 .retiring_sends
                 .iter()
-                .find(|(_, q)| *q == b2)
+                .find(|r| r.queue == b2)
+                .map(|r| r.until)
                 .ok_or("B retires")?;
             again.tick(end);
             for i in 0..4_u64 {
@@ -2897,6 +3060,719 @@ mod tests {
                     .any(|x| matches!(x, Action::Remove { queue } if *queue == a2)),
                 "at the stored end"
             );
+            Ok(())
+        })
+    }
+    /// SE-140 (Q264; spec §10.2): the longest interval between two cells of a send queue — Strict: its period, whatever
+    /// the link; Balanced (`T` = 10 s) and Low-bandwidth (`T` = 30 s): `(⌈P_q / T⌉ + n − 1) · T` (an exact and a rounded-up
+    /// division, one queue counted as one, none as one); an overflow and a zero slot give `None`; direct transport makes
+    /// Strict Balanced and changes no other mode.
+    #[test]
+    fn cell_interval_follows_mode_period_and_queues() {
+        use super::{cell_interval_ms, effective_mode};
+        use crate::scheduler::params::{Mode, Params};
+
+        let p = Params::default();
+        let cases = [
+            (Mode::Strict, 80_000, 5, Some(80_000)),
+            (Mode::Strict, 10_000, 1, Some(10_000)),
+            (Mode::Balanced, 80_000, 1, Some(80_000)),
+            (Mode::Balanced, 80_000, 3, Some(100_000)),
+            (Mode::Balanced, 85_000, 1, Some(90_000)),
+            (Mode::Balanced, 10_000, 4, Some(40_000)),
+            (Mode::Balanced, 10_000, 0, Some(10_000)),
+            (Mode::LowBw, 80_000, 1, Some(90_000)),
+            (Mode::LowBw, 90_000, 1, Some(90_000)),
+            (Mode::LowBw, 80_000, 10, Some(360_000)),
+            (Mode::LowBw, 10_000, 12, Some(360_000)),
+            (Mode::Balanced, u64::MAX, 1, None),
+            (Mode::Balanced, 80_000, u64::MAX, None),
+        ];
+        for (mode, period, n, want) in cases {
+            assert_eq!(
+                cell_interval_ms(&p, mode, period, n),
+                want,
+                "{mode:?} {period} {n}"
+            );
+        }
+        let zero = Params {
+            t_balanced_ms: 0,
+            ..Params::default()
+        };
+        assert_eq!(cell_interval_ms(&zero, Mode::Balanced, 80_000, 1), None);
+        assert_eq!(effective_mode(Mode::Strict, true), Mode::Balanced);
+        assert_eq!(effective_mode(Mode::Strict, false), Mode::Strict);
+        assert_eq!(effective_mode(Mode::LowBw, true), Mode::LowBw);
+        assert_eq!(effective_mode(Mode::LowBw, false), Mode::LowBw);
+        assert_eq!(effective_mode(Mode::Balanced, true), Mode::Balanced);
+    }
+
+    /// SE-141 (Q264, Q266; re-dictated by B17c R1 M-2): `FLOOR_CELLS` = `QUEUE_CAPACITY` + the in-flight depth + 2 = 132;
+    /// the longest overlap is two days and a minute, above `OLD_SEND_MS`; only the term `132 · I` is capped, at 25 h =
+    /// `MAX_SEND_OVERLAP_MS − (OLD_SEND_MS − 1 h)`: `from + blur + min(132 · I, 25 h)` one interval below and above the
+    /// term's cap, for an unknown interval and on an overflow; the fallback draw at the term's cap is the longest overlap,
+    /// a larger share is cut there.
+    #[test]
+    fn floor_end_is_capped() {
+        use super::{
+            FLOOR_CELLS, FLOOR_TERM_CAP_MS, MAX_SEND_OVERLAP_MS, OLD_SEND_MS, OVERLAP_MS, floor_end,
+        };
+
+        let capacity = u64::try_from(secmp_proto::link::QUEUE_CAPACITY).unwrap_or(0);
+        let depth = u64::from(crate::scheduler::params::Params::default().max_in_flight);
+        assert_eq!(
+            FLOOR_CELLS,
+            capacity.saturating_add(depth).saturating_add(2)
+        );
+        assert_eq!(FLOOR_CELLS, 132);
+        assert_eq!(MAX_SEND_OVERLAP_MS, 48 * 3_600_000 + 60_000);
+        assert_eq!(FLOOR_TERM_CAP_MS, 25 * 3_600_000);
+        const { assert!(MAX_SEND_OVERLAP_MS > OLD_SEND_MS) };
+        let fallback = OLD_SEND_MS.saturating_sub(OVERLAP_MS.0);
+        assert_eq!(
+            FLOOR_TERM_CAP_MS.saturating_add(fallback),
+            MAX_SEND_OVERLAP_MS
+        );
+        let (max, cap) = (MAX_SEND_OVERLAP_MS, FLOOR_TERM_CAP_MS);
+        assert_eq!(floor_end(10, 0, Some(80_000)), 10_560_010);
+        assert_eq!(floor_end(10, 5, Some(80_000)), 10_560_015);
+        assert_eq!(
+            floor_end(3, 5, Some(681_818)),
+            89_999_984,
+            "one interval below the term's cap"
+        );
+        assert_eq!(
+            floor_end(3, 5, Some(681_819)),
+            cap.saturating_add(8),
+            "above it"
+        );
+        assert_eq!(floor_end(7, 11, None), cap.saturating_add(18));
+        assert_eq!(floor_end(0, 0, Some(u64::MAX)), cap);
+        assert_eq!(floor_end(0, fallback, Some(u64::MAX)), max, "the fallback");
+        assert_eq!(
+            floor_end(0, fallback.saturating_add(1), Some(u64::MAX)),
+            max,
+            "a larger share is cut"
+        );
+        assert_eq!(floor_end(0, u64::MAX, Some(1)), max);
+        assert_eq!(floor_end(u64::MAX, 0, Some(1)), u64::MAX);
+    }
+
+    /// SE-149 (Q264, Q266; B17c verification R1 M-2; spec §10.6 (4)): the floor moves with the drawn share by exactly that
+    /// share at every interval — below, at and far above the term's cap, unknown, and for every mode and n up to 1000 —
+    /// so the end stays uniform over the draw's 23 h and is never at a fixed distance from the switch.
+    #[test]
+    fn floor_end_keeps_the_draw_at_every_interval() {
+        use super::{cell_interval_ms, floor_end};
+        use crate::scheduler::params::{Mode, Params};
+
+        let p = Params::default();
+        let mut intervals = vec![
+            Some(10_000),
+            Some(80_000),
+            Some(681_818),
+            Some(681_819),
+            Some(1_309_500),
+            Some(10_000_000),
+            Some(u64::MAX),
+            None,
+        ];
+        for mode in [Mode::Strict, Mode::Balanced, Mode::LowBw] {
+            for n in [1_u64, 21, 42, 62, 124, 1_000] {
+                intervals.push(cell_interval_ms(&p, mode, 80_000, n));
+            }
+        }
+        for interval in intervals {
+            let low = floor_end(1_000, 0, interval);
+            for blur in [1_u64, 41_400_000, 82_800_000] {
+                assert_eq!(
+                    floor_end(1_000, blur, interval).checked_sub(low),
+                    Some(blur),
+                    "{interval:?} {blur}"
+                );
+            }
+        }
+    }
+
+    /// `from + blur + span`.
+    #[cfg(feature = "kat")]
+    const fn end_of(from: u64, blur: u64, span: u64) -> u64 {
+        from.saturating_add(blur).saturating_add(span)
+    }
+
+    /// The floor `from + blur + FLOOR_CELLS · interval`.
+    #[cfg(feature = "kat")]
+    const fn floor_of(from: u64, blur: u64, interval: u64) -> u64 {
+        end_of(from, blur, FLOOR_CELLS.saturating_mul(interval))
+    }
+
+    /// The (until, from, blur) of the old send queue `q` in overlap, if it has a floor (a switch of this process).
+    #[cfg(feature = "kat")]
+    fn retiring_of(hub: &Hub<ManualClock, Fixed>, q: QueueId) -> Option<(u64, u64, u64)> {
+        hub.retiring_sends
+            .iter()
+            .find(|r| r.queue == q)
+            .and_then(|r| r.floor.map(|f| (r.until, f.from, f.blur)))
+    }
+
+    /// The end (monotonic) of the old send queue `q` in overlap, with or without a floor.
+    #[cfg(feature = "kat")]
+    fn end_at(hub: &Hub<ManualClock, Fixed>, q: QueueId) -> Option<u64> {
+        hub.retiring_sends
+            .iter()
+            .find(|r| r.queue == q)
+            .map(|r| r.until)
+    }
+
+    /// Whether the actions taken since the last call remove `q`.
+    #[cfg(feature = "kat")]
+    fn removes(hub: &mut Hub<ManualClock, Fixed>, q: QueueId) -> bool {
+        hub.take_actions()
+            .iter()
+            .any(|x| matches!(x, Action::Remove { queue } if *queue == q))
+    }
+
+    /// The old send queues of `on_b` in overlap: X (the first, 10 s) and A (`sid` 9, 80 s).
+    #[cfg(feature = "kat")]
+    fn x_and_a(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<(QueueId, QueueId), crate::testutil::E> {
+        let (a, _) = hub.sends_of(contact).ok_or("sends")?;
+        let x = hub
+            .retiring_sends
+            .iter()
+            .map(|r| r.queue)
+            .find(|q| *q != a)
+            .ok_or("X")?;
+        Ok((x, a))
+    }
+
+    /// SE-142 (Q264, Q265; spec §10.1, §10.6 (4)): Strict mode, no `KeyChange`. At the switch the end is the draw (`from + u`,
+    /// `blur = u − 1 h`); the first tick raises A (80 s) to `from + blur + 132 · 80 s` — the draw shifted by 132 · 80 s − 1 h,
+    /// never a fixed distance from the switch — and keeps X (10 s; 132 · 10 s is below 1 h) at its draw; A's row names the
+    /// new end, the row it replaced is gone; the tick 1 ms before keeps A, the tick at it removes A and its row.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_floor_shifts_the_drawn_end() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-fl-sw", 191)?;
+            let hub = &mut sc.invitee;
+            let (x, a) = x_and_a(hub, contact)?;
+            let (xu, xf, xb) = retiring_of(hub, x).ok_or("X retires")?;
+            let (au, af, ab) = retiring_of(hub, a).ok_or("A retires")?;
+            assert_eq!(
+                (xu, au),
+                (end_of(xf, xb, OVERLAP_MS.0), end_of(af, ab, OVERLAP_MS.0)),
+                "the draws"
+            );
+            hub.tick(hub.core.clock.mono_ms());
+            let a_end = floor_of(af, ab, 80_000);
+            assert_eq!(
+                retiring_of(hub, a).map(|r| r.0),
+                Some(a_end),
+                "Q264: A's floor"
+            );
+            assert_eq!(
+                a_end.saturating_sub(au),
+                FLOOR_CELLS
+                    .saturating_mul(80_000)
+                    .saturating_sub(OVERLAP_MS.0),
+                "the draw, shifted"
+            );
+            assert_eq!(
+                retiring_of(hub, x).map(|r| r.0),
+                Some(xu),
+                "X keeps its draw"
+            );
+            let base = hub.unix_base();
+            let rows = overlaps_of(hub, contact)?;
+            let of_a: Vec<u64> = rows
+                .iter()
+                .filter(|r| r.0 == [9; 16])
+                .map(|r| r.2)
+                .collect();
+            assert_eq!(
+                of_a,
+                vec![base.saturating_add(a_end)],
+                "Q265: A's one row names its floor"
+            );
+            hub.tick(a_end.saturating_sub(1));
+            assert!(!removes(hub, a), "1 ms before");
+            hub.tick(a_end);
+            assert!(removes(hub, a), "at the floor");
+            assert!(
+                !overlaps_of(hub, contact)?.iter().any(|r| r.0 == [9; 16]),
+                "A's row goes"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-143 (Q264; spec §10.2): the floor follows the mode and the send queues on the link at every tick and never
+    /// shortens an end. Balanced, n = 3 (X, A, B): A (80 s) 100 s, X (10 s) 30 s; a route C (n = 4): A 110 s, X 40 s, B (now
+    /// in overlap, 80 s) 110 s from its own switch; Low-bandwidth: A 180 s, X 120 s; Strict again: nothing shorter; direct
+    /// transport in Strict mode counts as Balanced.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn floor_follows_the_mode_and_a_growing_link() -> R {
+        use crate::scheduler::params::Mode;
+
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-fl-n", 193)?;
+            let (x, a) = x_and_a(&sc.invitee, contact)?;
+            let (_, xf, xb) = retiring_of(&sc.invitee, x).ok_or("X")?;
+            let (_, af, ab) = retiring_of(&sc.invitee, a).ok_or("A")?;
+            let at = |hub: &Hub<ManualClock, Fixed>, q| retiring_of(hub, q).map(|r| r.0);
+            let hub = &mut sc.invitee;
+            hub.core.settings.mode = Mode::Balanced;
+            hub.tick(hub.core.clock.mono_ms());
+            assert_eq!(at(hub, a), Some(floor_of(af, ab, 100_000)), "A, n = 3");
+            assert_eq!(at(hub, x), Some(floor_of(xf, xb, 30_000)), "X, n = 3");
+            let b = hub.send_ids.get(&contact.0).copied().ok_or("B")?;
+            send_route(&mut sc, 7, ms(40))?;
+            let hub = &mut sc.invitee;
+            hub.pump()?;
+            let (bu, bf, bb) = retiring_of(hub, b).ok_or("B retires")?;
+            assert_eq!(bu, end_of(bf, bb, OVERLAP_MS.0), "B's draw");
+            hub.tick(hub.core.clock.mono_ms());
+            assert_eq!(at(hub, a), Some(floor_of(af, ab, 110_000)), "A, n = 4");
+            assert_eq!(at(hub, x), Some(floor_of(xf, xb, 40_000)), "X, n = 4");
+            assert_eq!(at(hub, b), Some(floor_of(bf, bb, 110_000)), "B, n = 4");
+            hub.core.settings.mode = Mode::LowBw;
+            hub.tick(hub.core.clock.mono_ms());
+            assert_eq!(at(hub, a), Some(floor_of(af, ab, 180_000)), "A, Low-bw");
+            assert_eq!(at(hub, x), Some(floor_of(xf, xb, 120_000)), "X, Low-bw");
+            let high = (at(hub, x), at(hub, a), at(hub, b));
+            hub.core.settings.mode = Mode::Strict;
+            hub.tick(hub.core.clock.mono_ms());
+            assert_eq!((at(hub, x), at(hub, a), at(hub, b)), high, "never shorter");
+            let base = hub.unix_base();
+            let rows = overlaps_of(hub, contact)?;
+            let of_a: Vec<u64> = rows
+                .iter()
+                .filter(|r| r.0 == [9; 16])
+                .map(|r| r.2)
+                .collect();
+            assert_eq!(
+                of_a,
+                vec![base.saturating_add(floor_of(af, ab, 180_000))],
+                "one row, the latest end"
+            );
+
+            let (mut sc, _guest, contact) = on_b("hub-fl-direct", 195)?;
+            let hub = &mut sc.invitee;
+            let (_, a) = x_and_a(hub, contact)?;
+            let (_, af, ab) = retiring_of(hub, a).ok_or("A")?;
+            hub.core.view.direct = true;
+            hub.tick(hub.core.clock.mono_ms());
+            assert_eq!(
+                at(hub, a),
+                Some(floor_of(af, ab, 100_000)),
+                "direct: Balanced"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-144 (Q265; CLAUDE.md §1.7): a floor is used only once its row is durable — a failed write leaves A's end and its
+    /// row as they were, and the next tick writes it; a queue in overlap without an overlap row is never lengthened.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn floor_waits_for_its_row() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-fl-row", 197)?;
+            let hub = &mut sc.invitee;
+            let (_, a) = x_and_a(hub, contact)?;
+            let (au, af, ab) = retiring_of(hub, a).ok_or("A")?;
+            let base = hub.unix_base();
+            let ghost = hub.alloc_send();
+            hub.send_targets.insert(ghost, (hub.config.relay, [77; 16]));
+            hub.send_periods.insert(ghost, 80_000);
+            let mono = hub.core.clock.mono_ms();
+            hub.retiring_sends.push(Retiring {
+                queue: ghost,
+                until: mono.saturating_add(1_000),
+                floor: Some(Anchor {
+                    from: mono,
+                    blur: 0,
+                }),
+            });
+            secmp_store::kat::fail_at(secmp_store::kat::FailAt(1));
+            hub.tick(mono);
+            assert_eq!(
+                retiring_of(hub, a).map(|r| r.0),
+                Some(au),
+                "the write failed: A's end stays"
+            );
+            let rows = overlaps_of(hub, contact)?;
+            let of_a: Vec<u64> = rows
+                .iter()
+                .filter(|r| r.0 == [9; 16])
+                .map(|r| r.2)
+                .collect();
+            assert_eq!(of_a, vec![base.saturating_add(au)], "and its row");
+            hub.tick(mono);
+            let a_end = floor_of(af, ab, 80_000);
+            assert_eq!(
+                retiring_of(hub, a).map(|r| r.0),
+                Some(a_end),
+                "written at the next tick"
+            );
+            assert_eq!(
+                retiring_of(hub, ghost).map(|r| r.0),
+                Some(mono.saturating_add(1_000)),
+                "no row: no floor"
+            );
+            hub.tick(mono.saturating_add(1_000));
+            assert!(removes(hub, ghost), "it ends at its end");
+            Ok(())
+        })
+    }
+
+    /// SE-145 (Q267 revised, option (a); B17c verification R1 B-1; spec §11.3): two old send queues a restart a minute
+    /// later registers again (rows of `sid` 22 and 23, 20 s, ends 5 s and 7 s ahead) keep exactly their stored ends —
+    /// no floor, no common instant, no fixed distance from the restart: the first tick changes neither end nor row; the
+    /// tick 1 ms before each end keeps it, the tick at it removes that queue, and its row, only.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_keeps_the_stored_ends() -> R {
+        use crate::clock::Clock as _;
+        use crate::sessions::actor::OverlapRoute;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-fl-rs", 199)?;
+            drop(sc);
+            guest.clock.advance_ms(60_000);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let store = guest.profile.store();
+            for (sid, ahead) in [(22_u8, 5_000_u64), (23, 7_000)] {
+                let row = OverlapRoute {
+                    sid: [sid; 16],
+                    seed: SecretBytes::from_slice(&[sid; 32])?,
+                    period: Period::S20,
+                    until_ms: now.saturating_add(ahead),
+                    newest: 0,
+                    unknown: false,
+                }
+                .row();
+                store
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+            }
+            drop(store);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = add_sends(&mut again);
+            let (q22, q23) = (
+                queue_of(&added, 22).ok_or("22")?,
+                queue_of(&added, 23).ok_or("23")?,
+            );
+            let mono = again.core.clock.mono_ms();
+            assert!(mono >= 60_000, "the restart is a minute later");
+            let (e22, e23) = (mono.saturating_add(5_000), mono.saturating_add(7_000));
+            let rows_of =
+                |hub: &Hub<ManualClock, Fixed>| -> Result<Vec<(Id, u64)>, crate::testutil::E> {
+                    Ok(overlaps_of(hub, contact)?
+                        .iter()
+                        .filter(|r| r.0 == [22; 16] || r.0 == [23; 16])
+                        .map(|r| (r.0, r.2))
+                        .collect())
+                };
+            let stored = rows_of(&again)?;
+            again.tick(mono);
+            assert_eq!(
+                (end_at(&again, q22), end_at(&again, q23)),
+                (Some(e22), Some(e23)),
+                "Q267: the stored ends, not a common instant"
+            );
+            assert_eq!(
+                (retiring_of(&again, q22), retiring_of(&again, q23)),
+                (None, None),
+                "no floor after a restart"
+            );
+            assert_eq!(rows_of(&again)?, stored, "no row rewritten");
+            again.tick(e22.saturating_sub(1));
+            assert!(!removes(&mut again, q22), "1 ms before 22's end");
+            again.tick(e22);
+            let gone = again.take_actions();
+            let gone = |q: QueueId| {
+                gone.iter()
+                    .any(|x| matches!(x, Action::Remove { queue } if *queue == q))
+            };
+            assert_eq!(
+                (gone(q22), gone(q23)),
+                (true, false),
+                "22 at its end, 23 not"
+            );
+            again.tick(e23.saturating_sub(1));
+            assert!(!removes(&mut again, q23), "1 ms before 23's end");
+            again.tick(e23);
+            assert!(removes(&mut again, q23), "23 at its end");
+            assert_eq!(rows_of(&again)?, Vec::new(), "their rows go");
+            Ok(())
+        })
+    }
+
+    /// SE-146 (Q265): three rows of one `sid` (22; ends 5 s, 9 s and 3 s ahead, in `ord` order, as a crash between the
+    /// write of a lengthened row and the delete of the row it replaces leaves them) register it once, until the latest end.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_takes_the_latest_end_of_a_sid() -> R {
+        use crate::clock::Clock as _;
+        use crate::sessions::actor::OverlapRoute;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-fl-max", 201)?;
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let store = guest.profile.store();
+            for ahead in [5_000_u64, 9_000, 3_000] {
+                let row = OverlapRoute {
+                    sid: [22; 16],
+                    seed: SecretBytes::from_slice(&[22; 32])?,
+                    period: Period::S20,
+                    until_ms: now.saturating_add(ahead),
+                    newest: 0,
+                    unknown: false,
+                }
+                .row();
+                store
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+            }
+            drop(store);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = add_sends(&mut again);
+            assert_eq!(
+                added.iter().filter(|(_, s)| *s == [22; 16]).count(),
+                1,
+                "once"
+            );
+            let q = queue_of(&added, 22).ok_or("22")?;
+            let mono = again.core.clock.mono_ms();
+            assert_eq!(
+                end_at(&again, q),
+                Some(mono.saturating_add(9_000)),
+                "the latest end"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-148 (Q264; B17c verification R1): the floor of a switch counts from the switch on the monotonic clock — B (80 s)
+    /// switched two hours after the start: its `from` is that time, its draw and its floor `from + blur + 132 · 80 s` are
+    /// measured from it; the tick 1 ms before keeps B, the tick at it removes B.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_floor_counts_from_the_switch() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-fl-at", 215)?;
+            sc.invitee.core.clock.advance_ms(2 * 3_600_000);
+            let at = sc.invitee.core.clock.mono_ms();
+            assert!(at >= 2 * 3_600_000, "two hours on");
+            let b = sc.invitee.send_ids.get(&contact.0).copied().ok_or("B")?;
+            send_route(&mut sc, 7, ms(40))?;
+            let hub = &mut sc.invitee;
+            hub.pump()?;
+            let (bu, bf, bb) = retiring_of(hub, b).ok_or("B retires")?;
+            assert_eq!(bf, at, "from = the switch");
+            assert_eq!(bu, end_of(at, bb, OVERLAP_MS.0), "the draw from the switch");
+            hub.tick(at);
+            let end = floor_of(at, bb, 80_000);
+            assert_eq!(
+                retiring_of(hub, b).map(|r| r.0),
+                Some(end),
+                "Q264: the floor from the switch"
+            );
+            hub.tick(end.saturating_sub(1));
+            assert!(!removes(hub, b), "1 ms before");
+            hub.tick(end);
+            assert!(removes(hub, b), "at the floor");
+            Ok(())
+        })
+    }
+
+    /// SE-150 (Q267 revised, option (a); B17c verification R1 M-1): A (80 s, Strict) switched and raised to its floor in
+    /// one process; then 30 restarts two hours apart: every restart that registers A registers it until exactly the end
+    /// its row kept (the floor from the switch, Q265), rewrites no row, and once that end has passed no restart registers
+    /// A again — restarts never keep an old queue beyond its stored end.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restarts_do_not_extend_an_old_queue() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (mut sc, mut guest, contact) = on_b("hub-fl-loop", 211)?;
+            let hub = &mut sc.invitee;
+            let (_, a) = x_and_a(hub, contact)?;
+            let (_, af, ab) = retiring_of(hub, a).ok_or("A")?;
+            hub.tick(hub.core.clock.mono_ms());
+            let stored = hub.unix_base().saturating_add(floor_of(af, ab, 80_000));
+            let rows_of_a =
+                |hub: &Hub<ManualClock, Fixed>| -> Result<Vec<u64>, crate::testutil::E> {
+                    Ok(overlaps_of(hub, contact)?
+                        .iter()
+                        .filter(|r| r.0 == [9; 16])
+                        .map(|r| r.2)
+                        .collect())
+                };
+            assert_eq!(
+                rows_of_a(hub)?,
+                vec![stored],
+                "Q265: the floor from the switch is stored"
+            );
+            drop(sc);
+            let (mut registered, mut ended) = (0_u32, false);
+            for _ in 0..30_u32 {
+                guest.clock.advance_ms(2 * 3_600_000);
+                guest = guest.reopen()?;
+                let mut again = hub_over(&guest, "guest", 900)?;
+                let Some(a2) = queue_of(&add_sends(&mut again), 9) else {
+                    assert!(
+                        again.core.now_ms() >= stored,
+                        "A goes only once its end has passed"
+                    );
+                    ended = true;
+                    break;
+                };
+                registered = registered.saturating_add(1);
+                let mono = again.core.clock.mono_ms();
+                again.tick(mono);
+                assert_eq!(
+                    end_at(&again, a2).map(|e| again.unix_base().saturating_add(e)),
+                    Some(stored),
+                    "restart {registered}: exactly the stored end"
+                );
+                assert_eq!(
+                    rows_of_a(&again)?,
+                    vec![stored],
+                    "restart {registered}: no row rewritten"
+                );
+                drop(again);
+            }
+            assert!(
+                ended,
+                "A is not registered after its stored end ({registered} restarts registered it)"
+            );
+            assert!(registered >= 1, "the first restart registers A");
+            Ok(())
+        })
+    }
+
+    /// SE-151 (Q264; B17c finalizer): the floor comes before the drop — A's first tick after its switch at its drawn end
+    /// (`from + blur + 1 h`) raises A to its floor and keeps it; the tick at the floor removes it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_floor_comes_before_the_drop() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("hub-fl-first", 217)?;
+            let hub = &mut sc.invitee;
+            let (_, a) = x_and_a(hub, contact)?;
+            let (au, af, ab) = retiring_of(hub, a).ok_or("A")?;
+            hub.tick(au);
+            assert!(!removes(hub, a), "the floor comes first");
+            let a_end = floor_of(af, ab, 80_000);
+            assert_eq!(end_at(hub, a), Some(a_end), "A's floor");
+            hub.tick(a_end);
+            assert!(removes(hub, a), "at the floor");
+            Ok(())
+        })
+    }
+
+    /// SE-152 (Q264; B17c verification R2, hand mutant V24): the floor reaches the old send queue of a second contact,
+    /// whose conversation is not the first one the hub holds: its queue 17 (80 s, Strict) is raised from its draw to
+    /// `from + blur + 132 · 80 s`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn second_contact_gets_its_floor() -> R {
+        big(|| {
+            let (mut sc, guest, _first) = on_b("hub-r2-two", 331)?;
+            // the first contact's overlaps end first, so the second scene's steps see only their own queues (as SE-84)
+            sc.invitee.tick(ms(200_000));
+            let mut sc2 = scene(party("hub-r2-two-h2", 335)?, &guest)?;
+            core::mem::swap(&mut sc2.invitee, &mut sc.invitee);
+            sc2.invitee.take_actions();
+            step_invite(&mut sc2)?;
+            step_accept(&mut sc2)?;
+            step_handshake(&mut sc2)?;
+            step_reply(&mut sc2)?;
+            let second = sc2.contact;
+            assert_eq!(
+                sc2.invitee.core.index.get(&second.0).copied(),
+                Some(1),
+                "the second conversation"
+            );
+            sc2.invitee.take_actions();
+            for (n, now) in [(17_u8, 50), (18, 60)] {
+                send_route(&mut sc2, n, ms(now))?;
+                sc2.invitee.pump()?;
+            }
+            let hub = &mut sc2.invitee;
+            let old = hub.previous_sends.get(&second.0).copied().ok_or("17")?;
+            let (u, f, b) = retiring_of(hub, old).ok_or("17 retires")?;
+            assert_eq!(u, end_of(f, b, OVERLAP_MS.0), "the draw");
+            hub.tick(hub.core.clock.mono_ms());
+            assert_eq!(
+                retiring_of(hub, old).map(|r| r.0),
+                Some(floor_of(f, b, 80_000)),
+                "Q264: the second contact's floor"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-153 (Q266, Q267; B17c verification R2, hand mutant V26): a restart registers an end further ahead than
+    /// `OLD_SEND_MS` — up to `MAX_SEND_OVERLAP_MS` — until exactly that end (rows of `sid` 22 and 23: `OLD_SEND_MS` + 1 ms
+    /// and `MAX_SEND_OVERLAP_MS` ahead).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_keeps_an_end_beyond_a_day() -> R {
+        use crate::clock::Clock as _;
+        use crate::sessions::actor::OverlapRoute;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("hub-r2-far", 341)?;
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let far = [
+                (22_u8, OLD_SEND_MS.saturating_add(1)),
+                (23, MAX_SEND_OVERLAP_MS),
+            ];
+            let store = guest.profile.store();
+            for (sid, ahead) in far {
+                let row = OverlapRoute {
+                    sid: [sid; 16],
+                    seed: SecretBytes::from_slice(&[sid; 32])?,
+                    period: Period::S20,
+                    until_ms: now.saturating_add(ahead),
+                    newest: 0,
+                    unknown: false,
+                }
+                .row();
+                store
+                    .lock()
+                    .map_err(|_| "lock")?
+                    .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+            }
+            drop(store);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 909)?;
+            let added = add_sends(&mut again);
+            let mono = again.core.clock.mono_ms();
+            for (sid, ahead) in far {
+                let q = queue_of(&added, sid).ok_or("registered")?;
+                assert_eq!(
+                    end_at(&again, q),
+                    Some(mono.saturating_add(ahead)),
+                    "{sid}: exactly its end"
+                );
+            }
             Ok(())
         })
     }

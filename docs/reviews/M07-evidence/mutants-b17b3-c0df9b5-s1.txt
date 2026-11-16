@@ -1,0 +1,35 @@
+head c0df9b5fc7433b70fbb4e358c95b66f993892951
+Found 31 mutants to test
+ok       Unmutated baseline in 107s build + 30s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:795:47: replace && with || in Conversation<O, P, S>::adopt in 2s build + 7s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:795:56: replace == with != in Conversation<O, P, S>::adopt in 2s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:801:27: replace > with == in Conversation<O, P, S>::adopt in 2s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:801:27: replace > with < in Conversation<O, P, S>::adopt in 2s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:801:27: replace > with >= in Conversation<O, P, S>::adopt in 2s build + 48s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:826:9: replace Conversation<O, P, S>::keep_overlap with () in 3s build + 19s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:846:9: replace Conversation<O, P, S>::copies_on -> (u64, bool) with (0, true) in 3s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:846:9: replace Conversation<O, P, S>::copies_on -> (u64, bool) with (0, false) in 2s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:846:9: replace Conversation<O, P, S>::copies_on -> (u64, bool) with (1, true) in 2s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:846:9: replace Conversation<O, P, S>::copies_on -> (u64, bool) with (1, false) in 2s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:850:23: replace == with != in Conversation<O, P, S>::copies_on in 3s build + 9s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:855:40: replace && with || in Conversation<O, P, S>::copies_on in 2s build + 26s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:855:25: replace == with != in Conversation<O, P, S>::copies_on in 2s build + 34s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:857:59: replace || with && in Conversation<O, P, S>::copies_on in 2s build + 28s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:857:49: replace == with != in Conversation<O, P, S>::copies_on in 2s build + 33s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:857:85: replace && with || in Conversation<O, P, S>::copies_on in 2s build + 17s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:866:9: replace Conversation<O, P, S>::write_overlaps with () in 2s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:877:9: replace Conversation<O, P, S>::restore_overlap with () in 2s build + 12s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:890:9: replace Conversation<O, P, S>::overlaps_read -> Result<Vec<OverlapRoute>, SourceError> with Ok(vec![]) in 3s build + 21s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:890:9: replace Conversation<O, P, S>::overlaps_read -> Result<Vec<OverlapRoute>, SourceError> with Ok(vec![Default::default()]) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:901:9: replace Conversation<O, P, S>::resume_overlap with () in 3s build + 20s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:906:43: replace && with || in Conversation<O, P, S>::resume_overlap in 2s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:906:58: replace == with != in Conversation<O, P, S>::resume_overlap in 2s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:910:21: replace |= with &= in Conversation<O, P, S>::resume_overlap in 2s build + 28s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1149:9: replace Conversation<O, P, S>::settle_controls with () in 5s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1212:17: replace || with && in Conversation<O, P, S>::settle_controls in 3s build + 16s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1575:9: replace Conversation<O, P, S>::drop_send_queue with () in 3s build + 8s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:1576:58: replace == with != in Conversation<O, P, S>::drop_send_queue in 3s build + 13s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1578:17: replace && with || in Conversation<O, P, S>::drop_send_queue in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:1583:42: replace != with == in Conversation<O, P, S>::drop_send_queue in 2s build + 20s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:1961:9: replace Conversation<O, P, S>::prepare -> Result<PreparedCell, SourceError> with Ok(Default::default()) in 1s build
+31 mutants tested in 22m: 28 caught, 3 unviable

@@ -1,0 +1,35 @@
+head c0df9b5fc7433b70fbb4e358c95b66f993892951
+Found 31 mutants to test
+ok       Unmutated baseline in 107s build + 28s test
+caught   crates/secmp-client-core/src/hub.rs:275:9: replace Hub<C, S>::register_contact -> Result<(), Error> with Ok(()) in 3s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:322:9: replace Hub<C, S>::resume_overlaps -> Result<(), Error> with Ok(()) in 2s build + 9s test
+caught   crates/secmp-client-core/src/hub.rs:334:42: replace && with || in Hub<C, S>::resume_overlaps in 3s build + 10s test
+caught   crates/secmp-client-core/src/hub.rs:334:38: replace > with == in Hub<C, S>::resume_overlaps in 2s build + 8s test
+caught   crates/secmp-client-core/src/hub.rs:334:38: replace > with < in Hub<C, S>::resume_overlaps in 2s build + 11s test
+caught   crates/secmp-client-core/src/hub.rs:334:38: replace > with >= in Hub<C, S>::resume_overlaps in 2s build + 11s test
+caught   crates/secmp-client-core/src/hub.rs:334:51: replace <= with > in Hub<C, S>::resume_overlaps in 2s build + 10s test
+caught   crates/secmp-client-core/src/hub.rs:339:62: replace == with != in Hub<C, S>::resume_overlaps in 2s build + 16s test
+caught   crates/secmp-client-core/src/hub.rs:366:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 3s build + 7s test
+unviable crates/secmp-client-core/src/hub.rs:423:17: replace && with || in Hub<C, S>::register_route in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::new()) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::from_iter([Default::default()])) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::new(Default::default())) in 1s build
+unviable crates/secmp-client-core/src/sessions/mod.rs:359:5: replace open_conversation -> Result<StoreConversation<S>, Error> with Ok(StoreConversation::from(Default::default())) in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::new() in 1s build
+unviable crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]]) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![]) in 4s build + 10s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![]) in 2s build + 12s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]]) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0]) in 2s build + 15s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0]) in 2s build + 7s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]]) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1]) in 2s build + 13s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:280:9: replace OverlapRoute::row -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1]) in 2s build + 8s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:296:9: replace OverlapRoute::copy -> Result<Self, SourceError> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:313:5: replace overlap_of -> Result<Option<OverlapRoute>, SourceError> with Ok(None) in 2s build + 7s test
+unviable crates/secmp-client-core/src/sessions/actor.rs:313:5: replace overlap_of -> Result<Option<OverlapRoute>, SourceError> with Ok(Some(Default::default())) in 1s build
+caught   crates/secmp-client-core/src/sessions/actor.rs:322:9: delete match arm [0] in overlap_of in 3s build + 12s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:323:9: delete match arm [1] in overlap_of in 2s build + 29s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:781:9: replace Conversation<O, P, S>::set_send_sid with () in 3s build + 14s test
+caught   crates/secmp-client-core/src/sessions/actor.rs:790:9: replace Conversation<O, P, S>::adopt with () in 3s build + 9s test
+31 mutants tested in 19m: 20 caught, 11 unviable

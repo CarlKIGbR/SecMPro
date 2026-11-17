@@ -128,3 +128,16 @@ the four `inner` values; `hx_cell_plaintext` — the three chunk plaintexts of e
 (mode 0), the `inner` (mode 1) and the `outer` head (mode 2). The vector scenario's keys are not the fixture's, so
 these seeds exercise the layouts and reject paths; the accepting path starts from the tracked corpus of
 `hx_accept_raw` (`[3, 0, 1, 2]`: the honest group).
+
+## M7 FZ target (`secmp-client-core::sessions::actor`; OPEN-M7-B-29 (2))
+
+| Target | Input | Invariants |
+|---|---|---|
+| `client_control_rows` (FZ-05) | mode (even/odd) ‖ rest: even a CONTROL row as `open_conversation` reads it from the store; odd the fields of a marker, an overlap, a `Control` and a `RouteUpdate` (zeros once the input is exhausted) and one edit of each encoded row | no panic; `marker_of` none exactly off tag 4, `overlap_of` none exactly off tag 5, `PendingControl::decode` only tags 1–3, at most one accepts; the field rules restated from the bytes (marker 25 B, `ord` ≥ 0; overlap 68 B, period ∈ {10, 20, 40, 80}, flag 0/1; `Control` = `2 ‖ code 1/2 ‖ 0 0`); an accepted row re-encodes to itself with its fields at their big-endian offsets; built values round-trip and match their byte layout; `control_row_of` — the class `open_conversation` gives every row (marker, overlap, content, failed open), with its decoder's payload — is the rules' class and the leaf decoders' class in reverse order (differential); a tag-1 (tag-3) row is accepted exactly when its body decodes as a `RouteUpdateBody` (`KeyChangeBody`) |
+
+Tracked seeds only (38 files, 12 832 B): a valid row of each tag (the `RouteUpdate`, `Control` and `KeyChange` bodies from
+the frozen `encodings` rows enc-0071, enc-0068, enc-0076, enc-0077, enc-0073), every boundary (marker 24/26 bytes and
+`ord` −1, maximum; overlap 67/69 bytes, period 0 and 30, flag 2 and 255, each period, ends 0 and `u64::MAX`; a `Control`
+with an argument or code 3), tags 0, 6, 255 and the empty row, and five structured inputs (one per edit); added in verification R1: an overlap whose fields
+differ byte by byte, period 160, marker `ord` 0, a 25-byte row of tag 6, a 4-byte row of tag 3 and a structured input with
+a negative `ord`; added in verification R2: the `KeyChange` row with one trailing zero byte.

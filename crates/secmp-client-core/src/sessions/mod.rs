@@ -25,8 +25,8 @@ use crate::outbox::StoreOutbox;
 use crate::persist::{SharedStore, StorePersist};
 use crate::scheduler::outbox::{MsgId, OutMessage, Outbox as _, trust_code};
 use actor::{
-    Conversation, EntropySource, PendingControl, Received, Refusal, block_code, block_of,
-    initial_parts, marker_of, overlap_of,
+    ControlRow, Conversation, EntropySource, PendingControl, Received, Refusal, block_code,
+    block_of, control_row_of, initial_parts,
 };
 
 /// A conversation over the profile store: the session's rows, the contact's outbox.
@@ -401,22 +401,19 @@ pub fn open_conversation<S: EntropySource>(
         .lock()
         .map_err(|_| Error::Unavailable)?
         .pending_controls(contact.0)?;
-    // a `KeyChange`'s marker (Q248) joins its `KeyChange`, read before it (rows in `ord` order); a row that does not
-    // decode fails the open like every other row (Q251: never a `KeyChange` released early)
+    // a `KeyChange`'s marker (Q248) joins its `KeyChange`, read before it (rows in `ord` order); an old send queue's
+    // overlap (Q252); a row that does not decode fails the open like every other row (Q251: never a `KeyChange` released
+    // early; Q255); the class is `control_row_of`'s (Q272, fuzzed by FZ-05)
     for (ord, row) in pending {
-        if let Some((key_change, sid)) = marker_of(&row).map_err(|_| Error::Unavailable)? {
-            conversation.restore_marker(ord, key_change, sid);
-            continue;
+        match control_row_of(&row).map_err(|_| Error::Unavailable)? {
+            ControlRow::Marker { key_change, sid } => {
+                conversation.restore_marker(ord, key_change, sid);
+            }
+            ControlRow::Overlap(route) => conversation.restore_overlap(ord, route),
+            ControlRow::Pending(content) => conversation
+                .queue_pending(ord, content)
+                .map_err(|_| Error::Unavailable)?,
         }
-        // an old send queue's overlap (Q252); one that does not decode fails the open as well (Q255)
-        if let Some(route) = overlap_of(&row).map_err(|_| Error::Unavailable)? {
-            conversation.restore_overlap(ord, route);
-            continue;
-        }
-        let content = PendingControl::decode(&row).map_err(|_| Error::Unavailable)?;
-        conversation
-            .queue_pending(ord, content)
-            .map_err(|_| Error::Unavailable)?;
     }
     let cells = store
         .lock()

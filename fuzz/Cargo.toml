@@ -284,3 +284,10 @@ path = "fuzz_targets/invitation_queue_retention.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "client_control_rows"
+path = "fuzz_targets/client_control_rows.rs"
+test = false
+doc = false
+bench = false

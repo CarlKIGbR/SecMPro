@@ -11,14 +11,14 @@ use secmp_crypto::{
 use secmp_proto::sizes::{
     CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN, FRAME_LEN,
     FRAME_PLAINTEXT_LEN, HANDSHAKE_CELL_PT_LEN, HEADER_LEN, HOST_MAX, HS1_LEN, HYBRID_SIG_LEN,
-    ID_LEN, INNER_LEN, LINK_BLOB_LEN, LINKDATA_PADDED_LEN, MAX_MSG_BYTES, MLKEM1024_CT_LEN,
-    MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN, RELAYINFO_LEN,
-    X25519_PK_LEN,
+    ID_LEN, INNER_LEN, KEYCHANGE_BODY_LEN, LINK_BLOB_LEN, LINKDATA_PADDED_LEN, MAX_MSG_BYTES,
+    MLKEM1024_CT_LEN, MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN,
+    RELAYINFO_LEN, X25519_PK_LEN,
 };
 use secmp_proto::tr::RatchetState;
 use secmp_proto::tr::content::Inbox;
 use secmp_proto::wire::Period;
-use secmp_proto::wire::cell::{Cell, HandshakeBody, RouteDescriptor};
+use secmp_proto::wire::cell::{Cell, HandshakeBody, RouteDescriptor, RouteUpdateBody};
 use secmp_proto::wire::inv::{Direct, Host, InvitationV1, Onion, Profile, RelayRef};
 use secmp_proto::wire::signed;
 use secmp_proto::{Encode, Error};
@@ -99,6 +99,8 @@ fn m7_entries() -> Vec<(&'static str, usize)> {
     let round = sum(&[1, 128 * 2, 1, 8]);
     assert_eq!(round, 266);
     vec![
+        // FZ-05 (M7 FZ): an encoding error leaves 0, which the table comparison refuses
+        control_entry().unwrap_or(("client_control_rows", 0)),
         // at most 16 rounds
         ("invitation_queue_retention", round.saturating_mul(16)),
         // mode, then the magic, the header and the body seal around a body of the 64 KiB seed cap (ADR-052)
@@ -177,6 +179,23 @@ fn m6_entries() -> [(&'static str, usize); 4] {
         // FZ-03: `RelayRef.onion`, PUBKEY 32 ‖ CHECKSUM 2 ‖ VERSION 1 (spec §5.3)
         ("relayref_onion_to_hsid", sum(&[32, 2, 1])),
     ]
+}
+
+/// FZ-05 (M7 FZ): the largest CONTROL row that decodes is a `RouteUpdate` (tag 1) of one route of an unknown kind with a
+/// full blob; a marker row is 25 bytes, an overlap row 68 and a `KeyChange` row 1 + 5390. The input is the mode, the tag
+/// and the body.
+fn control_entry() -> Result<(&'static str, usize), Error> {
+    let control = RouteUpdateBody {
+        routes: vec![RouteDescriptor::Unknown {
+            kind: 2,
+            blob: Zeroizing::new(vec![0; MAX_MSG_BYTES]),
+        }],
+    }
+    .encode()?
+    .len();
+    assert!(sum(&[1, KEYCHANGE_BODY_LEN]) < control && 68 < control);
+    assert_eq!(control, 65_540);
+    Ok(("client_control_rows", sum(&[1, 1, control])))
 }
 
 #[test]

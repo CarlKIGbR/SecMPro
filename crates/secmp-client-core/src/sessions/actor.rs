@@ -333,6 +333,37 @@ pub fn overlap_of(row: &[u8]) -> Result<Option<OverlapRoute>, SourceError> {
     }))
 }
 
+/// Q251, Q255 (M7 FZ, Q272): what a row of a session's CONTROL part is at an open — a `KeyChange`'s marker (tag 4), an old
+/// send queue's overlap (tag 5) or a control content (tags 1–3).
+pub enum ControlRow {
+    /// The marker of the `KeyChange` at `key_change` on the physical send queue `sid` ([`marker_of`]).
+    Marker {
+        /// The `ord` of the `KeyChange`'s row.
+        key_change: i64,
+        /// The queue's sender id.
+        sid: Id,
+    },
+    /// An old send queue's overlap ([`overlap_of`]).
+    Overlap(OverlapRoute),
+    /// A control content ([`PendingControl::decode`]).
+    Pending(PendingControl),
+}
+
+/// Q251, Q255 (M7 FZ, Q272): the class of a CONTROL row as an open reads it — a marker, else an overlap, else a content;
+/// the three decoders accept disjoint tags. Strict like each of them.
+///
+/// # Errors
+/// [`SourceError`] for a row that none of them decodes, or that the one for its tag refuses.
+pub fn control_row_of(row: &[u8]) -> Result<ControlRow, SourceError> {
+    if let Some((key_change, sid)) = marker_of(row)? {
+        return Ok(ControlRow::Marker { key_change, sid });
+    }
+    if let Some(route) = overlap_of(row)? {
+        return Ok(ControlRow::Overlap(route));
+    }
+    PendingControl::decode(row).map(ControlRow::Pending)
+}
+
 /// Q252: an old send queue's overlap and its row.
 struct Overlap {
     route: OverlapRoute,

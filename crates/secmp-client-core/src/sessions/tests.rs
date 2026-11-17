@@ -3692,6 +3692,73 @@ fn marker_codec_is_strict() {
     }
 }
 
+/// SE-166 (Q272, M7 FZ; Q251, Q255): `control_row_of`, the class `open_conversation` gives every CONTROL row, is the class
+/// of the decoder of the row's tag with that decoder's payload — a marker (tag 4) with its `ord` and `sid`, an overlap
+/// (tag 5) with its route, a content (tags 1–3) — and an error for every row that decoder refuses and for every other tag
+/// (0, 6, 255, the empty row). Runs without `kat`.
+#[test]
+fn control_row_of_classifies_like_the_open() -> Result<(), &'static str> {
+    use crate::sessions::actor::{
+        ControlRow, OverlapRoute, PendingControl, control_row_of, marker_row,
+    };
+    use secmp_proto::wire::cell::ControlCode;
+
+    let marker = marker_row(5, &[7; 16]);
+    assert!(
+        matches!(control_row_of(&marker), Ok(ControlRow::Marker { key_change, sid }) if key_change == 5 && sid == [7; 16]),
+        "a marker with its ord and sid"
+    );
+    let route = OverlapRoute {
+        sid: [3; 16],
+        seed: secmp_crypto::SecretBytes::from_slice(&[4; 32]).map_err(|_| "seed")?,
+        period: secmp_proto::wire::Period::S80,
+        until_ms: 9,
+        newest: 8,
+        unknown: true,
+    };
+    let overlap = route.row();
+    assert!(
+        matches!(control_row_of(&overlap), Ok(ControlRow::Overlap(r)) if r.row().as_slice() == overlap.as_slice()),
+        "an overlap with its route"
+    );
+    let control = PendingControl::Control(ControlCode::SessionResetRequest)
+        .encode()
+        .map_err(|_| "encode")?;
+    assert!(
+        matches!(
+            control_row_of(&control),
+            Ok(ControlRow::Pending(PendingControl::Control(
+                ControlCode::SessionResetRequest
+            )))
+        ),
+        "a content"
+    );
+    let mut short_marker = marker.clone();
+    short_marker.pop();
+    let negative = marker_row(-1, &[7; 16]);
+    let mut long_overlap = overlap.to_vec();
+    long_overlap.push(0);
+    let mut flag = overlap.to_vec();
+    if let Some(f) = flag.last_mut() {
+        *f = 2;
+    }
+    let refused: [(&str, &[u8]); 9] = [
+        ("marker of 24 bytes", &short_marker),
+        ("negative ord", &negative),
+        ("overlap of 69 bytes", &long_overlap),
+        ("flag 2", &flag),
+        ("a Control with an argument", &[2, 2, 0, 1, 9]),
+        ("tag 0", &[0, 1, 0, 0]),
+        ("tag 6", &[6; 68]),
+        ("tag 255", &[255]),
+        ("the empty row", &[]),
+    ];
+    for (case, row) in refused {
+        assert!(control_row_of(row).is_err(), "{case}");
+    }
+    Ok(())
+}
+
 /// SE-96 (Q248, Q249; D-B73, D-B74): a `KeyChange` sent on B (`sid` 1) and, after a switch, on C (`sid` 9). A restart
 /// registered on C reads both markers back: B's copy was not counted away, so its marker holds the `KeyChange` for good —
 /// the re-read copy on C leaving its window releases nothing, both markers stay. Once B's `OK_SEND` of id 132 has counted
@@ -4487,6 +4554,82 @@ fn undecodable_overlap_row_fails_the_open() -> R {
         let h = open_conversation(&store, ContactId(1), Fixed(entropy(781)), T0)?;
         assert_eq!(h.overlaps_read().map_err(|_| "read")?.len(), 1);
         drop(g);
+        Ok(())
+    })
+}
+
+/// SE-167 (Q251, Q255, Q272; verification R1 of M7 FZ, hand mutant V16): a CONTROL row that `control_row_of` refuses
+/// and that is neither a marker (tag 4) nor an overlap (tag 5) — a content of tag 1, 2 or 3 that does not decode, a row of
+/// another tag, the empty row — fails the open like a marker or an overlap that does not decode (SE-98, SE-112); it is
+/// never skipped. Without it the conversation opens.
+#[cfg(feature = "kat")]
+#[test]
+fn undecodable_content_row_fails_the_open() -> R {
+    big(|| {
+        let World { host, h, g, .. } = established("q251-content-bad", 961)?;
+        drop(h);
+        let store = host.profile.store();
+        let bad: [(&str, &[u8]); 8] = [
+            ("a RouteUpdate of no route", &[1, 0]),
+            ("a Control with an argument", &[2, 2, 0, 1, 9]),
+            ("a Control of code 3", &[2, 3, 0, 0]),
+            ("a KeyChange of 3 bytes", &[3, 1, 0, 0]),
+            ("tag 0", &[0, 1, 0, 0]),
+            ("tag 6", &[6; 68]),
+            ("tag 255", &[255]),
+            ("the empty row", &[]),
+        ];
+        for (case, row) in bad {
+            let ord = store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::insert_pending_control(tx, 1, row))?;
+            assert!(
+                matches!(
+                    open_conversation(&store, ContactId(1), Fixed(entropy(962)), T0),
+                    Err(crate::api::Error::Unavailable)
+                ),
+                "Q251: {case}"
+            );
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::delete_pending_control(tx, 1, ord))?;
+        }
+        let h = open_conversation(&store, ContactId(1), Fixed(entropy(963)), T0)?;
+        assert!(!h.key_change_in_flight());
+        drop(g);
+        Ok(())
+    })
+}
+
+/// SE-168 (Q210 b, c, Q251, Q272; verification R2 of M7 FZ, hand mutant W6): a reset's durable `Control{2}`, read back at
+/// the open as a content, is planned with its code — the peer gets a `SessionResetRequest`, not a `ContactRemoved` (SE-31
+/// restarts a removal's `Control{1}` only).
+#[cfg(feature = "kat")]
+#[test]
+fn restored_control_keeps_its_code() -> R {
+    use crate::api::{Core, Request};
+
+    big(|| {
+        let World { host, h, mut g, .. } = world("q251-reset", 964)?;
+        drop(h);
+        let mut core =
+            Core::with_profile(host.profile.clone(), host.clock.clone(), core_sources(965))?;
+        core.handle(Request::ResetSession {
+            contact: ContactId(1),
+        })?;
+        drop(core);
+        let store = host.profile.store();
+        assert_eq!(control_rows(&store)?, 1, "durable with the block");
+        let mut h = open_conversation(&store, ContactId(1), Fixed(entropy(966)), T0)?;
+        let c = next(&mut h, ms(5))?;
+        deliver(&mut g, &c)?;
+        assert!(
+            matches!(g.take_events().as_slice(), [SessionEvent::ResetRequested]),
+            "Q251: the code of the row"
+        );
+        assert_eq!(g.may_send_real(), Err(Refusal::Reset));
         Ok(())
     })
 }

@@ -12188,16 +12188,17 @@ mod tests {
             let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
                 3_600
             } else {
-                211
+                205
             };
             assert_eq!(nightly_seconds_for(t)?, want, "{t}");
         }
-        // M7 Phase B (FZ-04): 34 x 211 + 2 x 3600 = 14 374 <= 14 400 (Phase A: 33 x 218 + 2 x 3600 = 14 394)
+        // M7 FZ (FZ-05): 35 x 205 + 2 x 3600 = 14 375 <= 14 400 (Phase B: 34 x 211 + 2 x 3600 = 14 374; Phase A: 33 x 218
+        // + 2 x 3600 = 14 394)
         let total: u64 = expect::FUZZ_TARGETS
             .iter()
             .map(|t| nightly_seconds_for(t))
             .sum::<Result<u64>>()?;
-        assert_eq!(total, 14_374);
+        assert_eq!(total, 14_375);
         assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
         // the evidence: runs and lim per target, lim = max_len
         let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\
@@ -12546,8 +12547,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M7 Phase B: 36 targets (+ FZ-04 of M7 Phase B), 400 s each
-            14_400 / 36
+            // M7 FZ: 37 targets (+ FZ-05 `client_control_rows`), 389 s each
+            14_400 / 37
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

@@ -423,10 +423,12 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// on structured, honestly signed command scripts (`relay_executor`, FZ-07) and a relay connection on honestly
 /// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08). M7 (Phase A, TEST-SPEC-M7
 /// FZ-01, FZ-02): the backup import decoder (`backup_import`) and the record seal of a secret column
-/// (`store_record_open`); Phase B (FZ-04): the invitation queue's retention (`invitation_queue_retention`).
+/// (`store_record_open`); Phase B (FZ-04): the invitation queue's retention (`invitation_queue_retention`); M7 FZ (FZ-05,
+/// OPEN-M7-B-29 (2)): the decoders of a session's CONTROL rows (`client_control_rows`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "backup_import",
     "caead_open",
+    "client_control_rows",
     "client_pipeline_responses",
     "ed25519_verify",
     "hx_accept_raw",
@@ -471,10 +473,12 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 /// targets (TEST-SPEC-M5 FZ-07, FZ-08) are structured — their input is a command script that the harness signs,
 /// tokens and seals (`fuzz/fuzz_targets/relay_*.rs` headers), a layout no frozen suite has — so they rely on their
 /// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6). M7 Phase A: the two
-/// store targets (TEST-SPEC-M7 FZ-01, FZ-02) — no frozen store suite exists (`vectors/store.json`, OPEN-M7-38).
+/// store targets (TEST-SPEC-M7 FZ-01, FZ-02) — no frozen store suite exists (`vectors/store.json`, OPEN-M7-38). M7 FZ:
+/// the CONTROL rows (FZ-05) are a client-core layout no frozen suite has.
 #[cfg(test)]
 pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
     "backup_import",
+    "client_control_rows",
     "client_pipeline_responses",
     "invitation_queue_retention",
     "relay_executor",
@@ -566,9 +570,13 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   the largest record — `RatchetStateV1` at its maximum (38 585) bounds the fixed part — sealed (+ 72) = 39171.
 /// - `invitation_queue_retention` (FZ-04): at most 16 rounds of `n` 1 + 128 ids of 2 + `k` 1 + 8 spent indices of 1 = 266
 ///   each = 4256.
+/// - `client_control_rows` (FZ-05): mode 1 + the largest CONTROL row that decodes — tag 1 + a `RouteUpdateBody` of one
+///   route of an unknown kind with a 65535-byte blob (count 1 + 65539) — = 65542 (a marker row is 25, an overlap row
+///   68, a `KeyChange` row 5391 bytes).
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("backup_import", 65_777),
     ("caead_open", 12_618),
+    ("client_control_rows", 65_543),
     ("client_pipeline_responses", 34_702),
     ("ed25519_verify", 4_243),
     ("hx_accept_raw", 49_166),
@@ -2449,11 +2457,11 @@ mod tests {
     /// TEST-SPEC-M7 G7-15a (Q121): `FUZZ_TARGETS` += `backup_import` (FZ-01) and `store_record_open` (FZ-02), each with
     /// its `FUZZ_MAX_LEN` and a committed corpus (`fuzz/corpus/<target>/`, seeds ≤ 64 KiB, ADR-052), tracked-only (no
     /// frozen store suite), a `[[bin]]` of `fuzz/Cargo.toml`, and the store as the fuzz package's path dependency with
-    /// feature `kat`; 36 targets (FZ-04 of Phase B: `invitation_queue_retention`).
+    /// feature `kat`; 37 targets (FZ-04 of Phase B: `invitation_queue_retention`; FZ-05 of M7 FZ: `client_control_rows`).
     #[test]
     fn fuzz_targets_store() -> crate::util::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        assert_eq!(FUZZ_TARGETS.len(), 36);
+        assert_eq!(FUZZ_TARGETS.len(), 37);
         let manifest = std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?.replace("\r\n", "\n");
         assert!(
             manifest.contains(
@@ -2490,6 +2498,66 @@ mod tests {
         let mut by_name = names.clone();
         by_name.sort_unstable();
         assert_eq!(by_name, sorted, "FUZZ_MAX_LEN names every target once");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-23 (FZ-05; OPEN-M7-B-29 (2), D-B94): the CONTROL-row target is a listed, tracked-only target with
+    /// its bound, its `[[bin]]` and at least one seed of each tag (1, 2, 3, 4, 5) and of the structured mode, each within
+    /// the bound; it calls `control_row_of` (the class an open gives a row, Q272), the three decoders and their encoders of
+    /// `secmp_client_core::sessions::actor`.
+    #[test]
+    fn fuzz_target_control_rows() -> crate::util::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let target = "client_control_rows";
+        assert!(FUZZ_TARGETS.contains(&target), "{target}");
+        assert!(FUZZ_TRACKED_ONLY.contains(&target), "{target}");
+        assert_eq!(
+            FUZZ_MAX_LEN
+                .iter()
+                .find(|(t, _)| *t == target)
+                .map(|(_, n)| *n),
+            Some(65_543)
+        );
+        let manifest = lf(&std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?);
+        assert!(manifest.contains(&format!(
+            "[[bin]]\nname = \"{target}\"\npath = \"fuzz_targets/{target}.rs\"\ntest = false\ndoc = false\n"
+        )));
+        let source = lf(&std::fs::read_to_string(
+            root.join(format!("fuzz/fuzz_targets/{target}.rs")),
+        )?);
+        for name in [
+            "control_row_of(",
+            "marker_of(",
+            "overlap_of(",
+            "PendingControl::decode(",
+            "marker_row(",
+            ".row()",
+            ".encode()",
+        ] {
+            assert!(source.contains(name), "{target} calls {name}");
+        }
+        // (mode byte, row tag) of every seed: mode even = a row, odd = the structured mode
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(root.join(format!("fuzz/corpus/{target}")))? {
+            let bytes = std::fs::read(entry?.path())?;
+            assert!(
+                bytes.len() <= 65_543,
+                "{target}: a seed of {} B",
+                bytes.len()
+            );
+            match bytes.as_slice() {
+                [mode, ..] if mode % 2 == 1 => {
+                    seen.insert(None);
+                }
+                [_, tag, ..] => {
+                    seen.insert(Some(*tag));
+                }
+                _ => {}
+            }
+        }
+        for want in [None, Some(1), Some(2), Some(3), Some(4), Some(5)] {
+            assert!(seen.contains(&want), "{target}: no seed of {want:?}");
+        }
         Ok(())
     }
 

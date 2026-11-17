@@ -181,9 +181,9 @@ fn m6_entries() -> [(&'static str, usize); 4] {
     ]
 }
 
-/// FZ-05 (M7 FZ): the largest CONTROL row that decodes is a `RouteUpdate` (tag 1) of one route of an unknown kind with a
-/// full blob; a marker row is 25 bytes, an overlap row 68 and a `KeyChange` row 1 + 5390. The input is the mode, the tag
-/// and the body.
+/// FZ-05 (M7 FZ): the bound's largest CONTROL row is a `RouteUpdate` (tag 1) of one route (lists at one element, as
+/// every entry; up to 255 routes also decode, HB-9) of an unknown kind with a full blob; a marker row is 25 bytes, an
+/// overlap row 68 and a `KeyChange` row 1 + 5390. The input is the mode, the tag and the body.
 fn control_entry() -> Result<(&'static str, usize), Error> {
     let control = RouteUpdateBody {
         routes: vec![RouteDescriptor::Unknown {
@@ -200,7 +200,8 @@ fn control_entry() -> Result<(&'static str, usize), Error> {
 
 #[test]
 fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
-    // the largest `HandshakeBody`: a 64-byte name with an avatar, one route of an unknown kind with a full blob
+    // the bound's largest `HandshakeBody` (one route, as every list; up to 255 routes also decode, HB-9): a 64-byte
+    // name with an avatar, one route of an unknown kind with a full blob
     let handshake = HandshakeBody {
         profile: Profile::new(&"a".repeat(NAME_MAX), Some([0; 32]))?,
         routes: vec![RouteDescriptor::Unknown {

@@ -570,9 +570,9 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   the largest record — `RatchetStateV1` at its maximum (38 585) bounds the fixed part — sealed (+ 72) = 39171.
 /// - `invitation_queue_retention` (FZ-04): at most 16 rounds of `n` 1 + 128 ids of 2 + `k` 1 + 8 spent indices of 1 = 266
 ///   each = 4256.
-/// - `client_control_rows` (FZ-05): mode 1 + the largest CONTROL row that decodes — tag 1 + a `RouteUpdateBody` of one
-///   route of an unknown kind with a 65535-byte blob (count 1 + 65539) — = 65542 (a marker row is 25, an overlap row
-///   68, a `KeyChange` row 5391 bytes).
+/// - `client_control_rows` (FZ-05): mode 1 + the largest CONTROL row of one route (the list rule above; rows of up to
+///   255 routes also decode, HB-9) — tag 1 + a `RouteUpdateBody` of one route of an unknown kind with a 65535-byte blob
+///   (count 1 + 65539) — = 65542 (a marker row is 25, an overlap row 68, a `KeyChange` row 5391 bytes).
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("backup_import", 65_777),
     ("caead_open", 12_618),

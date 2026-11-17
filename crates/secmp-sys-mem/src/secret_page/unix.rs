@@ -225,15 +225,22 @@ pub(super) fn assert_protected(data: *mut u8, backend: Backend) {
             .find_map(|l| l.strip_prefix("VmFlags:"))
             .unwrap_or_default();
         if backend == Backend::MemfdSecret {
+            // one handle for both reads (EXT2c-8, OPEN-M7-B-20): a failed open fails the control read, so it cannot
+            // pass as the kernel's refusal of the data page
+            let mem = std::fs::File::open("/proc/self/mem");
             let control = [0x5a_u8; 32];
             let mut seen = [0_u8; 32];
-            let got = read_own_memory(std::hint::black_box(&control).as_ptr().addr(), &mut seen);
+            let got = read_own_memory(
+                &mem,
+                std::hint::black_box(&control).as_ptr().addr(),
+                &mut seen,
+            );
             assert!(
                 matches!(got, Ok(32)) && seen == control,
                 "control: /proc/self/mem must read an ordinary page: {got:?}"
             );
             let mut leaked = [0_u8; 32];
-            let got = read_own_memory(data.addr(), &mut leaked);
+            let got = read_own_memory(&mem, data.addr(), &mut leaked);
             assert!(
                 got.is_err() && leaked == [0_u8; 32],
                 "{backend:?}: /proc/self/mem read of the data page gave {got:?} (the kernel must refuse it)"
@@ -262,11 +269,16 @@ pub(super) fn assert_protected(data: *mut u8, backend: Backend) {
     }
 }
 
-/// Linux: read `buf.len()` bytes at `addr` of this process through `/proc/self/mem` (the kernel's own access path,
-/// which refuses `memfd_secret` pages).
+/// Linux: read `buf.len()` bytes at `addr` of this process through `mem`, the caller's one handle of `/proc/self/mem`
+/// (the kernel's own access path, which refuses `memfd_secret` pages); an error if the handle did not open.
 #[cfg(all(test, target_os = "linux"))]
-fn read_own_memory(addr: usize, buf: &mut [u8]) -> std::io::Result<usize> {
+fn read_own_memory(
+    mem: &std::io::Result<std::fs::File>,
+    addr: usize,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
     use std::os::unix::fs::FileExt;
     let offset = u64::try_from(addr).map_err(std::io::Error::other)?;
-    std::fs::File::open("/proc/self/mem")?.read_at(buf, offset)
+    let file = mem.as_ref().map_err(|e| std::io::Error::from(e.kind()))?;
+    file.read_at(buf, offset)
 }

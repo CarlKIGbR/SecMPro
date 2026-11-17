@@ -113,6 +113,12 @@ impl StorePersist {
         core::mem::take(&mut self.routes)
     }
 
+    /// Put routes taken by [`Self::take_routes`] and not registered back, ahead of any committed since (EXT2d-1).
+    pub fn restore_routes(&mut self, mut routes: Vec<Zeroizing<Vec<u8>>>) {
+        routes.append(&mut self.routes);
+        self.routes = routes;
+    }
+
     /// The durable state of the session, in its parts (`None` before its first commit).
     ///
     /// # Errors

@@ -39,9 +39,9 @@ use crate::sessions::rotation::{OVERLAP_MS, QueueSet};
 /// The first id of the send queues the hub numbers itself; pool and invitation queues are below it.
 pub const SEND_BASE: u32 = 0x4000_0000;
 
-/// How long a queue in send overlap carries dummies when no draw is possible: the longest the recipient keeps fetching the
-/// old queue, `U[1 h, 24 h]` (§10.6 (4)), and a minute more. The hub draws its own `U[1 h, 24 h]` (the sender stops at a
-/// time of its own, so that the recipient's last `FETCH` of the old queue finds it empty and its `QUEUE_DEL` can follow).
+/// The longest the recipient keeps fetching an old queue, `U[1 h, 24 h]` (§10.6 (4)), and a minute more. The hub draws its
+/// own `U[1 h, 24 h]` (the sender stops at a time of its own, so that the recipient's last `FETCH` of the old queue finds it
+/// empty and its `QUEUE_DEL` can follow); without a draw there is no switch (EXT2d-1).
 pub const OLD_SEND_MS: u64 = 24 * 3_600_000 + 60_000;
 
 /// B17c (Q264, OPEN-M7-B-28): the cells an old send queue carries after its anchor before its overlap may end — a
@@ -51,7 +51,7 @@ pub const OLD_SEND_MS: u64 = 24 * 3_600_000 + 60_000;
 pub const FLOOR_CELLS: u64 = 132;
 
 /// B17c (Q266): the longest send overlap from its switch: the drawn share above `U[1 h, 24 h]`'s lower bound (at most
-/// `OLD_SEND_MS − 1 h`, the fallback) and the capped floor term [`FLOOR_TERM_CAP_MS`] together stop here, and a restart
+/// `OLD_SEND_MS − 1 h`) and the capped floor term [`FLOOR_TERM_CAP_MS`] together stop here, and a restart
 /// registers no stored end further away (the clock went back). Two days and a minute: past the recipient's longest window
 /// (24 h) its `QUEUE_DEL` can follow, and the `ERR_NOQUEUE` that answers a `SEND` then is the loss proof (Q241).
 pub const MAX_SEND_OVERLAP_MS: u64 = 48 * 3_600_000 + 60_000;
@@ -438,14 +438,20 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// queue was registered from is a re-sent `RouteUpdate` and registers nothing (Q222); so is a route to a physical
     /// queue (relay, `sid`) that is registered already, current or in send overlap — a stale `RouteUpdate` (A → B → A),
     /// which must not give that queue a second sender (spec §10.2, Q236); so is a route to a new queue while the contact
-    /// holds [`MAX_SEND_OVERLAPS`] old send queues in overlap (Q268).
-    fn register_route(&mut self, contact: ContactId, at: usize, bytes: &[u8]) -> Result<(), Error> {
+    /// holds [`MAX_SEND_OVERLAPS`] old send queues in overlap (Q268). `false`: the switch's draw failed and nothing changed
+    /// (EXT2d-1), the route waits for the next pump.
+    fn register_route(
+        &mut self,
+        contact: ContactId,
+        at: usize,
+        bytes: &[u8],
+    ) -> Result<bool, Error> {
         let body = RouteUpdateBody::decode(bytes)?;
         let Some((descriptor, route)) = body.routes.iter().find_map(|r| match r {
             RouteDescriptor::RelayQueue(q) => Some((r, q)),
             RouteDescriptor::Unknown { .. } => None,
         }) else {
-            return Ok(());
+            return Ok(true);
         };
         let encoded = secmp_proto::Encode::encode(descriptor)?;
         if self
@@ -453,20 +459,30 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             .get(&contact.0)
             .is_some_and(|stored| bool::from(stored.as_slice().ct_eq(encoded.as_slice())))
         {
-            return Ok(());
+            return Ok(true);
         }
         let target = (self.config.relay, route.sid);
         if self.send_targets.values().any(|t| *t == target) {
             // the stored routes follow the live registration, so a restart registers the current queue (Q236, D-B71)
-            return self.store_current_route(contact);
+            return self.store_current_route(contact).map(|()| true);
         }
         // CAP (Q268): a switch would put one more old queue into overlap — at the cap the route is not registered, before
         // any registration, draw, seal or row write; the contact keeps its queue and the stored routes follow it (as Q236)
         if self.send_ids.contains_key(&contact.0)
             && self.overlaps_held(contact) >= MAX_SEND_OVERLAPS
         {
-            return self.store_current_route(contact);
+            return self.store_current_route(contact).map(|()| true);
         }
+        // EXT2d-1: the old queue's end is drawn before anything changes; without randomness no switch (no schedule is made
+        // without it, as `sessions/rotation.rs`): nothing registered, drawn, sealed or written
+        let overlap = if self.send_ids.contains_key(&contact.0) {
+            let Ok(drawn) = self.rng.uniform(OVERLAP_MS.0, OVERLAP_MS.1) else {
+                return Ok(false);
+            };
+            Some(drawn)
+        } else {
+            None
+        };
         let queue = self.alloc_send();
         let period_ms = u64::from(route.period_s.seconds()).saturating_mul(1_000);
         self.actions.push(Action::AddSend {
@@ -495,12 +511,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 None => conversation.set_send_queue(queue),
             }
         }
-        if let Some(old) = previous {
+        if let (Some(old), Some(overlap)) = (previous, overlap) {
             self.previous_sends.insert(contact.0, old);
-            let overlap = self
-                .rng
-                .uniform(OVERLAP_MS.0, OVERLAP_MS.1)
-                .unwrap_or(OLD_SEND_MS);
             let mono = self.core.clock.mono_ms();
             // B17c: the floor counts from the switch, shifted by the draw above its lower bound (the next tick applies it)
             self.retiring_sends.push(Retiring {
@@ -522,7 +534,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 conversation.keep_overlap(old, r.sid, seed, r.period_s, end);
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Write the route `contact`'s send queue was registered from back to its stored routes, so that a restart registers
@@ -707,7 +719,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// rotation retired (Q164, Q208).
     ///
     /// # Errors
-    /// [`Error::Unavailable`] if the store cannot be read or written.
+    /// [`Error::Unavailable`] if the store cannot be read or written, or a switch has no randomness (EXT2d-1: its route
+    /// and the contact's later ones are taken again, in order, by the next pump).
     pub fn pump(&mut self) -> Result<(), Error> {
         self.core.pump()?;
         for done in core::mem::take(&mut self.core.rotated) {
@@ -733,8 +746,18 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 continue;
             }
             let contact = ContactId(id);
-            for bytes in &routes {
-                self.register_route(contact, at, bytes)?;
+            let mut routes = routes.into_iter();
+            while let Some(bytes) = routes.next() {
+                if !self.register_route(contact, at, &bytes)? {
+                    // EXT2d-1: this route and the later ones go back ahead of any committed since; the store keeps the
+                    // route sent to now
+                    let rest = core::iter::once(bytes).chain(routes).collect();
+                    if let Some(conversation) = self.core.convs.get_mut(at) {
+                        conversation.persist_mut().restore_routes(rest);
+                    }
+                    self.store_current_route(contact)?;
+                    return Err(Error::Unavailable);
+                }
             }
             // the store ends on the route the contact sends to, whatever the order of the updates was (Q242, D-B71)
             self.store_current_route(contact)?;
@@ -3144,8 +3167,8 @@ mod tests {
     /// SE-141 (Q264, Q266; re-dictated by B17c R1 M-2): `FLOOR_CELLS` = `QUEUE_CAPACITY` + the in-flight depth + 2 = 132;
     /// the longest overlap is two days and a minute, above `OLD_SEND_MS`; only the term `132 · I` is capped, at 25 h =
     /// `MAX_SEND_OVERLAP_MS − (OLD_SEND_MS − 1 h)`: `from + blur + min(132 · I, 25 h)` one interval below and above the
-    /// term's cap, for an unknown interval and on an overflow; the fallback draw at the term's cap is the longest overlap,
-    /// a larger share is cut there.
+    /// term's cap, for an unknown interval and on an overflow; the share `OLD_SEND_MS − 1 h` (no draw reaches it since
+    /// EXT2d-1 withdrew the fallback) at the term's cap is the longest overlap, a larger share is cut there.
     #[test]
     fn floor_end_is_capped() {
         use super::{
@@ -3162,9 +3185,9 @@ mod tests {
         assert_eq!(MAX_SEND_OVERLAP_MS, 48 * 3_600_000 + 60_000);
         assert_eq!(FLOOR_TERM_CAP_MS, 25 * 3_600_000);
         const { assert!(MAX_SEND_OVERLAP_MS > OLD_SEND_MS) };
-        let fallback = OLD_SEND_MS.saturating_sub(OVERLAP_MS.0);
+        let longest = OLD_SEND_MS.saturating_sub(OVERLAP_MS.0);
         assert_eq!(
-            FLOOR_TERM_CAP_MS.saturating_add(fallback),
+            FLOOR_TERM_CAP_MS.saturating_add(longest),
             MAX_SEND_OVERLAP_MS
         );
         let (max, cap) = (MAX_SEND_OVERLAP_MS, FLOOR_TERM_CAP_MS);
@@ -3182,9 +3205,13 @@ mod tests {
         );
         assert_eq!(floor_end(7, 11, None), cap.saturating_add(18));
         assert_eq!(floor_end(0, 0, Some(u64::MAX)), cap);
-        assert_eq!(floor_end(0, fallback, Some(u64::MAX)), max, "the fallback");
         assert_eq!(
-            floor_end(0, fallback.saturating_add(1), Some(u64::MAX)),
+            floor_end(0, longest, Some(u64::MAX)),
+            max,
+            "the longest share"
+        );
+        assert_eq!(
+            floor_end(0, longest.saturating_add(1), Some(u64::MAX)),
             max,
             "a larger share is cut"
         );
@@ -5811,6 +5838,102 @@ mod tests {
                 &look(&mut over)?,
                 &look(&mut capped)?,
             );
+            Ok(())
+        })
+    }
+
+    /// SE-179 (EXT2d-1, ADR-060 Amendment (RNG)): a switch whose overlap draw fails changes nothing — `pump` fails, no
+    /// action, no overlap row, no id, the hub still sends to B and the store still names B.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn failed_overlap_draw_changes_nothing() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("se179", 601)?;
+            let hub = &sc.invitee;
+            let (targets, ids, next, retiring, rows) = (
+                hub.send_targets.clone(),
+                hub.send_ids.clone(),
+                hub.next_send,
+                hub.retiring_sends.len(),
+                overlaps_of(hub, contact)?,
+            );
+            sc.invitee.rng = TimingRng::failing();
+            send_route(&mut sc, 7, ms(40))?;
+            assert!(matches!(sc.invitee.pump(), Err(Error::Unavailable)));
+            assert!(sc.invitee.take_actions().is_empty(), "no action");
+            let hub = &sc.invitee;
+            assert_eq!(overlaps_of(hub, contact)?, rows, "no overlap row");
+            assert_eq!(
+                stored_sid(hub, contact)?,
+                Some([4; 16]),
+                "the store names B"
+            );
+            assert_eq!(hub.send_targets, targets, "the send targets");
+            assert_eq!(hub.send_ids, ids, "B is sent to");
+            assert_eq!(hub.next_send, next, "no id consumed");
+            assert_eq!(hub.retiring_sends.len(), retiring, "no overlap");
+            Ok(())
+        })
+    }
+
+    /// SE-180 (EXT2d-1): the route kept by a failed draw is registered by the next pump once randomness is back; B's end
+    /// in overlap is a drawn `U[1 h, 24 h]` (not switch + `OLD_SEND_MS`), in the hub and in its row, and differs by seed.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn route_is_followed_once_the_draw_works_again() -> R {
+        big(|| {
+            let mut ends = Vec::new();
+            for (label, seed) in [("se180a", 601_u64), ("se180b", 611)] {
+                let (mut sc, _guest, contact) = on_b(label, seed)?;
+                let before: Vec<QueueId> =
+                    sc.invitee.retiring_sends.iter().map(|r| r.queue).collect();
+                let (_, b) = sc.invitee.sends_of(contact).ok_or("sends")?;
+                sc.invitee.rng = TimingRng::failing();
+                send_route(&mut sc, 7, ms(40))?;
+                assert!(matches!(sc.invitee.pump(), Err(Error::Unavailable)));
+                sc.invitee.rng = TimingRng::seeded(seed);
+                sc.invitee.pump()?;
+                assert_eq!(sids(&mut sc.invitee), [[7_u8; 16]], "{label}: C registered");
+                assert_eq!(
+                    stored_sid(&sc.invitee, contact)?,
+                    Some([7; 16]),
+                    "{label}: the store names C"
+                );
+                let (mono, now) = (sc.invitee.core.clock.mono_ms(), sc.invitee.core.now_ms());
+                let r = sc
+                    .invitee
+                    .retiring_sends
+                    .iter()
+                    .find(|r| !before.contains(&r.queue))
+                    .ok_or("no new overlap")?;
+                assert_eq!(r.queue, b, "{label}: B in overlap");
+                assert_eq!(
+                    sc.invitee.sends_of(contact).map(|s| s.0),
+                    Some(b),
+                    "{label}: B before C"
+                );
+                let off = r.until.saturating_sub(mono);
+                assert!(
+                    (OVERLAP_MS.0..=OVERLAP_MS.1).contains(&off),
+                    "{label}: inside U[1 h, 24 h]"
+                );
+                assert_ne!(off, OLD_SEND_MS, "{label}: not the constant");
+                assert_eq!(
+                    r.floor.map(|a| a.blur),
+                    Some(off.saturating_sub(OVERLAP_MS.0))
+                );
+                let row = overlaps_of(&sc.invitee, contact)?
+                    .into_iter()
+                    .find(|r| r.0 == [4; 16])
+                    .ok_or("no row of B")?;
+                assert_eq!(
+                    row.2.saturating_sub(now),
+                    off,
+                    "{label}: the row's end is the drawn one"
+                );
+                ends.push(off);
+            }
+            assert_ne!(ends.first(), ends.get(1), "two seeds, two ends");
             Ok(())
         })
     }

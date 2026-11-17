@@ -25,6 +25,8 @@ enum Source {
     Os,
     #[cfg(any(test, feature = "kat"))]
     Seeded(u64),
+    #[cfg(test)]
+    Failing,
 }
 
 /// The timing randomness (see the module documentation).
@@ -76,6 +78,16 @@ impl TimingRng {
         }
     }
 
+    /// A generator whose every draw fails (tests only, EXT2d-1: the switch refused without randomness).
+    #[cfg(test)]
+    #[must_use]
+    pub const fn failing() -> Self {
+        Self {
+            source: Source::Failing,
+            draws: 0,
+        }
+    }
+
     /// A second generator for a separate purpose (the control operations): seeded from this one's next 64 bits, so the two
     /// streams do not move each other. The fork is not a uniform draw and is not counted.
     ///
@@ -90,6 +102,8 @@ impl TimingRng {
             }
             #[cfg(any(test, feature = "kat"))]
             Source::Seeded(_) => Self::seeded(seed ^ 0xa5a5_a5a5_5a5a_5a5a),
+            #[cfg(test)]
+            Source::Failing => Self::failing(),
         })
     }
 
@@ -113,6 +127,8 @@ impl TimingRng {
                 z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
                 Ok(z ^ (z >> 31))
             }
+            #[cfg(test)]
+            Source::Failing => Err(Unavailable),
         }
     }
 

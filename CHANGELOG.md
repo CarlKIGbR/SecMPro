@@ -98,6 +98,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- M7 REST (Q279, ADR-062): the OS-level test of `SecretPage` reads `/proc/self/mem` through one handle for its control read and its negative read, so a failed open can no longer pass as the kernel's refusal of a `memfd_secret` page (EXT2c-8, OPEN-M7-B-20 in part); the comments of the fuzz bounds of `client_control_rows` and `proto_cell` call them a policy bound (one route per list), not the largest input that decodes (HB-9); the remaining M7 residuals without an invariant violation (OPEN-M7-B-18, the rest of OPEN-M7-B-20, OPEN-M7-B-21, OPEN-M7-B-23) are hardening-backlog rows HB-10 to HB-13.
+- Process (ADR-062, owner 2026-11-17): M8–M10 are a build phase — per unit the existing suite and gates stay green (mutation testing weekly or on demand, ADR-047 Amendment 14), new code carries the tests of its acceptance criteria and gets one cross-review by another model; the deeper verification moves to a hardening phase before M12, and residuals without an invariant violation are tracked in `docs/HARDENING-BACKLOG.md`, a release gate.
 - xtask: `vet-closure` follows only normal dependency edges on each target (ADR-036); `clippy` lints all features;
   `cargo audit` ignores are ADR-backed entries in `expect.rs`; the cooldown check covers `fuzz/Cargo.lock`; Miri
   interprets `aarch64-unknown-linux-gnu` (libcrux's x86 CPU detection uses inline assembly); policy checks have

@@ -174,6 +174,14 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
         "RUSTSEC-2026-0459",
         "ADR-051 Am. 8: libsqlite3-sys 0.37.0 (CVE-2026-119375, WAL short read) — bundled-sqlcipher builds are not reached by the patched range (sqlcipher-src 419.0.6 = SQLite 3.53.4); SQLCipher page HMAC rejects a planted frame; removed in the first milestone after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0",
     ),
+    (
+        "RUSTSEC-2026-0542",
+        "ADR-051 Am. 10: humantime 2.4.0 — unmaintained (chronotope/chrono#1768), no patched version; pulled only via arti-client 0.46.0 (directly and through humantime-serde 1.1.1 from tor-config, tor-circmgr and other tor-* 0.46.0) ← secmp-transport, client closure only (not secmp-relay, secmp-cli, secmp-ui, secmp-crypto, secmp-proto); no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Arti drops humantime, whichever is first",
+    ),
+    (
+        "RUSTSEC-2026-0543",
+        "ADR-051 Am. 10: chrono 0.4.45 — unmaintained (chronotope/chrono#1768), no patched version; lock-only as an optional dependency of serde_with 3.24.0 (via Arti), never compiled (cargo tree -i prints nothing; cargo deny does not report it); no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Arti's serde_with drops chrono from the lock, whichever is first",
+    ),
 ];
 
 /// TEST-SPEC-M7 ST-02 (CS-3.1, ADR-055 item 4, Q119): the oldest SQLCipher the store accepts — the version
@@ -2498,7 +2506,8 @@ mod tests {
 
     /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
     /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves. M7 adds Am. 8 (Q217):
-    /// RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0, bundled SQLCipher not reached by the patched range).
+    /// RUSTSEC-2026-0459 (`libsqlite3-sys` 0.37.0, bundled SQLCipher not reached by the patched range); Am. 10 (Q277):
+    /// RUSTSEC-2026-0542 (`humantime`) and RUSTSEC-2026-0543 (`chrono`), unmaintained, no patched version.
     #[test]
     fn audit_ignores_unchanged() {
         let ids: Vec<&str> = AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
@@ -2511,6 +2520,8 @@ mod tests {
                 "RUSTSEC-2025-0141",
                 "RUSTSEC-2026-0387",
                 "RUSTSEC-2026-0459",
+                "RUSTSEC-2026-0542",
+                "RUSTSEC-2026-0543",
             ]
         );
         let bigint = AUDIT_IGNORES
@@ -2535,6 +2546,33 @@ mod tests {
         assert!(
             sqlite.contains("after Arti's rusqlite pulls a SQLCipher on SQLite >= 3.54.0"),
             "{sqlite}"
-        );
+        ); // ADR-051 Am. 10 (Q277): the two unmaintained crates of 2026-09-14, each id alone (no class ignore), each with
+        // its path and its removal condition
+        for (id, head, path) in [
+            (
+                "RUSTSEC-2026-0542",
+                "ADR-051 Am. 10: humantime 2.4.0",
+                "← secmp-transport, client closure only",
+            ),
+            (
+                "RUSTSEC-2026-0543",
+                "ADR-051 Am. 10: chrono 0.4.45",
+                "optional dependency of serde_with 3.24.0",
+            ),
+        ] {
+            let why = AUDIT_IGNORES
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, why)| *why)
+                .unwrap_or_default();
+            assert!(why.starts_with(head), "{why}");
+            assert!(why.contains(path), "{why}");
+            assert!(why.contains("unmaintained"), "{why}");
+            assert!(why.contains("no known vulnerability"), "{why}");
+            assert!(
+                why.contains("re-evaluate at the pre-release hardening phase (ADR-062)"),
+                "{why}"
+            );
+        }
     }
 }

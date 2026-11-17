@@ -1683,6 +1683,15 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 - **D-ADV1 (lock edit).** The lockfiles were edited with the dictated `sed` (rustix version + checksum) instead of `cargo update -p rustix --precise 1.1.6`, which also re-points seven `windows-sys` edges (Q229); `cargo metadata/tree --locked` and `cargo check --workspace --locked --all-targets` accept the edit without rewriting it; `cargo vet certify` ran with `--locked` (without it, cargo-vet refreshes `imports.lock`).
 - **ci-fast.** `598a948` (`ci-fast-adv1-598a948.txt`): 13/13 steps PASS, `exit 0`; commits `598a948` fix(deps), `432f43a` evidence (VERIFY-DELTA-ADV1 A1-01, folded in by M7-MEM1).
 
+## ADV2 (WEISUNG M7-ADV2; RUSTSEC-2026-0542, RUSTSEC-2026-0543; Q277, ADR-051 Amendment 10; modell=claude-sonnet-5-5)
+
+- **Red.** CAP's ci-fast 1 on `de62a20` (2026-11-17, fresh advisory database): `deny` FAIL on RUSTSEC-2026-0542 (`humantime` 2.4.0, unmaintained); `audit` FAIL, "2 denied warnings": RUSTSEC-2026-0543 (`chrono` 0.4.45) and RUSTSEC-2026-0542; every other step passed. The record stays as `docs/reviews/M07-evidence/ci-fast-cap-1-red-de62a20.txt` (committed with CAP's docs).
+- **Advisories.** Both `informational = "unmaintained"`, 2026-09-14, `patched = []`, no vulnerability named; the locked versions are the newest on crates.io, so no bump exists (ADR-051 Am. 10).
+- **Paths.** `humantime`: `arti-client` 0.46.0 (directly and via `humantime-serde` 1.1.1 from `tor-*`) ← `secmp-transport` ← `secmp-client-core`; compiled in the client only (not relay, cli, ui; not the `secmp-crypto`/`secmp-proto` closure). `chrono`: lock-only, optional dependency of `serde_with` 3.24.0, never compiled.
+- **Change.** `deny.toml` +1 (0542); `xtask/src/expect.rs` `AUDIT_IGNORES` +2 and `audit_ignores_unchanged` (eight ids; path, class, "no known vulnerability" and removal condition of both new entries pinned); `xtask/src/policy.rs` `AUDIT_IGNORES_NOT_IN_DENY` +1 (0543). No lock, `Cargo.toml` or `supply-chain/` change.
+- **Gates.** `cargo xtask step --strict deny`, `--strict audit`, `--strict vet`, `--strict policy`: PASS; `cargo nextest run -p xtask`: all passed (324 at `eb2d5cb`, no test added). ci-fast runs in CAP's continuation on this commit.
+- **Removal.** At the pre-release hardening phase (ADR-062) or when Arti drops the crate, whichever is first.
+
 ## B-4f3 (WEISUNG M7-B-4f3; Q230, Q231; modell=claude-sonnet-5-5)
 
 * START `432f43a`; commits: `c9ac6a5` fix(core) (Q230, SE-53, V-04/V-05/V-02 docs), `3ed68d0` docs, `88caecb` ci-fast evidence; VEC1 (`da9bd6d`, `ed453c2`, `9777151`) and ADV1 (`598a948`, `432f43a`) were present, `sessions/`, `hub.rs`, `api.rs` unchanged since `f51d603`.

@@ -2385,10 +2385,13 @@ mod tests {
     /// RUSTSEC-2025-0141 (ADR-051 Am. 1): lock-only, never compiled (cargo tree -i prints nothing).
     /// RUSTSEC-2026-0387 (ADR-051 Am. 6): crypto-bigint 0.5.5 is lock-only via arti's `ssh-key-fork-arti` → `p256` →
     /// `elliptic-curve` (cargo tree -i prints nothing); `cargo deny check advisories` does not report it.
+    /// RUSTSEC-2026-0543 (ADR-051 Am. 10): chrono 0.4.45 is lock-only as an optional dependency of `serde_with`
+    /// (cargo tree -i prints nothing); `cargo deny check advisories` does not report it.
     const AUDIT_IGNORES_NOT_IN_DENY: &[&str] = &[
         "RUSTSEC-2026-0173",
         "RUSTSEC-2025-0141",
         "RUSTSEC-2026-0387",
+        "RUSTSEC-2026-0543",
     ];
 
     #[test]

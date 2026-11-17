@@ -62,12 +62,22 @@ pub const MAX_SEND_OVERLAP_MS: u64 = 48 * 3_600_000 + 60_000;
 /// closed).
 pub const FLOOR_TERM_CAP_MS: u64 = 25 * 3_600_000;
 
+/// CAP (Q268, OPEN-M7-B-29 (1)): the most old send queues one contact holds in send overlap — switched in this process or
+/// registered again at a restart. A `RouteUpdate` to a new physical queue that would make one more is not registered: the
+/// contact keeps its queue (Q236 skip), nothing is drawn or sealed, only the current route is written back, nothing is
+/// remembered; a later `RouteUpdate` (or the same one sent again) registers once one of its old queues has ended. A peer
+/// that follows `docs/03` sends at most 4 within the longest overlap (Q269); 6 leaves a margin of 2. It bounds the
+/// contact's send queues to 7 and its overlap rows to 6, so a hostile contact adds at most 7 to the n of every floor.
+pub const MAX_SEND_OVERLAPS: usize = 6;
+
 /// B17c (Q264): an old send queue in overlap. Its end is `max(drawn end, from + blur + min(FLOOR_CELLS · I, cap))`, I the
 /// longest interval between two cells of the queue in the current mode with the send queues on its link now
 /// ([`cell_interval_ms`]); the end only grows, and a longer one is used only after its row is durable (Q265).
 struct Retiring {
     /// The queue.
     queue: QueueId,
+    /// CAP (Q268): the contact it was switched away from; its old queues count toward [`MAX_SEND_OVERLAPS`].
+    contact: i64,
     /// The monotonic time the hub drops it (the row keeps it as Unix ms).
     until: u64,
     /// The floor's anchor: the switch of this process. `None` for a queue a restart registered again (Q267, option (a)):
@@ -364,7 +374,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// [`MAX_SEND_OVERLAP_MS`] away (the longest overlap a switch writes, B17c, Q266), and exactly until that end (Q267: no
     /// floor, no row rewritten): an end that passed while the client was down (or the clock went forward), or one
     /// further away than any (the clock went back), registers nothing, the row goes and a `KeyChange` marker of that
-    /// queue keeps holding (fail closed); and only a physical queue not registered already (spec §10.2, Q236). The set of
+    /// queue keeps holding (fail closed); and only a physical queue not registered already (spec §10.2, Q236), and at most
+    /// [`MAX_SEND_OVERLAPS`] per contact, in `ord` order (Q270). The set of
     /// send queues therefore does not depend on whether a `KeyChange` exists (spec §10.1): every switch writes its row.
     fn resume_overlaps(&mut self, contact: ContactId, at: usize) -> Result<(), Error> {
         let read = match self.core.convs.get(at) {
@@ -393,6 +404,11 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             if self.send_targets.values().any(|known| *known == target) {
                 continue;
             }
+            // CAP (Q270): no more than the cap again — a row beyond it (a replayed or an older store) is not registered: it
+            // goes at the next preparation and a marker of its `sid` keeps holding (fail closed); the open never fails on it
+            if self.overlaps_held(contact) >= MAX_SEND_OVERLAPS {
+                continue;
+            }
             let queue = self.alloc_send();
             self.actions.push(Action::AddSend {
                 queue,
@@ -407,6 +423,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             // B17c (Q267): exactly the stored end — no floor, no row rewritten at a restart
             self.retiring_sends.push(Retiring {
                 queue,
+                contact: contact.0,
                 until: mono.saturating_add(left),
                 floor: None,
             });
@@ -420,7 +437,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// The send queue of the first route of a kind this version knows; a route byte-equal to the one the current send
     /// queue was registered from is a re-sent `RouteUpdate` and registers nothing (Q222); so is a route to a physical
     /// queue (relay, `sid`) that is registered already, current or in send overlap — a stale `RouteUpdate` (A → B → A),
-    /// which must not give that queue a second sender (spec §10.2, Q236).
+    /// which must not give that queue a second sender (spec §10.2, Q236); so is a route to a new queue while the contact
+    /// holds [`MAX_SEND_OVERLAPS`] old send queues in overlap (Q268).
     fn register_route(&mut self, contact: ContactId, at: usize, bytes: &[u8]) -> Result<(), Error> {
         let body = RouteUpdateBody::decode(bytes)?;
         let Some((descriptor, route)) = body.routes.iter().find_map(|r| match r {
@@ -440,6 +458,13 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         let target = (self.config.relay, route.sid);
         if self.send_targets.values().any(|t| *t == target) {
             // the stored routes follow the live registration, so a restart registers the current queue (Q236, D-B71)
+            return self.store_current_route(contact);
+        }
+        // CAP (Q268): a switch would put one more old queue into overlap — at the cap the route is not registered, before
+        // any registration, draw, seal or row write; the contact keeps its queue and the stored routes follow it (as Q236)
+        if self.send_ids.contains_key(&contact.0)
+            && self.overlaps_held(contact) >= MAX_SEND_OVERLAPS
+        {
             return self.store_current_route(contact);
         }
         let queue = self.alloc_send();
@@ -480,6 +505,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             // B17c: the floor counts from the switch, shifted by the draw above its lower bound (the next tick applies it)
             self.retiring_sends.push(Retiring {
                 queue: old,
+                contact: contact.0,
                 until: mono.saturating_add(overlap),
                 floor: Some(Anchor {
                     from: mono,
@@ -513,6 +539,14 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &routes))?;
         }
         Ok(())
+    }
+
+    /// CAP (Q268): how many old send queues `contact` holds in send overlap now.
+    fn overlaps_held(&self, contact: ContactId) -> usize {
+        self.retiring_sends
+            .iter()
+            .filter(|r| r.contact == contact.0)
+            .count()
     }
 
     /// Issue an invitation (§5.2): the invitation queue is fetched at the configured period and the `LINK_PUT` runs at once
@@ -3392,6 +3426,7 @@ mod tests {
             let mono = hub.core.clock.mono_ms();
             hub.retiring_sends.push(Retiring {
                 queue: ghost,
+                contact: contact.0,
                 until: mono.saturating_add(1_000),
                 floor: Some(Anchor {
                     from: mono,
@@ -3773,6 +3808,2009 @@ mod tests {
                     "{sid}: exactly its end"
                 );
             }
+            Ok(())
+        })
+    }
+
+    /// CAP: the `RouteUpdate`s the receive commits of `contact` stored since the last pump, registered as the pump does
+    /// but without its closing write of the current route (so the refusal's own write is what the store shows).
+    #[cfg(feature = "kat")]
+    fn register_taken(hub: &mut Hub<ManualClock, Fixed>, contact: ContactId) -> R {
+        let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+        let routes = hub
+            .core
+            .convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .persist_mut()
+            .take_routes();
+        for bytes in &routes {
+            hub.register_route(contact, at, bytes)?;
+        }
+        Ok(())
+    }
+
+    /// CAP: `on_b`, then routes of `sid` 40, 41, … (80 s), one pump each, until the contact (the hub's only one) holds
+    /// `held` old send queues in overlap; also the next `sid`.
+    #[cfg(feature = "kat")]
+    fn filled(
+        label: &str,
+        seed: u64,
+        held: usize,
+    ) -> Result<(Scene, Fixture, ContactId, u8), crate::testutil::E> {
+        let (mut sc, guest, contact) = on_b(label, seed)?;
+        let mut sid = 40_u8;
+        for now in 40..60_u64 {
+            if sc.invitee.retiring_sends.len() >= held {
+                break;
+            }
+            send_route(&mut sc, sid, ms(now))?;
+            sc.invitee.pump()?;
+            assert_eq!(
+                sids(&mut sc.invitee),
+                [[sid; 16]],
+                "{sid} registers below the cap"
+            );
+            sid = sid.checked_add(1).ok_or("sid")?;
+        }
+        assert_eq!(sc.invitee.retiring_sends.len(), held, "the setup");
+        Ok((sc, guest, contact, sid))
+    }
+
+    /// The (queue, end) of every old send queue in overlap.
+    #[cfg(feature = "kat")]
+    fn ends_of(hub: &Hub<ManualClock, Fixed>) -> Vec<(QueueId, u64)> {
+        hub.retiring_sends
+            .iter()
+            .map(|r| (r.queue, r.until))
+            .collect()
+    }
+
+    /// SE-154 (Q268, Q270; OPEN-M7-B-29 (1)): at cap − 1 a route registers and the contact holds `MAX_SEND_OVERLAPS` old
+    /// send queues; at the cap a route to a new queue — and the next one (cap + 1), and the first sent again — registers
+    /// nothing: no action, the contact keeps its queue, every end, every overlap row and n stay, the stored route is the
+    /// current one (written back by the refusal itself). The tick at the earliest end removes that queue and starts none;
+    /// the refused route sent again then registers, as the next queue id.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_refuses_a_route_at_the_cap() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, sid) =
+                filled("cap-at", 401, MAX_SEND_OVERLAPS.saturating_sub(1))?;
+            send_route(&mut sc, sid, ms(60))?;
+            sc.invitee.pump()?;
+            assert_eq!(sids(&mut sc.invitee), [[sid; 16]], "cap − 1: registers");
+            let hub = &mut sc.invitee;
+            assert_eq!(hub.retiring_sends.len(), MAX_SEND_OVERLAPS, "at the cap");
+            hub.tick(hub.core.clock.mono_ms());
+            hub.take_actions();
+            let current = hub.sends_of(contact).ok_or("sends")?;
+            let ends = ends_of(hub);
+            let rows = overlaps_of(hub, contact)?;
+            let n = hub.send_targets.len();
+            let last = hub.next_send;
+            let (r1, r2) = (
+                sid.checked_add(1).ok_or("sid")?,
+                sid.checked_add(2).ok_or("sid")?,
+            );
+            for (refused, now) in [(r1, 61), (r2, 62), (r1, 63)] {
+                send_route(&mut sc, refused, ms(now))?;
+                let hub = &mut sc.invitee;
+                register_taken(hub, contact)?;
+                assert!(hub.take_actions().is_empty(), "{refused}: no action");
+                assert_eq!(
+                    hub.sends_of(contact),
+                    Some(current),
+                    "{refused}: the same queues"
+                );
+                assert_eq!(ends_of(hub), ends, "{refused}: every end stays");
+                assert_eq!(overlaps_of(hub, contact)?, rows, "{refused}: the rows stay");
+                assert_eq!(hub.send_targets.len(), n, "{refused}: n stays");
+                assert_eq!(
+                    stored_sid(hub, contact)?,
+                    Some([sid; 16]),
+                    "{refused}: the stored route is the current one"
+                );
+            }
+            let hub = &mut sc.invitee;
+            let (first, end) = ends.iter().copied().min_by_key(|e| e.1).ok_or("an end")?;
+            hub.tick(end);
+            let actions = hub.take_actions();
+            assert_eq!(
+                actions
+                    .iter()
+                    .filter(|a| matches!(a, Action::Remove { .. }))
+                    .count(),
+                1,
+                "one queue ends"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::Remove { queue } if *queue == first)),
+                "the earliest"
+            );
+            assert_eq!(added_send(&actions), None, "nothing starts at the end");
+            send_route(&mut sc, r1, ms(64))?;
+            sc.invitee.pump()?;
+            assert_eq!(
+                add_sends(&mut sc.invitee),
+                vec![(
+                    QueueId(SEND_BASE.saturating_add(last.saturating_add(1))),
+                    [r1; 16]
+                )],
+                "sent again below the cap: registers as the next queue"
+            );
+            assert_eq!(sc.invitee.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            Ok(())
+        })
+    }
+
+    /// SE-155 (Q268; criterion 6): the cap is per contact. A second contact (conversation 1) beside the first: the first
+    /// registers `MAX_SEND_OVERLAPS` routes and is then refused; the second still registers, and the first stays refused.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_is_per_contact() -> R {
+        big(|| {
+            let (mut sc, guest, first) = on_b("cap-two", 403)?;
+            // the first contact's overlaps end, so the second scene's steps see only their own queues (as SE-152)
+            sc.invitee.tick(ms(200_000));
+            let mut sc2 = scene(party("cap-two-h2", 411)?, &guest)?;
+            core::mem::swap(&mut sc2.invitee, &mut sc.invitee);
+            sc2.invitee.take_actions();
+            step_invite(&mut sc2)?;
+            step_accept(&mut sc2)?;
+            step_handshake(&mut sc2)?;
+            step_reply(&mut sc2)?;
+            let second = sc2.contact;
+            let hub = &mut sc2.invitee;
+            hub.take_actions();
+            let at1 = *hub.core.index.get(&first.0).ok_or("first")?;
+            let at2 = *hub.core.index.get(&second.0).ok_or("second")?;
+            assert_eq!((at1, at2), (0, 1), "two conversations");
+            let mut sid = 70_u8;
+            for _ in 0..MAX_SEND_OVERLAPS {
+                hub.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+                assert_eq!(sids(hub), [[sid; 16]], "first: {sid} below its cap");
+                sid = sid.checked_add(1).ok_or("sid")?;
+            }
+            hub.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), Vec::<Id>::new(), "first: at its cap");
+            let other = sid.checked_add(1).ok_or("sid")?;
+            hub.register_route(second, at2, &route_body(other, Period::S80)?)?;
+            assert_eq!(sids(hub), [[other; 16]], "second: registers");
+            hub.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), Vec::<Id>::new(), "first: still at its cap");
+            Ok(())
+        })
+    }
+
+    /// The overlap row of `sid` (20 s) ending `ahead` ms after `now`, written into `contact`'s store as at a switch.
+    #[cfg(feature = "kat")]
+    fn put_overlap(guest: &Fixture, contact: ContactId, sid: u8, until: u64) -> R {
+        let row = crate::sessions::actor::OverlapRoute {
+            sid: [sid; 16],
+            seed: SecretBytes::from_slice(&[sid; 32])?,
+            period: Period::S20,
+            until_ms: until,
+            newest: 0,
+            unknown: false,
+        }
+        .row();
+        guest
+            .profile
+            .store()
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &row))?;
+        Ok(())
+    }
+
+    /// SE-156 (Q270; criterion 5, D-B85/D-B79 class): a store with more overlap rows than the cap (`on_b`'s and
+    /// `MAX_SEND_OVERLAPS` more, every end ahead): the open succeeds, registers B and the first `MAX_SEND_OVERLAPS` rows in
+    /// `ord` order, and the rows beyond the cap go at the first preparation.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_registers_at_most_the_cap() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("cap-excess", 407)?;
+            let before: Vec<Id> = overlaps_of(&sc.invitee, contact)?
+                .iter()
+                .map(|r| r.0)
+                .collect();
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            let mut rows = before.clone();
+            for i in 0..u8::try_from(MAX_SEND_OVERLAPS).map_err(|_| "cap")? {
+                let sid = 50_u8.saturating_add(i);
+                put_overlap(
+                    &guest,
+                    contact,
+                    sid,
+                    now.saturating_add(10_000).saturating_add(u64::from(i)),
+                )?;
+                rows.push([sid; 16]);
+            }
+            assert!(rows.len() > MAX_SEND_OVERLAPS, "more rows than the cap");
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 911)?;
+            let added: Vec<Id> = add_sends(&mut again).into_iter().map(|(_, s)| s).collect();
+            let kept: Vec<Id> = rows.iter().copied().take(MAX_SEND_OVERLAPS).collect();
+            let mut want = vec![[4; 16]];
+            want.extend(kept.iter().copied());
+            assert_eq!(added, want, "B and the first rows up to the cap");
+            assert_eq!(again.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            let (_, b2) = again.sends_of(contact).ok_or("sends")?;
+            on(&mut again, b2, ms(10), 1)?;
+            assert_eq!(
+                overlaps_of(&again, contact)?
+                    .iter()
+                    .map(|r| r.0)
+                    .collect::<Vec<_>>(),
+                kept,
+                "the rows beyond the cap go"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-157 (Q268, Q270): a contact at the cap restarts: its `MAX_SEND_OVERLAPS` old queues are registered again and
+    /// count — a route to a new queue then registers nothing.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_at_the_cap_refuses_a_new_route() -> R {
+        big(|| {
+            let (sc, guest, contact, sid) = filled("cap-restart", 409, MAX_SEND_OVERLAPS)?;
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 913)?;
+            assert_eq!(
+                add_sends(&mut again).len(),
+                MAX_SEND_OVERLAPS.saturating_add(1)
+            );
+            assert_eq!(again.retiring_sends.len(), MAX_SEND_OVERLAPS, "all again");
+            let at = *again.core.index.get(&contact.0).ok_or("index")?;
+            again.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert_eq!(
+                sids(&mut again),
+                Vec::<Id>::new(),
+                "at the cap after the restart"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-158 (Q268; criterion 2): the cap with a held `KeyChange` (`kc_on_b_then_c`: B's copy holds): the contact is
+    /// filled to the cap, then a route is refused — the `KeyChange` is still live, its markers and the overlap rows are
+    /// unchanged, no marker names the refused queue, and every end stays.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_keeps_a_held_key_change() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = kc_on_b_then_c("cap-kc", 415)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let mut sid = 80_u8;
+            for _ in 0..MAX_SEND_OVERLAPS {
+                if hub.retiring_sends.len() >= MAX_SEND_OVERLAPS {
+                    break;
+                }
+                hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+                sid = sid.checked_add(1).ok_or("sid")?;
+            }
+            assert_eq!(hub.retiring_sends.len(), MAX_SEND_OVERLAPS, "at the cap");
+            hub.take_actions();
+            let tags = crate::sessions::tests::control_tags(&hub.profile_store(), contact.0)?;
+            let ends = ends_of(hub);
+            assert!(kc_live(hub, contact), "held before");
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert!(hub.take_actions().is_empty(), "refused");
+            assert!(kc_live(hub, contact), "still held");
+            let after = crate::sessions::tests::control_tags(&hub.profile_store(), contact.0)?;
+            assert_eq!(after, tags, "rows and markers unchanged");
+            assert!(
+                !after.1.contains(&[sid; 16]),
+                "no marker names the refused queue"
+            );
+            assert_eq!(ends_of(hub), ends, "every end stays");
+            Ok(())
+        })
+    }
+
+    /// SE-159 (Q270; criterion 2, 5): rows beyond the cap at an open, among them B's — written after `MAX_SEND_OVERLAPS`
+    /// other rows, its copy of the `KeyChange` not counted away: B is not registered again, its row goes and its marker
+    /// stays, the `KeyChange` holds after the copy on C is counted (fail closed); the open itself succeeds.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_beyond_the_cap_holds_the_key_change() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (mut sc, guest, contact) = on_b("cap-kc-excess", 417)?;
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            for i in 0..u8::try_from(MAX_SEND_OVERLAPS).map_err(|_| "cap")? {
+                put_overlap(
+                    &guest,
+                    contact,
+                    60_u8.saturating_add(i),
+                    now.saturating_add(7_200_000),
+                )?;
+            }
+            // as `kc_on_b_then_c`: the `KeyChange` relayed on B, then the route C — B's row after the rows above
+            let hub = &mut sc.invitee;
+            let b = *hub.send_ids.get(&contact.0).ok_or("B")?;
+            assert!(matches!(
+                hub.core_mut().handle(Request::RotateIdentity)?,
+                Response::IdentityRotated(_)
+            ));
+            for i in 0..4_u64 {
+                on(hub, b, ms(60_u64.saturating_add(i)), i.saturating_add(1))?;
+            }
+            send_route(&mut sc, 7, ms(70))?;
+            let hub = &mut sc.invitee;
+            hub.pump()?;
+            let c = queue_of(&add_sends(hub), 7).ok_or("C")?;
+            for i in 0..4_u64 {
+                on(hub, c, ms(90_u64.saturating_add(i)), i.saturating_add(1))?;
+            }
+            on(hub, c, ms(100), 261)?;
+            on(hub, c, ms(101), 262)?;
+            assert!(kc_live(hub, contact), "B's copy holds before the restart");
+            let rows: Vec<Id> = overlaps_of(hub, contact)?.iter().map(|r| r.0).collect();
+            assert_eq!(rows.last(), Some(&[4; 16]), "B's row is the last");
+            assert!(rows.len() > MAX_SEND_OVERLAPS, "more rows than the cap");
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 919)?;
+            let added = add_sends(&mut again);
+            assert_eq!(queue_of(&added, 4), None, "Q270: B is beyond the cap");
+            assert_eq!(again.retiring_sends.len(), MAX_SEND_OVERLAPS, "the cap");
+            let c2 = queue_of(&added, 7).ok_or("C")?;
+            for i in 0..4_u64 {
+                on(
+                    &mut again,
+                    c2,
+                    ms(200_u64.saturating_add(i)),
+                    300_u64.saturating_add(i),
+                )?;
+            }
+            for i in 0..3_u64 {
+                on(
+                    &mut again,
+                    c2,
+                    ms(210_u64.saturating_add(i)),
+                    600_u64.saturating_add(i),
+                )?;
+            }
+            assert!(kc_live(&again, contact), "B's copy holds");
+            assert!(
+                !overlaps_of(&again, contact)?.iter().any(|r| r.0 == [4; 16]),
+                "B's row goes"
+            );
+            assert!(
+                crate::sessions::tests::control_tags(&again.profile_store(), contact.0)?
+                    .1
+                    .contains(&[4; 16]),
+                "B's marker stays"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-160 (Q268): a contact without a send queue (no current registration) is not capped — its first route adds no
+    /// old queue, so it registers even while `MAX_SEND_OVERLAPS` old queues of the contact are in overlap.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn first_route_is_not_capped() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, sid) = filled("cap-first", 421, MAX_SEND_OVERLAPS)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            hub.send_ids.remove(&contact.0);
+            hub.send_routes.remove(&contact.0);
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), [[sid; 16]], "the first route registers");
+            assert_eq!(
+                hub.retiring_sends.len(),
+                MAX_SEND_OVERLAPS,
+                "no old queue added"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-161 (Q268, Q271; criteria 4, 6): thirty routes to new queues, one every 30 minutes with a tick, at two timing
+    /// seeds (the draws decide when an old queue ends): a route registers exactly when the contact holds fewer than
+    /// `MAX_SEND_OVERLAPS` old queues — both refusals and registrations after a refusal occur; the contact never holds more, its send queues (n on the link, one contact) never
+    /// exceed `MAX_SEND_OVERLAPS + 1`; a tick beyond the longest overlap leaves the current queue alone.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_bounds_the_send_queues_at_any_draw() -> R {
+        big(|| {
+            for (label, seed) in [("cap-n-a", 5_u64), ("cap-n-b", 0x5eed_c0de_0bad_f00d)] {
+                let (mut sc, _guest, contact) = on_b(label, 423)?;
+                let hub = &mut sc.invitee;
+                hub.seed_timing_kat(seed);
+                let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+                let mut refused = 0_usize;
+                let mut late = 0_usize;
+                for i in 0..30_u8 {
+                    let held = hub.retiring_sends.len();
+                    hub.register_route(
+                        contact,
+                        at,
+                        &route_body(100_u8.saturating_add(i), Period::S80)?,
+                    )?;
+                    let added = sids(hub).len();
+                    assert_eq!(
+                        added,
+                        usize::from(held < MAX_SEND_OVERLAPS),
+                        "{label} {i}: held {held}"
+                    );
+                    if added == 0 {
+                        refused = refused.saturating_add(1);
+                    } else if refused > 0 {
+                        late = late.saturating_add(1);
+                    }
+                    assert!(
+                        hub.retiring_sends.len() <= MAX_SEND_OVERLAPS,
+                        "{label} {i}: the cap"
+                    );
+                    assert!(
+                        hub.send_targets.len() <= MAX_SEND_OVERLAPS.saturating_add(1),
+                        "{label} {i}: n"
+                    );
+                    hub.core.clock.advance_ms(1_800_000);
+                    hub.tick(hub.core.clock.mono_ms());
+                }
+                assert!(
+                    refused > 0 && late > 0,
+                    "{label}: refused {refused}, registered after a refusal {late}"
+                );
+                hub.core.clock.advance_ms(MAX_SEND_OVERLAP_MS);
+                hub.tick(hub.core.clock.mono_ms());
+                assert!(
+                    hub.retiring_sends.is_empty(),
+                    "{label}: every overlap ended"
+                );
+                assert_eq!(hub.send_targets.len(), 1, "{label}: the current queue");
+            }
+            Ok(())
+        })
+    }
+
+    /// SE-162 (Q268; criterion 1): a refused route draws nothing — after it, the next switch draws what it would have
+    /// drawn without it (the cap comes before the draw; one timing seed for both runs).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn refused_route_draws_nothing() -> R {
+        big(|| {
+            let mut blurs = Vec::new();
+            for (label, refuse) in [("cap-draw-a", false), ("cap-draw-b", true)] {
+                let (mut sc, _guest, contact) = on_b(label, 425)?;
+                let hub = &mut sc.invitee;
+                hub.seed_timing_kat(77);
+                let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+                let mut sid = 110_u8;
+                for _ in 0..MAX_SEND_OVERLAPS {
+                    if hub.retiring_sends.len() >= MAX_SEND_OVERLAPS {
+                        break;
+                    }
+                    hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+                    sid = sid.checked_add(1).ok_or("sid")?;
+                }
+                assert_eq!(
+                    hub.retiring_sends.len(),
+                    MAX_SEND_OVERLAPS,
+                    "{label}: at the cap"
+                );
+                if refuse {
+                    hub.register_route(contact, at, &route_body(140, Period::S80)?)?;
+                }
+                let end = ends_of(hub).iter().map(|e| e.1).min().ok_or("an end")?;
+                hub.tick(end.saturating_add(FLOOR_TERM_CAP_MS));
+                hub.take_actions();
+                let (_, current) = hub.sends_of(contact).ok_or("sends")?;
+                hub.register_route(contact, at, &route_body(141, Period::S80)?)?;
+                assert_eq!(sids(hub), [[141; 16]], "{label}: registers");
+                blurs.push(retiring_of(hub, current).map(|r| r.2).ok_or("blur")?);
+            }
+            assert_eq!(blurs.first(), blurs.get(1), "the same draw");
+            Ok(())
+        })
+    }
+
+    /// SE-163 (Q269): the cap leaves a margin of 2 over the rotations the specification asks of a peer within the longest
+    /// overlap: the invitation queue's retirement (`docs/03` §6.6 step 4, §10.6 (5)) or the 30-day rotation (`docs/02`
+    /// §4.3) — 30 days apart, so at most one of them — and a rotation to a larger period (§10.2) at most `|PERIODS| − 1`
+    /// times.
+    #[test]
+    fn cap_leaves_a_margin_over_the_spec() {
+        use super::{MAX_SEND_OVERLAPS, Period};
+
+        let honest = Period::ALL.len();
+        assert_eq!(honest, 4, "1 + (|PERIODS| − 1)");
+        assert_eq!(MAX_SEND_OVERLAPS, honest.saturating_add(2));
+    }
+
+    /// SE-164 (Q268, Q242, D-B107; verifier R1): the cap reached inside one pump — of two new routes the first registers
+    /// and the second meets the cap, and the store ends on the first (the queue sent to); a refused route and then a
+    /// stale one (B, in overlap: the Q236 skip) in one pump register nothing and keep the store; a crash after the
+    /// receive commit of a refused route (no pump): the restart registers that stored route as the current queue and the
+    /// six old queues again — the queue sent to before has no row and is not registered, the send queues stay seven.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_inside_one_pump_and_a_crash_after_a_refusal() -> R {
+        big(|| {
+            let (mut sc, guest, contact, sid) =
+                filled("cap-v1", 431, MAX_SEND_OVERLAPS.saturating_sub(1))?;
+            let r1 = sid;
+            let r2 = r1.checked_add(1).ok_or("sid")?;
+            let r3 = r2.checked_add(1).ok_or("sid")?;
+            let r4 = r3.checked_add(1).ok_or("sid")?;
+            send_route(&mut sc, r1, ms(60))?;
+            send_route(&mut sc, r2, ms(61))?;
+            sc.invitee.pump()?;
+            assert_eq!(
+                sids(&mut sc.invitee),
+                [[r1; 16]],
+                "the first registers, the second meets the cap"
+            );
+            assert_eq!(
+                sc.invitee.retiring_sends.len(),
+                MAX_SEND_OVERLAPS,
+                "at the cap"
+            );
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([r1; 16]),
+                "Q242: the store ends on the queue sent to"
+            );
+            let n = sc.invitee.send_targets.len();
+            assert_eq!(n, MAX_SEND_OVERLAPS.saturating_add(1), "seven send queues");
+            send_route(&mut sc, r3, ms(62))?;
+            send_route(&mut sc, 4, ms(63))?;
+            sc.invitee.pump()?;
+            assert_eq!(
+                sids(&mut sc.invitee),
+                Vec::<Id>::new(),
+                "refused, then skipped"
+            );
+            assert_eq!(sc.invitee.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            assert_eq!(sc.invitee.send_targets.len(), n, "n stays");
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([r1; 16]),
+                "the store stays"
+            );
+            send_route(&mut sc, r4, ms(64))?;
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([r4; 16]),
+                "the receive commit stored the route the cap will refuse"
+            );
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 931)?;
+            let added = sids(&mut again);
+            assert_eq!(
+                added.first(),
+                Some(&[r4; 16]),
+                "D-B107: the stored route is current"
+            );
+            assert!(
+                !added.contains(&[r1; 16]),
+                "the queue sent to before has no row"
+            );
+            assert_eq!(
+                added.len(),
+                MAX_SEND_OVERLAPS.saturating_add(1),
+                "seven again"
+            );
+            assert_eq!(again.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            Ok(())
+        })
+    }
+
+    /// SE-165 (Q268; verifier R1): at the cap the relay's `ERR_NOQUEUE` for the current queue and for an old one starts
+    /// and ends nothing and frees no slot (a lost old queue counts until its end); a route to a new queue stays refused
+    /// 1 ms before the earliest end and at that end before the tick drops it (the queue still carries cells); the tick at
+    /// that end removes exactly that queue, the route then registers, and the next one is refused again.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_holds_through_queue_loss_until_an_end() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, sid) = filled("cap-v2", 433, MAX_SEND_OVERLAPS)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            hub.tick(hub.core.clock.mono_ms());
+            hub.take_actions();
+            let (old, current) = hub.sends_of(contact).ok_or("sends")?;
+            hub.queue_lost(current);
+            hub.queue_lost(old);
+            assert!(
+                hub.take_actions().is_empty(),
+                "a loss starts and ends nothing"
+            );
+            assert_eq!(
+                hub.retiring_sends.len(),
+                MAX_SEND_OVERLAPS,
+                "a lost queue counts"
+            );
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), Vec::<Id>::new(), "refused after the loss");
+            let (first, end) = ends_of(hub)
+                .into_iter()
+                .min_by_key(|e| e.1)
+                .ok_or("an end")?;
+            hub.tick(end.saturating_sub(1));
+            assert!(hub.take_actions().is_empty(), "1 ms before: nothing ends");
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), Vec::<Id>::new(), "1 ms before: still refused");
+            let late = end.saturating_sub(hub.core.clock.mono_ms());
+            hub.core.clock.advance_ms(late);
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert_eq!(
+                sids(hub),
+                Vec::<Id>::new(),
+                "past its end but not dropped yet: still counted"
+            );
+            hub.tick(end);
+            let actions = hub.take_actions();
+            assert_eq!(
+                actions
+                    .iter()
+                    .filter(|a| matches!(a, Action::Remove { .. }))
+                    .count(),
+                1,
+                "one queue ends"
+            );
+            assert!(
+                actions
+                    .iter()
+                    .any(|a| matches!(a, Action::Remove { queue } if *queue == first)),
+                "the earliest"
+            );
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), [[sid; 16]], "a slot is free: registers");
+            assert_eq!(hub.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            let next = sid.checked_add(1).ok_or("sid")?;
+            hub.register_route(contact, at, &route_body(next, Period::S80)?)?;
+            assert_eq!(sids(hub), Vec::<Id>::new(), "at the cap again");
+            Ok(())
+        })
+    }
+
+    /// SE-171 (Q270, Q265; verifier R1): at a restart a row whose end passed takes no slot and two rows of one `sid` (a
+    /// lengthened end and the row it replaces) take one: the old queues registered are the first `MAX_SEND_OVERLAPS`
+    /// distinct `sid`s with an end ahead, in `ord` order; the next distinct one is beyond the cap and spends no queue id.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn restart_counts_each_sid_once_toward_the_cap() -> R {
+        use crate::clock::Clock as _;
+
+        big(|| {
+            let (sc, guest, contact) = on_b("cap-v3", 435)?;
+            let mut distinct: Vec<Id> = Vec::new();
+            for (s, ..) in overlaps_of(&sc.invitee, contact)? {
+                if !distinct.contains(&s) {
+                    distinct.push(s);
+                }
+            }
+            drop(sc);
+            let now = guest.clock.unix_secs().saturating_mul(1_000);
+            put_overlap(&guest, contact, 59, now.saturating_sub(1_000))?;
+            put_overlap(&guest, contact, 50, now.saturating_add(10_000))?;
+            put_overlap(&guest, contact, 50, now.saturating_add(20_000))?;
+            distinct.push([50; 16]);
+            let mut sid = 51_u8;
+            while distinct.len() <= MAX_SEND_OVERLAPS {
+                put_overlap(&guest, contact, sid, now.saturating_add(30_000))?;
+                distinct.push([sid; 16]);
+                sid = sid.checked_add(1).ok_or("sid")?;
+            }
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 935)?;
+            let mut want = vec![[4; 16]];
+            want.extend(distinct.iter().copied().take(MAX_SEND_OVERLAPS));
+            assert_eq!(
+                sids(&mut again),
+                want,
+                "B and the first distinct sids up to the cap"
+            );
+            assert_eq!(again.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            assert_eq!(
+                usize::try_from(again.next_send).map_err(|_| "id")?,
+                want.len(),
+                "a row beyond the cap spends no queue id"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-172 (Q268, Q270; criterion 6; verifier R1): two contacts, each counted alone, live and across a restart. The
+    /// first holds `MAX_SEND_OVERLAPS − 1` old queues, the second switches once: the first's next route still registers
+    /// (the other contact's old queue is not counted) and the one after it is refused. A restart registers every old
+    /// queue of both contacts again (the cap is per contact at the open too); the second then registers exactly up to its
+    /// own cap and the first is refused; the first without a current queue is not capped while the second has one.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_counts_each_contact_alone_across_a_restart() -> R {
+        big(|| {
+            let (mut sc, guest, first) = on_b("cap-v4", 437)?;
+            sc.invitee.tick(ms(200_000));
+            let mut sc2 = scene(party("cap-v4-h2", 441)?, &guest)?;
+            core::mem::swap(&mut sc2.invitee, &mut sc.invitee);
+            sc2.invitee.take_actions();
+            step_invite(&mut sc2)?;
+            step_accept(&mut sc2)?;
+            step_handshake(&mut sc2)?;
+            step_reply(&mut sc2)?;
+            let second = sc2.contact;
+            let hub = &mut sc2.invitee;
+            hub.take_actions();
+            let at1 = *hub.core.index.get(&first.0).ok_or("first")?;
+            let at2 = *hub.core.index.get(&second.0).ok_or("second")?;
+            let base = hub.retiring_sends.len();
+            let mut sid = 150_u8;
+            for _ in 1..MAX_SEND_OVERLAPS {
+                hub.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+                assert_eq!(sids(hub), [[sid; 16]], "first: {sid} below its cap");
+                sid = sid.checked_add(1).ok_or("sid")?;
+            }
+            hub.register_route(second, at2, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), [[sid; 16]], "second: switches");
+            let theirs = base.saturating_add(1);
+            assert!(
+                theirs < MAX_SEND_OVERLAPS,
+                "the setup: the second below its cap"
+            );
+            sid = sid.checked_add(1).ok_or("sid")?;
+            hub.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+            assert_eq!(
+                sids(hub),
+                [[sid; 16]],
+                "first: the second's old queue not counted"
+            );
+            sid = sid.checked_add(1).ok_or("sid")?;
+            hub.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+            assert_eq!(sids(hub), Vec::<Id>::new(), "first: at its cap");
+            // the pump's closing write (the routes above were registered without a pump)
+            hub.store_current_route(second)?;
+            drop(sc2);
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 937)?;
+            again.take_actions();
+            assert_eq!(
+                again.retiring_sends.len(),
+                MAX_SEND_OVERLAPS.saturating_add(theirs),
+                "every old queue of both contacts again"
+            );
+            let at1 = *again.core.index.get(&first.0).ok_or("first")?;
+            let at2 = *again.core.index.get(&second.0).ok_or("second")?;
+            let mut more = 0_usize;
+            for _ in 0..MAX_SEND_OVERLAPS {
+                sid = sid.checked_add(1).ok_or("sid")?;
+                again.register_route(second, at2, &route_body(sid, Period::S80)?)?;
+                if sids(&mut again).is_empty() {
+                    break;
+                }
+                more = more.saturating_add(1);
+            }
+            assert_eq!(
+                more,
+                MAX_SEND_OVERLAPS.saturating_sub(theirs),
+                "second: up to its own cap after the restart"
+            );
+            sid = sid.checked_add(1).ok_or("sid")?;
+            again.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+            assert_eq!(
+                sids(&mut again),
+                Vec::<Id>::new(),
+                "first: at its cap after the restart"
+            );
+            again.send_ids.remove(&first.0);
+            again.send_routes.remove(&first.0);
+            again.register_route(first, at1, &route_body(sid, Period::S80)?)?;
+            assert_eq!(
+                sids(&mut again),
+                [[sid; 16]],
+                "first: no current queue, not capped beside the second"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-173 (Q268, Q248; ADR-060 (2); verifier R2): a refused route touches no `KeyChange` marker — after a refusal at
+    /// the cap the contact's `KeyChange` relayed on the queue it is sent to writes its marker for that queue's `sid`, not
+    /// for the refused route's, and the refused `sid` appears in no marker or overlap row.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn refused_route_leaves_the_marker_on_the_sent_queue() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, sid) = filled("cap-v5", 443, MAX_SEND_OVERLAPS)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let current = *hub.send_ids.get(&contact.0).ok_or("current")?;
+            let sent_to = sid.checked_sub(1).ok_or("sid")?;
+            hub.take_actions();
+            hub.register_route(contact, at, &route_body(sid, Period::S80)?)?;
+            assert!(hub.take_actions().is_empty(), "refused at the cap");
+            assert!(matches!(
+                hub.core_mut().handle(Request::RotateIdentity)?,
+                Response::IdentityRotated(_)
+            ));
+            for i in 0..4_u64 {
+                on(
+                    hub,
+                    current,
+                    ms(70_u64.saturating_add(i)),
+                    i.saturating_add(1),
+                )?;
+            }
+            let (_, markers) =
+                crate::sessions::tests::control_tags(&hub.profile_store(), contact.0)?;
+            assert!(
+                markers.contains(&[sent_to; 16]),
+                "the marker names the queue sent to"
+            );
+            assert!(
+                !markers.contains(&[sid; 16]),
+                "no marker names the refused queue"
+            );
+            assert!(
+                !overlaps_of(hub, contact)?.iter().any(|r| r.0 == [sid; 16]),
+                "no overlap row names the refused queue"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-174 (Q268, Q271; verifier R2): the cap bounds send queues only — at the cap our own rotation of the contact's
+    /// receive queue (`Request::Rotate`) still registers its new receive queue, and the cap is unchanged.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_leaves_our_own_rotation_alone() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, _) = filled("cap-v6", 445, MAX_SEND_OVERLAPS)?;
+            let hub = &mut sc.invitee;
+            hub.take_actions();
+            assert!(matches!(
+                hub.core_mut()
+                    .handle(Request::Rotate { contact, relay: 1 })?,
+                Response::Rotated(true)
+            ));
+            hub.pump()?;
+            let added = hub
+                .take_actions()
+                .iter()
+                .filter(|a| matches!(a, Action::AddRecv { .. }))
+                .count();
+            assert_eq!(added, 1, "the new receive queue registers at the cap");
+            assert_eq!(hub.retiring_sends.len(), MAX_SEND_OVERLAPS, "the cap stays");
+            Ok(())
+        })
+    }
+
+    /// SE-175 (Q268; verifier R3): a refused route leaves the queue sent to as it was — a message relayed there is not
+    /// sent again, its `T_RS` and its period stay those of that queue, though the refused route names another period.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn refused_route_leaves_the_current_queue_as_it_was() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, sid) = filled("cap-v7", 447, MAX_SEND_OVERLAPS)?;
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let current = *hub.send_ids.get(&contact.0).ok_or("current")?;
+            let Response::Sent(id) = hub.core_mut().handle(Request::Send {
+                contact,
+                kind: 1,
+                payload: secmp_crypto::Zeroizing::new(b"held".to_vec()),
+                expire_after: 0,
+            })?
+            else {
+                return Err("sent".into());
+            };
+            let state = |hub: &Hub<ManualClock, Fixed>| {
+                hub.core.convs.get(at).and_then(|c| c.outbox().state(&id))
+            };
+            for i in 0..8_u64 {
+                if matches!(state(hub), Some(MsgState::Relayed(_))) {
+                    break;
+                }
+                on(
+                    hub,
+                    current,
+                    ms(70_u64.saturating_add(i)),
+                    i.saturating_add(1),
+                )?;
+            }
+            let relayed = state(hub);
+            assert!(
+                matches!(relayed, Some(MsgState::Relayed(_))),
+                "the setup: relayed on the queue sent to"
+            );
+            let t_rs = |hub: &Hub<ManualClock, Fixed>| {
+                hub.core
+                    .convs
+                    .get(at)
+                    .map(crate::sessions::actor::Conversation::receipt_timeout_ms_kat)
+            };
+            assert_eq!(
+                t_rs(hub),
+                Some(crate::sessions::actor::receipt_timeout_ms(80_000)),
+                "the setup"
+            );
+            hub.take_actions();
+            hub.register_route(contact, at, &route_body(sid, Period::S10)?)?;
+            assert!(hub.take_actions().is_empty(), "refused at the cap");
+            assert_eq!(state(hub), relayed, "the relayed message is not sent again");
+            assert_eq!(
+                t_rs(hub),
+                Some(crate::sessions::actor::receipt_timeout_ms(80_000)),
+                "T_RS of the queue sent to"
+            );
+            assert_eq!(
+                hub.send_periods.get(&current).copied(),
+                Some(80_000),
+                "the period of the queue sent to"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-176 (Q268; verifier R3): the cap counts the contact's old send queues only — however many receive queues the hub
+    /// holds (here more than the cap), a route below the cap registers.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn cap_counts_no_receive_queue() -> R {
+        big(|| {
+            let (mut sc, _guest, _, sid) = filled("cap-v8", 449, 2)?;
+            let seed = SecretBytes::from_slice(&[7; 32])?;
+            for q in 0..=MAX_SEND_OVERLAPS {
+                let q = u32::try_from(q).map_err(|_| "q")?;
+                sc.invitee.register_recv(
+                    RelayId(1),
+                    QueueId(70_000_u32.saturating_add(q)),
+                    &seed,
+                    80_000,
+                );
+            }
+            assert!(
+                sc.invitee.recv_periods.len() > MAX_SEND_OVERLAPS,
+                "the setup: more receive queues than the cap"
+            );
+            sc.invitee.take_actions();
+            send_route(&mut sc, sid, ms(70))?;
+            sc.invitee.pump()?;
+            assert_eq!(
+                sids(&mut sc.invitee),
+                [[sid; 16]],
+                "below the cap: registers"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-177 (Q268, Q271; verifier R3): at the cap our own rotation also retires the receive queue it replaces (its
+    /// `QUEUE_DEL` reaches the scheduler), and a peer's route to a new queue after it is still refused.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn our_rotation_at_the_cap_retires_the_old_receive_queue() -> R {
+        big(|| {
+            let (mut sc, _guest, contact, sid) = filled("cap-v9", 451, MAX_SEND_OVERLAPS)?;
+            let at = *sc.invitee.core.index.get(&contact.0).ok_or("index")?;
+            let old = sc
+                .invitee
+                .core
+                .convs
+                .get(at)
+                .and_then(|c| c.recv_queues_kat().0)
+                .ok_or("receive queue")?;
+            sc.invitee.take_actions();
+            assert!(matches!(
+                sc.invitee
+                    .core_mut()
+                    .handle(Request::Rotate { contact, relay: 1 })?,
+                Response::Rotated(true)
+            ));
+            sc.invitee.pump()?;
+            let actions = sc.invitee.take_actions();
+            assert_eq!(
+                queue_dels(&actions, old).len(),
+                1,
+                "the replaced receive queue is retired at the cap"
+            );
+            send_route(&mut sc, sid, ms(70))?;
+            sc.invitee.pump()?;
+            assert_eq!(
+                sids(&mut sc.invitee),
+                Vec::<Id>::new(),
+                "a route after the rotation: still refused"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-178: what `look` compares, one labelled part per line.
+    #[cfg(feature = "kat")]
+    type Parts = Vec<(String, String)>;
+
+    /// SE-178: the actions `actions` hold, written out (every field, seeds included).
+    #[cfg(feature = "kat")]
+    fn spelled(actions: &[Action]) -> Vec<String> {
+        actions
+            .iter()
+            .map(|a| match a {
+                Action::AddRecv {
+                    queue,
+                    relay,
+                    seed,
+                    period_ms,
+                } => format!(
+                    "AddRecv {queue:?} {relay:?} {:?} {period_ms}",
+                    seed.expose_secret()
+                ),
+                Action::AddSend {
+                    queue,
+                    relay,
+                    sid,
+                    seed,
+                    period_ms,
+                } => format!(
+                    "AddSend {queue:?} {relay:?} {sid:?} {:?} {period_ms}",
+                    seed.expose_secret()
+                ),
+                Action::Remove { queue } => format!("Remove {queue:?}"),
+                Action::Control(op) => format!("Control {op:?}"),
+            })
+            .collect()
+    }
+
+    /// SE-178: every row of every table of `hub`'s store as the store holds it (integers and text as they are, a blob — sealed
+    /// under a fresh nonce at every write — by its length), each table's rows sorted.
+    #[cfg(feature = "kat")]
+    fn raw_rows(hub: &Hub<ManualClock, Fixed>, out: &mut Parts) -> R {
+        let store = hub.profile_store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let conn = s.connection_kat();
+        let mut names = Vec::new();
+        {
+            let mut stmt =
+                conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?;
+            let mut rows = stmt.query(())?;
+            while let Some(row) = rows.next()? {
+                names.push(row.get::<usize, String>(0)?);
+            }
+        }
+        for name in names {
+            let mut stmt = conn.prepare(&format!("SELECT * FROM \"{name}\""))?;
+            let columns = stmt.column_count();
+            let mut lines = Vec::new();
+            let mut rows = stmt.query(())?;
+            while let Some(row) = rows.next()? {
+                let mut line = Vec::new();
+                for i in 0..columns {
+                    let cell = if let Ok(v) = row.get::<usize, Option<i64>>(i) {
+                        format!("{v:?}")
+                    } else if let Ok(v) = row.get::<usize, Option<String>>(i) {
+                        format!("{v:?}")
+                    } else {
+                        let v = row.get::<usize, Option<Vec<u8>>>(i)?;
+                        format!("blob {:?}", v.map(|b| b.len()))
+                    };
+                    line.push(cell);
+                }
+                lines.push(line.join(" "));
+            }
+            lines.sort();
+            out.push((format!("store raw {name}"), format!("{lines:?}")));
+        }
+        Ok(())
+    }
+
+    /// SE-178: the hub's and the core's fields, labelled; also the next draw of both timing streams (the same draw is then
+    /// taken in both worlds).
+    #[cfg(feature = "kat")]
+    fn look_hub(hub: &mut Hub<ManualClock, Fixed>, out: &mut Parts) {
+        let mut put = |label: &str, value: String| out.push((label.to_string(), value));
+        put("hub.registered", format!("{:?}", hub.registered));
+        put("hub.send_ids", format!("{:?}", hub.send_ids));
+        let routes: Vec<_> = hub
+            .send_routes
+            .iter()
+            .map(|(c, r)| (*c, r.to_vec()))
+            .collect();
+        put("hub.send_routes", format!("{routes:?}"));
+        let retiring: Vec<_> = hub
+            .retiring_sends
+            .iter()
+            .map(|r| {
+                let floor = r.floor.map(|a| (a.from, a.blur));
+                (r.queue, r.contact, r.until, floor)
+            })
+            .collect();
+        put("hub.retiring_sends", format!("{retiring:?}"));
+        put("hub.send_periods", format!("{:?}", hub.send_periods));
+        put("hub.send_targets", format!("{:?}", hub.send_targets));
+        put("hub.previous_sends", format!("{:?}", hub.previous_sends));
+        put("hub.next_send", format!("{}", hub.next_send));
+        put("hub.recv_periods", format!("{:?}", hub.recv_periods));
+        put("hub.inv_queues", format!("{:?}", hub.inv_queues));
+        put("hub.waiting", format!("{:?}", hub.waiting));
+        put("hub.next_expiry", format!("{:?}", hub.next_expiry));
+        put("hub.actions", format!("{:?}", spelled(&hub.actions)));
+        let (draws, next) = (hub.rng.draws(), hub.rng.uniform(0, u64::MAX - 1).ok());
+        put("hub.rng", format!("{draws} {next:?}"));
+        let core = &mut hub.core;
+        let (draws, next) = (core.rng.draws(), core.rng.uniform(0, u64::MAX - 1).ok());
+        put("core.rng", format!("{draws} {next:?}"));
+        put("core.index", format!("{:?}", core.index));
+        put("core.events", format!("{:?}", core.events));
+        put("core.settings", format!("{:?}", core.settings));
+        put("core.view", format!("{:?}", core.view));
+        put("core.ops", format!("{:?}", core.ops));
+        put("core.routes_changed", format!("{:?}", core.routes_changed));
+        put("core.rotated", format!("{}", core.rotated.len()));
+        put(
+            "core.rotation_period",
+            format!("{:?}", core.rotation_period),
+        );
+        put(
+            "core.clock",
+            format!("{} {}", core.clock.mono_ms(), core.clock.unix_secs()),
+        );
+    }
+
+    /// SE-178: what each conversation shows (every accessor the test module has), labelled by its contact.
+    #[cfg(feature = "kat")]
+    fn look_conversations(hub: &Hub<ManualClock, Fixed>, out: &mut Parts) -> R {
+        for (contact, at) in &hub.core.index {
+            let c = hub.core.convs.get(*at).ok_or("conversation")?;
+            let overlaps: Vec<_> = c
+                .overlaps_read()
+                .map_err(|_| "overlaps")?
+                .iter()
+                .map(|o| {
+                    let seed = o.seed.expose_secret().to_vec();
+                    (o.sid, seed, o.period, o.until_ms, o.newest, o.unknown)
+                })
+                .collect();
+            let received: Vec<_> = c
+                .received()
+                .iter()
+                .map(|r| format!("{:?} {:?}", r.msg_id, r.payload.to_vec()))
+                .collect();
+            out.push((
+                format!("conversation {contact}"),
+                format!(
+                    "send {:?} recv {:?} t_rs {} receipts {} kc {} successions {} overlaps {overlaps:?} durable {:?} \
+                     received {received:?} partials {} discarded {} receipts_due {} pending_real {} mapped {} digests {:?} \
+                     controls {} trust {:?} awaiting {} may_send {:?}",
+                    c.send_queues_kat(),
+                    c.recv_queues_kat(),
+                    c.receipt_timeout_ms_kat(),
+                    c.send_receipts_kat(),
+                    c.key_change_in_flight(),
+                    c.successions_pending(),
+                    c.durable(),
+                    c.partials(),
+                    c.discarded(),
+                    c.receipts_due(),
+                    c.has_pending_real(),
+                    c.mapped_cells(),
+                    c.message_key_digests_kat(),
+                    c.live_controls_test(),
+                    c.trust(),
+                    c.awaiting_first_reply(),
+                    c.may_send_real(),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// SE-178: the store opened — every contact row, and per contact its routes and queues, its session rows, its pending
+    /// controls (overlap rows and markers among them), its handshake and previous identity, its outbox, its history ids.
+    #[cfg(feature = "kat")]
+    fn look_store(hub: &Hub<ManualClock, Fixed>, out: &mut Parts) -> R {
+        let store = hub.profile_store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let mut put = |label: String, value: String| out.push((label, value));
+        for c in s.contacts()? {
+            put(
+                format!("store contact {}", c.id),
+                format!(
+                    "{:?} {:?} {} {:?} {} {:?}",
+                    c.iks, c.fingerprint, c.verified, c.display_name, c.state, c.profile
+                ),
+            );
+        }
+        for contact in hub.core.index.keys() {
+            let routes = s.contact_routes(*contact)?.map(|r| r.to_vec());
+            let queues = s.contact_queues(*contact)?.map(|r| r.to_vec());
+            put(
+                format!("store routes and queues {contact}"),
+                format!("{routes:?} {queues:?}"),
+            );
+            let session = s.session_rows(*contact)?.map(|r| {
+                let skipped: Vec<_> = r.skipped.iter().map(|(o, e)| (*o, e.to_vec())).collect();
+                let (inbox, trust) = (r.inbox.map(|v| v.to_vec()), r.trust.map(|v| v.to_vec()));
+                format!("{:?} {skipped:?} {inbox:?} {trust:?}", r.fixed.to_vec())
+            });
+            put(format!("store session {contact}"), format!("{session:?}"));
+            let controls: Vec<_> = s
+                .pending_controls(*contact)?
+                .iter()
+                .map(|(o, r)| (*o, r.to_vec()))
+                .collect();
+            put(
+                format!("store pending controls {contact}"),
+                format!("{controls:?}"),
+            );
+            let handshake = s.handshake(*contact)?.map(|v| v.to_vec());
+            let previous = s.previous_identity(*contact)?.map(|v| v.to_vec());
+            put(
+                format!("store handshake and previous identity {contact}"),
+                format!("{handshake:?} {previous:?}"),
+            );
+            let outbox: Vec<_> = s
+                .outbox_rows(*contact)?
+                .iter()
+                .map(|o| {
+                    format!(
+                        "{:?} {} {} {} {:?} {} {:?} {} {:?}",
+                        o.msg_id,
+                        o.seq,
+                        o.kind,
+                        o.expire_after,
+                        o.payload.to_vec(),
+                        o.queued_ms,
+                        o.first_relayed_ms,
+                        o.state,
+                        o.cell_id
+                    )
+                })
+                .collect();
+            put(format!("store outbox {contact}"), format!("{outbox:?}"));
+            put(
+                format!("store delivered {contact}"),
+                format!("{:?}", s.delivered_ids(*contact)?),
+            );
+        }
+        Ok(())
+    }
+
+    /// SE-178: everything of `hub` the test module reaches, labelled: `look_hub`, `look_conversations`, `look_store` and
+    /// `raw_rows`.
+    #[cfg(feature = "kat")]
+    fn look(hub: &mut Hub<ManualClock, Fixed>) -> Result<Parts, crate::testutil::E> {
+        let mut out: Parts = Vec::new();
+        look_hub(hub, &mut out);
+        look_conversations(hub, &mut out)?;
+        look_store(hub, &mut out)?;
+        raw_rows(hub, &mut out)?;
+        Ok(out)
+    }
+
+    /// SE-178: one cell prepared on every send queue the hub knows, in queue order, at `now`, each relayed as cell `id`:
+    /// what each queue sends next (the plan, the outbox, the controls, the entropy) — a digest of each cell.
+    #[cfg(feature = "kat")]
+    fn probe(hub: &mut Hub<ManualClock, Fixed>, now: u64, id: u64) -> Vec<String> {
+        use std::hash::{Hash as _, Hasher as _};
+
+        let queues: Vec<QueueId> = hub.send_targets.keys().copied().collect();
+        let mut out = Vec::new();
+        for q in queues {
+            match hub.prepare_cell(q, now) {
+                Ok(Some(p)) => {
+                    let mut h = std::hash::DefaultHasher::new();
+                    p.cell.as_bytes().hash(&mut h);
+                    out.push(format!("{q:?} {:x}", h.finish()));
+                    hub.relayed(q, p.token, id);
+                }
+                Ok(None) => out.push(format!("{q:?} none")),
+                Err(_) => out.push(format!("{q:?} error")),
+            }
+        }
+        out
+    }
+
+    /// SE-178: `a` and `b` equal part by part. The message names the step and the part that differs and nothing that
+    /// depends on the run (a signed row, written out, is as wide as the hedged signature's random bytes make it).
+    #[cfg(feature = "kat")]
+    fn same(step: &str, a: &Parts, b: &Parts) {
+        let labels = |p: &Parts| p.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>();
+        assert_eq!(labels(a), labels(b), "SE-178 {step}: the same parts");
+        for ((label, x), (_, y)) in a.iter().zip(b) {
+            assert!(x == y, "SE-178 {step}: {label} differs");
+        }
+    }
+
+    /// SE-178: the world from `seed` — two contacts, each at the cap: the first through `RouteUpdate`s, its `KeyChange`
+    /// (`RotateIdentity`) held on the old queue B (as `kc_on_b_then_c`); the second through routes registered without a
+    /// cell, its copy of the `KeyChange` planned and unmarked on its current queue; an open invitation of the guest that
+    /// expires at `T0` + 1 s; every timing stream seeded. Also the guest's fixture and the next `sid`.
+    #[cfg(feature = "kat")]
+    fn cap_world(
+        seed: u64,
+    ) -> Result<(Scene, Fixture, ContactId, ContactId, u8), crate::testutil::E> {
+        let guest = party("cap-w-g", seed.wrapping_add(2))?;
+        let mut sc = scene(party("cap-w-h", seed)?, &guest)?;
+        sc.inviter.seed_timing_kat(seed);
+        sc.invitee.seed_timing_kat(seed.wrapping_add(1));
+        step_invite(&mut sc)?;
+        step_accept(&mut sc)?;
+        step_handshake(&mut sc)?;
+        step_reply(&mut sc)?;
+        let first = sc.contact;
+        // the second contact (as SE-155), its scene's hub over the same guest swapped in
+        let mut sc2 = scene(party("cap-w-h2", seed.wrapping_add(4))?, &guest)?;
+        sc2.inviter.seed_timing_kat(seed.wrapping_add(5));
+        core::mem::swap(&mut sc2.invitee, &mut sc.invitee);
+        sc2.invitee.take_actions();
+        step_invite(&mut sc2)?;
+        step_accept(&mut sc2)?;
+        step_handshake(&mut sc2)?;
+        step_reply(&mut sc2)?;
+        let second = sc2.contact;
+        core::mem::swap(&mut sc2.invitee, &mut sc.invitee);
+        drop(sc2);
+        sc.invitee.take_actions();
+        for (n, now) in [(9_u8, 20), (4, 30)] {
+            send_route(&mut sc, n, ms(now))?;
+            sc.invitee.pump()?;
+        }
+        // the `KeyChange` held on B (as `kc_on_b_then_c`); the second contact's copy stays pending
+        let hub = &mut sc.invitee;
+        let b = *hub.send_ids.get(&first.0).ok_or("B")?;
+        assert!(matches!(
+            hub.core_mut().handle(Request::RotateIdentity)?,
+            Response::IdentityRotated(_)
+        ));
+        for i in 0..4_u64 {
+            on(hub, b, ms(60_u64.saturating_add(i)), i.saturating_add(1))?;
+        }
+        send_route(&mut sc, 7, ms(70))?;
+        let hub = &mut sc.invitee;
+        hub.pump()?;
+        let c = *hub.send_ids.get(&first.0).ok_or("C")?;
+        for i in 0..4_u64 {
+            on(hub, c, ms(90_u64.saturating_add(i)), i.saturating_add(1))?;
+        }
+        on(hub, c, ms(100), 261)?;
+        on(hub, c, ms(101), 262)?;
+        let mut sid = 40_u8;
+        for now in 110..120_u64 {
+            if sc.invitee.overlaps_held(first) >= MAX_SEND_OVERLAPS {
+                break;
+            }
+            send_route(&mut sc, sid, ms(now))?;
+            sc.invitee.pump()?;
+            sid = sid.saturating_add(1);
+        }
+        // the second contact to its own cap too, without a cell: its `KeyChange` stays planned, unmarked, on its queue
+        let hub = &mut sc.invitee;
+        let at2 = *hub.core.index.get(&second.0).ok_or("second")?;
+        for other in 20..30_u8 {
+            if hub.overlaps_held(second) >= MAX_SEND_OVERLAPS {
+                break;
+            }
+            hub.register_route(second, at2, &route_body(other, Period::S40)?)?;
+        }
+        hub.store_current_route(second)?;
+        // an open invitation that expires after the open and before the refusal (`refuse` moves the clocks past it with no
+        // tick between): only a tick retires it, never a refusal (verifier R5)
+        hub.invite(T0.saturating_add(1))?;
+        hub.take_actions();
+        assert!(kc_live(&sc.invitee, first), "the setup: the KeyChange held");
+        assert_eq!(
+            (
+                sc.invitee.overlaps_held(first),
+                sc.invitee.overlaps_held(second)
+            ),
+            (MAX_SEND_OVERLAPS, MAX_SEND_OVERLAPS),
+            "the setup: both at the cap"
+        );
+        // spare queues for the rotations after the fork (the two handshakes took the pool's)
+        crate::invitations::SparePool::new(guest.profile.store()).fill(
+            RelayId(1),
+            3,
+            &mut entropy(seed.wrapping_add(1003)),
+        )?;
+        Ok((sc, guest, first, second, sid))
+    }
+
+    /// SE-178: a copy of the closed profile directory `from` in `to`, file by file.
+    #[cfg(feature = "kat")]
+    fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> R {
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            let target = to.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                std::fs::create_dir_all(&target)?;
+                copy_dir(&entry.path(), &target)?;
+            } else {
+                std::fs::copy(entry.path(), &target)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// SE-178: the guest's hub over the profile in `dir` (as `hub_over`, randomness by `seed`), its timing streams seeded.
+    #[cfg(feature = "kat")]
+    fn hub_in(
+        dir: &std::path::Path,
+        unlocked: &secmp_store::wrap::Unlocked,
+        clock: &ManualClock,
+        seed: u64,
+    ) -> Result<Hub<ManualClock, Fixed>, crate::testutil::E> {
+        let profile = crate::profile::Profile::open_with(dir, unlocked)?;
+        let mut count = 0_u64;
+        let core = Core::with_profile(profile, clock.clone(), move || {
+            count = count.saturating_add(1);
+            Fixed(entropy(seed.saturating_add(count)))
+        })?;
+        let mut hub = Hub::new(
+            core,
+            HubConfig {
+                relay: RelayId(1),
+                inv_period: Period::S10,
+                reply_period: Period::S10,
+                profile: wire_profile("guest")?,
+            },
+        )?;
+        hub.seed_timing_kat(seed.wrapping_add(1));
+        Ok(hub)
+    }
+
+    /// SE-178: the same in both worlds after the fork — a message relayed and one queued on the first contact's current
+    /// queue; our rotation of the second pumped (its `RouteUpdate` pending beside its `KeyChange`).
+    #[cfg(feature = "kat")]
+    fn traffic(hub: &mut Hub<ManualClock, Fixed>, first: ContactId, second: ContactId) -> R {
+        for text in [&b"relayed"[..], &b"queued"[..]] {
+            let Response::Sent(id) = hub.core_mut().handle(Request::Send {
+                contact: first,
+                kind: 1,
+                payload: secmp_crypto::Zeroizing::new(text.to_vec()),
+                expire_after: 0,
+            })?
+            else {
+                return Err("sent".into());
+            };
+            if text != &b"relayed"[..] {
+                continue;
+            }
+            let current = *hub.send_ids.get(&first.0).ok_or("current")?;
+            let at = *hub.core.index.get(&first.0).ok_or("first")?;
+            for i in 0..8_u64 {
+                if matches!(
+                    hub.core.convs.get(at).and_then(|c| c.outbox().state(&id)),
+                    Some(MsgState::Relayed(_))
+                ) {
+                    break;
+                }
+                on(
+                    hub,
+                    current,
+                    ms(130_u64.saturating_add(i)),
+                    300_u64.saturating_add(i),
+                )?;
+            }
+        }
+        assert!(matches!(
+            hub.core_mut().handle(Request::Rotate {
+                contact: second,
+                relay: 1
+            })?,
+            Response::Rotated(true)
+        ));
+        hub.pump()?;
+        Ok(())
+    }
+
+    /// SE-178: the inviter's `RouteUpdate` of the relay queue `n` (10 s, a period no queue of the world has) sealed in one
+    /// cell at `now` (as `send_route`).
+    #[cfg(feature = "kat")]
+    fn route_cell(
+        inviter: &mut Hub<ManualClock, Fixed>,
+        host_send: QueueId,
+        n: u8,
+        now: u64,
+    ) -> Result<Cell, crate::testutil::E> {
+        let at = *inviter.core.index.get(&1).ok_or("host index")?;
+        let routes = RouteUpdateBody::decode(&route_body(n, Period::S10)?)?.routes;
+        inviter
+            .core
+            .convs
+            .get_mut(at)
+            .ok_or("host conversation")?
+            .queue_route_update(routes);
+        Ok(inviter
+            .prepare_cell(host_send, now)
+            .map_err(|_| "prepare")?
+            .ok_or("cell")?
+            .cell)
+    }
+
+    /// SE-178: the two worlds of the test, opened from the same bytes, with the inviter of the first contact.
+    #[cfg(feature = "kat")]
+    struct Twins {
+        /// The inviter's profile (kept open while its hub lives).
+        _host: Fixture,
+        inviter: Hub<ManualClock, Fixed>,
+        host_send: QueueId,
+        reply_queue: QueueId,
+        dirs: [secmp_store::kat::TempDir; 2],
+        clocks: [ManualClock; 2],
+        unlocked: secmp_store::wrap::Unlocked,
+        first: ContactId,
+        second: ContactId,
+        next: u8,
+    }
+
+    #[cfg(feature = "kat")]
+    impl Twins {
+        /// Both worlds' hubs opened again (a restart), by `seed`, and their open's actions compared.
+        fn open(
+            &self,
+            seed: u64,
+            step: &str,
+        ) -> Result<[Hub<ManualClock, Fixed>; 2], crate::testutil::E> {
+            let [d0, d1] = &self.dirs;
+            let [c0, c1] = &self.clocks;
+            let mut a = hub_in(d0.path(), &self.unlocked, c0, seed)?;
+            let mut b = hub_in(d1.path(), &self.unlocked, c1, seed)?;
+            assert_eq!(
+                spelled(&a.take_actions()),
+                spelled(&b.take_actions()),
+                "SE-178 {step}: actions"
+            );
+            same(step, &look(&mut a)?, &look(&mut b)?);
+            Ok([a, b])
+        }
+    }
+
+    /// SE-178: the world of `sc` and `guest` closed and its profile directory copied: the twins, not opened yet.
+    #[cfg(feature = "kat")]
+    fn fork(
+        sc: Scene,
+        guest: Fixture,
+        first: ContactId,
+        second: ContactId,
+        next: u8,
+    ) -> Result<Twins, crate::testutil::E> {
+        let Scene {
+            host,
+            inviter,
+            invitee,
+            host_send,
+            reply_queue,
+            ..
+        } = sc;
+        drop(invitee);
+        let Fixture {
+            dir,
+            unlocked,
+            profile,
+            clock,
+        } = guest;
+        drop(profile);
+        let copy = secmp_store::kat::TempDir::new("cap-fork")?;
+        copy_dir(dir.path(), copy.path())?;
+        let clock_b = ManualClock::new(T0);
+        clock_b.set_ms(clock.mono_ms());
+        Ok(Twins {
+            _host: host,
+            inviter,
+            host_send,
+            reply_queue,
+            dirs: [dir, copy],
+            clocks: [clock, clock_b],
+            unlocked,
+            first,
+            second,
+            next,
+        })
+    }
+
+    /// SE-178: `a` and `b` the same (`look`), and the next cell of every send queue the same (`probe` at `now`, ids `id`).
+    #[cfg(feature = "kat")]
+    fn alike(
+        step: &str,
+        a: &mut Hub<ManualClock, Fixed>,
+        b: &mut Hub<ManualClock, Fixed>,
+        now: u64,
+        id: u64,
+    ) -> R {
+        same(step, &look(a)?, &look(b)?);
+        assert_eq!(
+            probe(a, ms(now), id),
+            probe(b, ms(now), id),
+            "SE-178 {step}: the next cells"
+        );
+        Ok(())
+    }
+
+    /// SE-178: the refusal in A and nothing but the write-back in B — the first contact's route by a cell of the inviter
+    /// (B: the same cell, its routes taken from the hub), the second's given to the hub directly (B: none) — with the
+    /// guest's invitation expired and no tick since.
+    #[cfg(feature = "kat")]
+    fn refuse(
+        t: &mut Twins,
+        a: &mut Hub<ManualClock, Fixed>,
+        b: &mut Hub<ManualClock, Fixed>,
+    ) -> R {
+        // the guest's invitation expired (`cap_world`), no tick since: a refusal must not retire it
+        let [c0, c1] = &t.clocks;
+        c0.set_ms(1_000);
+        c1.set_ms(1_000);
+        assert!(
+            a.next_expiry
+                .is_some_and(|at| a.core.clock.unix_secs() >= at),
+            "SE-178 refusal: an invitation expired, not retired"
+        );
+        assert_eq!(a.waiting.len(), 1, "SE-178 refusal: an accept waiting");
+        let cell = route_cell(&mut t.inviter, t.host_send, t.next, ms(150))?;
+        for w in [&mut *a, &mut *b] {
+            assert_eq!(
+                w.deliver(t.reply_queue, 0, 1, &cell),
+                Ok(Delivered::Committed),
+                "the route"
+            );
+        }
+        a.pump()?;
+        let at = *b.core.index.get(&t.first.0).ok_or("index")?;
+        let taken = b
+            .core
+            .convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .persist_mut()
+            .take_routes();
+        assert_eq!(taken.len(), 1, "B: the route taken from the hub");
+        b.store_current_route(t.first)?;
+        b.pump()?;
+        let at2 = *a.core.index.get(&t.second.0).ok_or("second")?;
+        a.register_route(t.second, at2, &route_body(t.next, Period::S10)?)?;
+        a.store_current_route(t.second)?;
+        b.store_current_route(t.second)?;
+        let acts = spelled(&a.take_actions());
+        assert!(acts.is_empty(), "SE-178 refusal: no action");
+        assert_eq!(acts, spelled(&b.take_actions()), "SE-178 refusal: actions");
+        Ok(())
+    }
+
+    /// SE-178: at the cap, time passes to the earliest end of an old queue of the first contact registered at the open and
+    /// the tick drops it; then a route to a new queue registers — first the refused route sent again — in both; repeated
+    /// (verifier R5) until the first contact is at the cap with only old queues switched in this process, each with its
+    /// floor and its period (a queue registered at the open has neither), so that at the second refusal its oldest old
+    /// queue is one of them. The last `sid` used is `t.next`.
+    #[cfg(feature = "kat")]
+    fn end_and_again(
+        t: &mut Twins,
+        a: &mut Hub<ManualClock, Fixed>,
+        b: &mut Hub<ManualClock, Fixed>,
+    ) -> R {
+        for round in 0..16_u64 {
+            // the earliest end of an old queue registered at the open
+            let opened = a
+                .retiring_sends
+                .iter()
+                .filter(|r| r.contact == t.first.0 && r.floor.is_none())
+                .map(|r| r.until)
+                .min();
+            let at_cap = a.overlaps_held(t.first) >= MAX_SEND_OVERLAPS;
+            if opened.is_none() && at_cap {
+                break;
+            }
+            if let (true, Some(end)) = (at_cap, opened) {
+                let [c0, c1] = &t.clocks;
+                c0.set_ms(end);
+                c1.set_ms(end);
+                a.tick(end);
+                b.tick(end);
+                let acts = spelled(&a.take_actions());
+                assert!(!acts.is_empty(), "SE-178 end: a queue ends");
+                assert_eq!(acts, spelled(&b.take_actions()), "SE-178 end: actions");
+            }
+            if round == 0 {
+                alike("end", a, b, 170, 410)?;
+            } else {
+                t.next = t.next.checked_add(1).ok_or("sid")?;
+            }
+            let cell = route_cell(
+                &mut t.inviter,
+                t.host_send,
+                t.next,
+                ms(180_u64.saturating_add(round)),
+            )?;
+            for w in [&mut *a, &mut *b] {
+                assert_eq!(
+                    w.deliver(t.reply_queue, 0, round.saturating_add(2), &cell),
+                    Ok(Delivered::Committed),
+                    "the route again"
+                );
+                w.pump()?;
+            }
+            let acts = spelled(&a.take_actions());
+            assert_eq!(
+                acts.iter().filter(|x| x.starts_with("AddSend")).count(),
+                1,
+                "SE-178 later route: registers"
+            );
+            assert_eq!(
+                acts,
+                spelled(&b.take_actions()),
+                "SE-178 later route: actions"
+            );
+        }
+        assert!(
+            a.overlaps_held(t.first) == MAX_SEND_OVERLAPS
+                && a.retiring_sends
+                    .iter()
+                    .filter(|r| r.contact == t.first.0)
+                    .all(|r| r.floor.is_some() && a.send_periods.contains_key(&r.queue)),
+            "SE-178 later routes: at the cap, every old queue switched in this process"
+        );
+        alike("later route", a, b, 190, 420)
+    }
+
+    /// SE-178: a second refusal of the first contact, at the cap again (after the later routes) and now holding only old
+    /// queues switched in this process — each with its floor anchored at the switch and its period, which a queue registered
+    /// at the open does not have (verifier R5): the refusal in A, the same cell with nothing but the write-back in B.
+    #[cfg(feature = "kat")]
+    fn refuse_again(
+        t: &mut Twins,
+        a: &mut Hub<ManualClock, Fixed>,
+        b: &mut Hub<ManualClock, Fixed>,
+    ) -> R {
+        assert!(
+            a.retiring_sends
+                .iter()
+                .any(|r| r.contact == t.first.0 && r.floor.is_some()),
+            "SE-178 second refusal: an old queue with its floor"
+        );
+        let n = t.next.checked_add(1).ok_or("sid")?;
+        let cell = route_cell(&mut t.inviter, t.host_send, n, ms(199))?;
+        for w in [&mut *a, &mut *b] {
+            assert_eq!(
+                w.deliver(t.reply_queue, 0, 20, &cell),
+                Ok(Delivered::Committed),
+                "the second refused route"
+            );
+        }
+        a.pump()?;
+        let at = *b.core.index.get(&t.first.0).ok_or("index")?;
+        let taken = b
+            .core
+            .convs
+            .get_mut(at)
+            .ok_or("conversation")?
+            .persist_mut()
+            .take_routes();
+        assert_eq!(taken.len(), 1, "B: the second route taken from the hub");
+        b.store_current_route(t.first)?;
+        b.pump()?;
+        let acts = spelled(&a.take_actions());
+        assert!(acts.is_empty(), "SE-178 second refusal: no action");
+        assert_eq!(
+            acts,
+            spelled(&b.take_actions()),
+            "SE-178 second refusal: actions"
+        );
+        alike("second refusal", a, b, 195, 425)
+    }
+
+    /// SE-178: our rotation of the first contact at its cap, in both: its new receive queue and the replaced one's
+    /// `QUEUE_DEL`, the same actions.
+    #[cfg(feature = "kat")]
+    fn rotate_first(
+        first: ContactId,
+        a: &mut Hub<ManualClock, Fixed>,
+        b: &mut Hub<ManualClock, Fixed>,
+    ) -> R {
+        assert_eq!(
+            a.overlaps_held(first),
+            MAX_SEND_OVERLAPS,
+            "SE-178 rotation: at the cap"
+        );
+        let at1 = *a.core.index.get(&first.0).ok_or("first")?;
+        let replaced = a
+            .core
+            .convs
+            .get(at1)
+            .and_then(|c| c.recv_queues_kat().0)
+            .ok_or("receive queue")?;
+        for w in [&mut *a, &mut *b] {
+            assert!(matches!(
+                w.core_mut().handle(Request::Rotate {
+                    contact: first,
+                    relay: 1
+                })?,
+                Response::Rotated(true)
+            ));
+            w.pump()?;
+        }
+        let rotated = a.take_actions();
+        let added = rotated
+            .iter()
+            .filter(|x| matches!(x, Action::AddRecv { .. }))
+            .count();
+        assert_eq!(
+            (added, queue_dels(&rotated, replaced).len()),
+            (1, 1),
+            "SE-178 rotation: its receive queue and the replaced one's QUEUE_DEL at the cap"
+        );
+        assert_eq!(
+            spelled(&rotated),
+            spelled(&b.take_actions()),
+            "SE-178 rotation: actions"
+        );
+        alike("rotation", a, b, 200, 430)
+    }
+
+    /// SE-178, restart part: the store of one contact with `MAX_SEND_OVERLAPS` overlap rows, closed and copied, the copy
+    /// given 2 rows more; also the contact and the 2 rows' `sid`s.
+    #[cfg(feature = "kat")]
+    fn beyond_the_cap() -> Result<(Twins, ContactId, Vec<Id>), crate::testutil::E> {
+        use crate::clock::Clock as _;
+
+        let guest = party("cap-x-g", 473)?;
+        let mut sc = scene(party("cap-x-h", 471)?, &guest)?;
+        sc.inviter.seed_timing_kat(471);
+        sc.invitee.seed_timing_kat(472);
+        step_invite(&mut sc)?;
+        step_accept(&mut sc)?;
+        step_handshake(&mut sc)?;
+        step_reply(&mut sc)?;
+        let contact = sc.contact;
+        for (n, now) in [(9_u8, 20), (4, 30)] {
+            send_route(&mut sc, n, ms(now))?;
+            sc.invitee.pump()?;
+        }
+        let held = overlaps_of(&sc.invitee, contact)?.len();
+        let now = guest.clock.unix_secs().saturating_mul(1_000);
+        let row = |sid: u8| -> Result<Zeroizing<Vec<u8>>, crate::testutil::E> {
+            Ok(crate::sessions::actor::OverlapRoute {
+                sid: [sid; 16],
+                seed: SecretBytes::from_slice(&[sid; 32])?,
+                period: Period::S20,
+                until_ms: now.saturating_add(10_000).saturating_add(u64::from(sid)),
+                newest: 0,
+                unknown: false,
+            }
+            .row())
+        };
+        let mut sid = 50_u8;
+        for _ in held..MAX_SEND_OVERLAPS {
+            let r = row(sid)?;
+            guest
+                .profile
+                .store()
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &r))?;
+            sid = sid.checked_add(1).ok_or("sid")?;
+        }
+        let mut t = fork(sc, guest, contact, contact, sid)?;
+        let mut beyond = Vec::new();
+        let more = crate::profile::Profile::open_with(t.dirs[1].path(), &t.unlocked)?;
+        for _ in 0..2 {
+            let r = row(t.next)?;
+            more.store()
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::sessions::insert_pending_control(tx, contact.0, &r))?;
+            beyond.push([t.next; 16]);
+            t.next = t.next.checked_add(1).ok_or("sid")?;
+        }
+        Ok((t, contact, beyond))
+    }
+
+    /// SE-178 (Q268, Q270; verifier R4): a refusal changes nothing but the stored route. One world (`cap_world`: two
+    /// contacts, the first at the cap with its `KeyChange` held on an old queue) is closed and its store copied — two
+    /// worlds A and B from the same bytes (the hedged signature of the `KeyChange` draws from the OS, so two builds would
+    /// differ in it) — both opened and given the same traffic (`traffic`). A receives a `RouteUpdate` to a new queue with
+    /// another period (refused at the cap) and the hub is given one for the second contact; B receives the same cell, but
+    /// its routes never reach the hub, and the second's never comes — only the current routes are written back, as the
+    /// pump's closing write. Everything the test module reaches (`look`: the hub's fields, the core's, each conversation's
+    /// observable state, the store opened and raw; `probe`: the next cell of every send queue) is equal after it and after
+    /// each later step — time to the first's earliest end and its tick, the refused route sent again (now registered) and
+    /// new routes until every old queue of the first contact was switched in this process, a second refusal (verifier R5:
+    /// now with only such old queues, each with its floor and its period), our rotation of the first contact (at the cap
+    /// again: its new receive queue and the replaced one's `QUEUE_DEL`), a restart. The first refusal comes with an
+    /// invitation of the guest expired and not yet retired (no tick since) and an accept waiting for its `LINK_GET`
+    /// (verifier R5). Restart part: a store with `MAX_SEND_OVERLAPS` + 2 overlap rows of one contact against the same store
+    /// with only the first `MAX_SEND_OVERLAPS`: the open is the same in actions and state but for the 2 rows read and not
+    /// registered (`overlaps_read`, their store rows), which the first preparation deletes; then everything is equal.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn a_refusal_changes_nothing_but_the_stored_route() -> R {
+        big(|| {
+            let (sc, guest, first, second, next) = cap_world(461)?;
+            let mut twins = fork(sc, guest, first, second, next)?;
+            let [mut a, mut b] = twins.open(463, "open")?;
+            // an invitation the guest is accepting, its `LINK_GET` not back (memory only): a refusal must not forget it
+            let uri = twins.inviter.invite(T0.saturating_add(DAY))?.uri;
+            a.begin_accept(&uri)?;
+            b.begin_accept(&uri)?;
+            traffic(&mut a, twins.first, twins.second)?;
+            traffic(&mut b, twins.first, twins.second)?;
+            assert_eq!(
+                spelled(&a.take_actions()),
+                spelled(&b.take_actions()),
+                "SE-178 setup: actions"
+            );
+            same("setup", &look(&mut a)?, &look(&mut b)?);
+            refuse(&mut twins, &mut a, &mut b)?;
+            alike("refusal", &mut a, &mut b, 160, 400)?;
+            end_and_again(&mut twins, &mut a, &mut b)?;
+            refuse_again(&mut twins, &mut a, &mut b)?;
+            rotate_first(twins.first, &mut a, &mut b)?;
+            drop((a, b));
+            let [mut a, mut b] = twins.open(465, "restart")?;
+            assert_eq!(
+                probe(&mut a, ms(210), 440),
+                probe(&mut b, ms(210), 440),
+                "SE-178 restart: the next cells"
+            );
+            drop((a, b, twins));
+            // the restart part: the cap + 2 overlap rows of one contact against the cap only
+            let (twins, contact, beyond) = beyond_the_cap()?;
+            let [d0, d1] = &twins.dirs;
+            let [c0, c1] = &twins.clocks;
+            let mut capped = hub_in(d0.path(), &twins.unlocked, c0, 475)?;
+            let mut over = hub_in(d1.path(), &twins.unlocked, c1, 475)?;
+            assert_eq!(
+                spelled(&over.take_actions()),
+                spelled(&capped.take_actions()),
+                "SE-178 open beyond the cap: actions"
+            );
+            // before the first preparation the 2 rows beyond the cap are read and not registered: their only trace
+            let traces = [
+                format!("conversation {}", contact.0),
+                format!("store pending controls {}", contact.0),
+                "store raw sessions".to_string(),
+            ];
+            let rest = |p: Parts| {
+                p.into_iter()
+                    .filter(|(l, _)| !traces.contains(l))
+                    .collect::<Parts>()
+            };
+            same(
+                "open beyond the cap",
+                &rest(look(&mut over)?),
+                &rest(look(&mut capped)?),
+            );
+            let read = |h: &Hub<ManualClock, Fixed>| {
+                h.core
+                    .convs
+                    .get(0)
+                    .and_then(|x| x.overlaps_read().ok())
+                    .map(|v| v.iter().map(|o| o.sid).collect::<Vec<_>>())
+            };
+            assert_eq!(
+                (read(&over), read(&capped)),
+                (Some(beyond), Some(Vec::new())),
+                "SE-178 open beyond the cap: the 2 rows read, not registered"
+            );
+            let (_, current) = over.sends_of(contact).ok_or("sends")?;
+            on(&mut over, current, ms(10), 1)?;
+            on(&mut capped, current, ms(10), 1)?;
+            assert_eq!(
+                spelled(&over.take_actions()),
+                spelled(&capped.take_actions()),
+                "SE-178 first preparation beyond the cap: actions"
+            );
+            same(
+                "first preparation beyond the cap",
+                &look(&mut over)?,
+                &look(&mut capped)?,
+            );
             Ok(())
         })
     }

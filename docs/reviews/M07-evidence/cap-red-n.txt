@@ -1,0 +1,86 @@
+head eb2d5cb7ae1c5288addf74bb7eb15913a0a72b8d
+diff --git a/crates/secmp-client-core/src/hub.rs b/crates/secmp-client-core/src/hub.rs
+index 18b517c..772a412 100644
+--- a/crates/secmp-client-core/src/hub.rs
++++ b/crates/secmp-client-core/src/hub.rs
+@@ -406,7 +406,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
+             }
+             // CAP (Q270): no more than the cap again — a row beyond it (a replayed or an older store) is not registered: it
+             // goes at the next preparation and a marker of its `sid` keeps holding (fail closed); the open never fails on it
+-            if self.overlaps_held(contact) >= MAX_SEND_OVERLAPS {
++            if self.retiring_sends.len() >= MAX_SEND_OVERLAPS {
+                 continue;
+             }
+             let queue = self.alloc_send();
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.65s
+────────────
+ Nextest run ID 28558613-8cad-42f2-aab1-c42ef30b2df2 with nextest profile: default
+    Starting 22 tests across 1 binary (305 tests skipped)
+        PASS [   0.021s] ( 1/22) secmp-client-core hub::tests::cap_leaves_a_margin_over_the_spec
+        PASS [   2.145s] ( 2/22) secmp-client-core hub::tests::floor_waits_for_its_row
+        PASS [   2.276s] ( 3/22) secmp-client-core hub::tests::first_route_is_not_capped
+        PASS [   2.323s] ( 4/22) secmp-client-core hub::tests::cap_keeps_a_held_key_change
+        PASS [   2.335s] ( 5/22) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+        PASS [   2.393s] ( 6/22) secmp-client-core hub::tests::cap_counts_no_receive_queue
+        PASS [   2.402s] ( 7/22) secmp-client-core hub::tests::cap_holds_through_queue_loss_until_an_end
+        PASS [   2.419s] ( 8/22) secmp-client-core hub::tests::restart_at_the_cap_refuses_a_new_route
+        PASS [   2.426s] ( 9/22) secmp-client-core hub::tests::restart_registers_at_most_the_cap
+        PASS [   2.431s] (10/22) secmp-client-core hub::tests::cap_leaves_our_own_rotation_alone
+        PASS [   2.449s] (11/22) secmp-client-core hub::tests::our_rotation_at_the_cap_retires_the_old_receive_queue
+        PASS [   2.471s] (12/22) secmp-client-core hub::tests::cap_inside_one_pump_and_a_crash_after_a_refusal
+        PASS [   2.494s] (13/22) secmp-client-core hub::tests::refused_route_leaves_the_marker_on_the_sent_queue
+        PASS [   2.519s] (14/22) secmp-client-core hub::tests::restart_counts_each_sid_once_toward_the_cap
+        PASS [   2.646s] (15/22) secmp-client-core hub::tests::refused_route_leaves_the_current_queue_as_it_was
+        PASS [   2.774s] (16/22) secmp-client-core hub::tests::cap_refuses_a_route_at_the_cap
+        PASS [   2.796s] (17/22) secmp-client-core hub::tests::restart_beyond_the_cap_holds_the_key_change
+        PASS [   3.831s] (18/22) secmp-client-core hub::tests::cap_is_per_contact
+        FAIL [   4.135s] (19/22) secmp-client-core hub::tests::cap_counts_each_contact_alone_across_a_restart
+  stdout ───
+
+    running 1 test
+    test hub::tests::cap_counts_each_contact_alone_across_a_restart ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::cap_counts_each_contact_alone_across_a_restart
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 326 filtered out; finished in 4.13s
+
+  stderr ───
+
+    thread '<unnamed>' (469847) panicked at crates/secmp-client-core/src/hub.rs:4587:13:
+    assertion `left == right` failed: every old queue of both contacts again
+      left: 6
+     right: 7
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   4.426s] (20/22) secmp-client-core hub::tests::refused_route_draws_nothing
+        PASS [   4.758s] (21/22) secmp-client-core hub::tests::cap_bounds_the_send_queues_at_any_draw
+        FAIL [   5.275s] (22/22) secmp-client-core hub::tests::a_refusal_changes_nothing_but_the_stored_route
+  stdout ───
+
+    running 1 test
+    test hub::tests::a_refusal_changes_nothing_but_the_stored_route ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::a_refusal_changes_nothing_but_the_stored_route
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 326 filtered out; finished in 5.27s
+
+  stderr ───
+
+    thread '<unnamed>' (469838) panicked at crates/secmp-client-core/src/hub.rs:5482:9:
+    SE-178 refusal: no action
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+────────────
+     Summary [   5.276s] 22 tests run: 20 passed, 2 failed, 305 skipped
+        FAIL [   4.135s] (19/22) secmp-client-core hub::tests::cap_counts_each_contact_alone_across_a_restart
+        FAIL [   5.275s] (22/22) secmp-client-core hub::tests::a_refusal_changes_nothing_but_the_stored_route
+error: test run failed

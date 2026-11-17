@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx, proverif-link, kani, fuzz); windows = the Windows gate; ct = the constant-time gate alone; ks-hour = the 2 h real-time KS run (AI-07); tor-smoke = the cold Arti bootstrap over real Tor (MR-07); all = every job except those two)"
+        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx, proverif-link, kani, fuzz); windows = the Windows gate; ct = the constant-time gate alone; mutants = the mutation shards and their merge alone (ADR-047 Amendment 14); ks-hour = the 2 h real-time KS run (AI-07); tor-smoke = the cold Arti bootstrap over real Tor (MR-07); all = every job except those two)"
         type: choice
-        options: [all, fast, full, windows, ct, ks-hour, tor-smoke]
+        options: [all, fast, full, windows, ct, mutants, ks-hour, tor-smoke]
         default: ct
 
 permissions:
@@ -270,7 +270,7 @@ jobs:
 
   # Step 8 as in ci.yml (ADR-047 Amendment 1, Amendment 11): 24 shards, then the verdict over them.
   dispatch-mutants-shard:
-    if: inputs.suite == 'all' || inputs.suite == 'full'
+    if: inputs.suite == 'all' || inputs.suite == 'full' || inputs.suite == 'mutants'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
@@ -339,7 +339,7 @@ jobs:
 
   dispatch-mutants:
     needs: dispatch-mutants-shard
-    if: always() && (inputs.suite == 'all' || inputs.suite == 'full')
+    if: always() && (inputs.suite == 'all' || inputs.suite == 'full' || inputs.suite == 'mutants')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

@@ -2008,22 +2008,28 @@ pub(crate) const PINNED_JOB_NEEDS: &[(&str, &[&str])] = &[
     ("ci-verdict", CI_VERDICT_NEEDS),
 ];
 
-/// The jobs `ci-verdict` needs (ADR-045 Amendment 2): every other pinned job, so that a skipped, cancelled or failed gate —
-/// the `mutants` merge included — is a failure of the one aggregate check (GitHub counts a skipped job as passing).
+/// The jobs `ci-verdict` needs (ADR-045 Amendment 2): every other pinned job but [`WEEKLY_JOBS`], so that a skipped,
+/// cancelled or failed gate is a failure of the one aggregate check (GitHub counts a skipped job as passing).
 pub(crate) const CI_VERDICT_NEEDS: &[&str] = &[
     "linux-fast",
     "windows-native",
     "xwin-cross",
     "linux-full",
     "ct",
-    "mutants-shard",
-    "mutants",
     "proverif-hx",
     "proverif-link",
     "kani",
     "fuzz",
     "harness",
 ];
+
+/// ADR-047 Amendment 14 (owner directive 2026-11-17): the pinned jobs of mutation testing, which run only in the weekly
+/// scheduled run of `ci.yml` ([`WEEKLY_CRON`]) and on demand (`ci-dispatch.yml`, suite `mutants`), never on a pull
+/// request, and which `ci-verdict` does not need. A full run with no undocumented survivor is a release gate (alpha → release).
+pub(crate) const WEEKLY_JOBS: &[&str] = &["mutants-shard", "mutants"];
+
+/// ADR-047 Amendment 14: the cron of `ci.yml` whose scheduled run also runs [`WEEKLY_JOBS`] (`github.event.schedule`).
+pub(crate) const WEEKLY_CRON: &str = "17 2 * * 0";
 
 /// Where each `--delegated <step>` of a pinned gate line runs, as (step, pinned job) — M4 review C-5: the policy step
 /// refuses a delegation without an entry here, and an entry whose job has no pinned gate line of its own; a pinned
@@ -2098,7 +2104,9 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
 /// review F23) refuses any other condition — a condition that evaluates to false on `pull_request` would leave a
 /// `skipped` check run under a pinned name, which GitHub counts as passing. `linux-full` and its delegated jobs exclude
 /// only `push` (on `main`), by design since the M2 workflow change; the verdict job `mutants` runs after its shards
-/// whatever their outcome (`always()`); the other three required jobs run on every event.
+/// whatever their outcome (`always()`); the other three required jobs run on every event. ADR-047 Amendment 14: the
+/// mutation jobs ([`WEEKLY_JOBS`]) run only in the weekly scheduled run; their skipped check runs on a pull request gate
+/// nothing, since `ci-verdict` does not need them.
 pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ("linux-fast", None),
     ("windows-native", None),
@@ -2111,14 +2119,15 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
         "ct",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
+    // ADR-047 Amendment 14: weekly only (Sunday's cron, `WEEKLY_CRON`), never on a pull request
     (
         "mutants-shard",
-        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+        Some("github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'"),
     ),
     (
         "mutants",
         Some(
-            "always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')",
+            "always() && github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'",
         ),
     ),
     (

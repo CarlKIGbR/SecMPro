@@ -5323,6 +5323,41 @@ pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
     out
 }
 
+/// ADR-047 Amendment 14 (owner directive 2026-11-17): mutation testing is out of the pull-request path but not gone.
+/// Findings: `ci.yml` (`ci`) has no schedule line for `expect::WEEKLY_CRON` (the weekly jobs would never run), a job
+/// of `expect::WEEKLY_JOBS` whose pinned condition does not name that cron or names `pull_request`, and a weekly job in
+/// `expect::CI_VERDICT_NEEDS` (it would fail the aggregate check of every pull request as `skipped`).
+pub(crate) fn weekly_job_findings(ci: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let cron = format!("- cron: \"{}\"", expect::WEEKLY_CRON);
+    if !ci.lines().any(|l| l.trim() == cron) {
+        out.push(format!(
+            "weekly-jobs: {} has no schedule `{cron}`, so {:?} never run (ADR-047 Amendment 14)",
+            expect::REQUIRED_WORKFLOW,
+            expect::WEEKLY_JOBS
+        ));
+    }
+    for job in expect::WEEKLY_JOBS {
+        let cond = expect::REQUIRED_JOB_CONDITIONS
+            .iter()
+            .find(|(j, _)| j == job)
+            .and_then(|(_, c)| *c)
+            .unwrap_or_default();
+        let weekly = format!("github.event.schedule == '{}'", expect::WEEKLY_CRON);
+        if !cond.contains(&weekly) || cond.contains("pull_request") {
+            out.push(format!(
+                "weekly-jobs: `{job}` runs under {cond:?}, not only in the weekly scheduled run"
+            ));
+        }
+        if expect::CI_VERDICT_NEEDS.contains(job) {
+            out.push(format!(
+                "weekly-jobs: `{job}` is in expect::CI_VERDICT_NEEDS"
+            ));
+        }
+    }
+    out
+}
+
 /// `s` with every `\r\n` as `\n`: a Windows checkout may convert the workflows, the readers below are line-anchored
 /// (M4 review R-100).
 fn lf(s: &str) -> String {
@@ -5381,6 +5416,7 @@ fn workflows(root: &Path) -> Result<String> {
         text_of(".github/workflows/ci-dispatch.yml"),
         expect::MUTANT_SHARDS,
     ));
+    findings.extend(weekly_job_findings(text_of(expect::REQUIRED_WORKFLOW)));
     for f in &findings {
         say(&format!("  FINDING {f}"));
     }
@@ -7317,7 +7353,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\n  mutants:\n    needs: mutants-shard\n    if: always() && github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -7578,14 +7614,14 @@ mod tests {
             1,
         );
         assert_eq!(required_job_findings(&files(&removed)).len(), 1);
-        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`, M6 `kani`, M6-CI `fuzz`, C1 `ci-verdict`): each condition changed alone is one
+        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`, M6 `kani`, M6-CI `fuzz`, C1 `ci-verdict`; the two weekly mutation jobs, ADR-047 Amendment 14, name no `pull_request`): each condition changed alone is one
         // finding
         assert_eq!(
             required_job_findings(&files(
                 &ci.replace("|| github.event_name == 'pull_request'", "")
             ))
             .len(),
-            9
+            7
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
@@ -7857,6 +7893,57 @@ mod tests {
         });
         let found = required_job_findings(&flow);
         assert!(found.iter().any(|f| f.contains("flow style")), "{found:?}");
+    }
+
+    /// ADR-047 Amendment 14 (owner directive 2026-11-17): the mutation jobs are out of the pull-request path — they run
+    /// only under the weekly cron, which `ci.yml` schedules, and `ci-verdict` does not need them; a `ci.yml` without that
+    /// cron is a finding.
+    #[test]
+    fn mutants_run_weekly_not_on_pull_requests() {
+        let real = lf(include_str!("../../.github/workflows/ci.yml"));
+        assert_eq!(weekly_job_findings(&real), Vec::<String>::new());
+        for (job, cond) in job_conditions(&real) {
+            if expect::WEEKLY_JOBS.contains(&job.as_str()) {
+                let cond = cond.unwrap_or_default();
+                assert!(!cond.contains("pull_request"), "{job}: {cond}");
+                assert!(cond.contains(expect::WEEKLY_CRON), "{job}: {cond}");
+            }
+        }
+        let at = real.find("  ci-verdict:\n").unwrap_or(0);
+        let verdict = real.get(at..).unwrap_or_default();
+        for job in expect::WEEKLY_JOBS {
+            assert!(!verdict.contains(&format!("      - {job}\n")), "{job}");
+        }
+        let no_cron = real.replacen(&format!("    - cron: \"{}\"\n", expect::WEEKLY_CRON), "", 1);
+        let found = weekly_job_findings(&no_cron);
+        assert!(found.iter().any(|f| f.contains("never run")), "{found:?}");
+    }
+
+    /// ADR-047 Amendment 14: mutation testing stays dispatchable — `ci-dispatch.yml` offers the suite `mutants`, and its
+    /// two mutation jobs run under it (and under `full` and `all`).
+    #[test]
+    fn mutants_stay_dispatchable() {
+        let dispatch = lf(include_str!("../../.github/workflows/ci-dispatch.yml"));
+        assert!(
+            dispatch
+                .lines()
+                .any(|l| l.trim_start().starts_with("options: [") && l.contains(" mutants,")),
+            "suite `mutants` missing"
+        );
+        let conditions = job_conditions(&dispatch);
+        for job in ["dispatch-mutants-shard", "dispatch-mutants"] {
+            let cond = conditions
+                .iter()
+                .find(|(j, _)| j == job)
+                .and_then(|(_, c)| c.clone())
+                .unwrap_or_default();
+            for suite in ["mutants", "full", "all"] {
+                assert!(
+                    cond.contains(&format!("inputs.suite == '{suite}'")),
+                    "{job}: {cond}"
+                );
+            }
+        }
     }
 
     /// V-05: `ci-verdict` runs always: without the condition, with `success()`, and without `always()` in front of the events,

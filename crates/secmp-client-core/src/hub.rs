@@ -749,13 +749,12 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             let mut routes = routes.into_iter();
             while let Some(bytes) = routes.next() {
                 if !self.register_route(contact, at, &bytes)? {
-                    // EXT2d-1: this route and the later ones go back ahead of any committed since; the store keeps the
-                    // route sent to now
+                    // EXT2d-1: this route and the later ones go back ahead of any committed since; the store keeps what
+                    // the receive commit wrote, as a crash before this pump leaves it (X-1, Q278)
                     let rest = core::iter::once(bytes).chain(routes).collect();
                     if let Some(conversation) = self.core.convs.get_mut(at) {
                         conversation.persist_mut().restore_routes(rest);
                     }
-                    self.store_current_route(contact)?;
                     return Err(Error::Unavailable);
                 }
             }
@@ -1964,6 +1963,20 @@ mod tests {
     #[cfg(feature = "kat")]
     fn sids(hub: &mut Hub<ManualClock, Fixed>) -> Vec<Id> {
         add_sends(hub).into_iter().map(|(_, sid)| sid).collect()
+    }
+
+    /// The routes stored for `contact`, as the store holds them.
+    #[cfg(feature = "kat")]
+    fn stored_routes(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<Option<Zeroizing<Vec<u8>>>, crate::testutil::E> {
+        let store = hub.profile_store();
+        let bytes = store
+            .lock()
+            .map_err(|_| "lock")?
+            .contact_routes(contact.0)?;
+        Ok(bytes)
     }
 
     /// The `sid` of the first relay-queue route stored for `contact`.
@@ -5842,13 +5855,14 @@ mod tests {
         })
     }
 
-    /// SE-179 (EXT2d-1, ADR-060 Amendment (RNG)): a switch whose overlap draw fails changes nothing — `pump` fails, no
-    /// action, no overlap row, no id, the hub still sends to B and the store still names B.
+    /// SE-179 (EXT2d-1, ADR-060 Amendment (RNG); X-1, Q278): a switch whose overlap draw fails changes nothing — `pump`
+    /// fails, no action, no overlap row, no id, the hub still sends to B, and the stored routes stay byte for byte as the
+    /// receive commit wrote them (C); a restart after the refusal (the profile opened again from its files) registers C.
     #[test]
     #[cfg(feature = "kat")]
     fn failed_overlap_draw_changes_nothing() -> R {
         big(|| {
-            let (mut sc, _guest, contact) = on_b("se179", 601)?;
+            let (mut sc, guest, contact) = on_b("se179", 601)?;
             let hub = &sc.invitee;
             let (targets, ids, next, retiring, rows) = (
                 hub.send_targets.clone(),
@@ -5859,19 +5873,35 @@ mod tests {
             );
             sc.invitee.rng = TimingRng::failing();
             send_route(&mut sc, 7, ms(40))?;
+            let committed =
+                stored_routes(&sc.invitee, contact)?.ok_or("no row after the commit")?;
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([7; 16]),
+                "the receive commit stored C"
+            );
             assert!(matches!(sc.invitee.pump(), Err(Error::Unavailable)));
             assert!(sc.invitee.take_actions().is_empty(), "no action");
             let hub = &sc.invitee;
             assert_eq!(overlaps_of(hub, contact)?, rows, "no overlap row");
-            assert_eq!(
-                stored_sid(hub, contact)?,
-                Some([4; 16]),
-                "the store names B"
+            let kept = stored_routes(hub, contact)?.ok_or("no row after the refusal")?;
+            assert!(
+                bool::from(kept.as_slice().ct_eq(committed.as_slice())),
+                "the store keeps what the receive commit wrote (C), byte for byte"
             );
             assert_eq!(hub.send_targets, targets, "the send targets");
             assert_eq!(hub.send_ids, ids, "B is sent to");
             assert_eq!(hub.next_send, next, "no id consumed");
             assert_eq!(hub.retiring_sends.len(), retiring, "no overlap");
+            // a crash after the refusal: the profile opened again from its files registers C first (no draw at open)
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            assert_eq!(
+                sids(&mut again).first(),
+                Some(&[7_u8; 16]),
+                "a restart after the refusal registers C"
+            );
             Ok(())
         })
     }

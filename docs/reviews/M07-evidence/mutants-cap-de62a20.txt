@@ -1,0 +1,12 @@
+head de62a206469455586a8e2cae4e954da11f8da09c
+Found 8 mutants to test
+ok       Unmutated baseline in 107s build + 32s test
+caught   crates/secmp-client-core/src/hub.rs:381:9: replace Hub<C, S>::resume_overlaps -> Result<(), Error> with Ok(()) in 4s build + 7s test
+caught   crates/secmp-client-core/src/hub.rs:409:44: replace >= with < in Hub<C, S>::resume_overlaps in 4s build + 7s test
+caught   crates/secmp-client-core/src/hub.rs:443:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 4s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:466:13: replace && with || in Hub<C, S>::register_route in 4s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:466:44: replace >= with < in Hub<C, S>::register_route in 2s build + 6s test
+caught   crates/secmp-client-core/src/hub.rs:546:9: replace Hub<C, S>::overlaps_held -> usize with 0 in 3s build + 9s test
+caught   crates/secmp-client-core/src/hub.rs:546:9: replace Hub<C, S>::overlaps_held -> usize with 1 in 2s build + 7s test
+caught   crates/secmp-client-core/src/hub.rs:548:35: replace == with != in Hub<C, S>::overlaps_held in 3s build + 9s test
+8 mutants tested in 14m: 8 caught

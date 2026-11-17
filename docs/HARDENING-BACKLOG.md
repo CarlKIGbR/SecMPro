@@ -10,5 +10,7 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-4 | The mutation gate is out of the PR path (ADR-047 Amendment 14); the full run with zero undocumented survivors is a release-gate item. | ADR-047 Am. 14, ADR-062 (6) | Open |
 | HB-5 | SE-178 has not been stress-tested beyond the v12 seeds. | SE-178 | Open |
 | HB-6 | The milestone reviews of M8, M9 and M10 (full directorate), deferred by ADR-062 (3). Added when each milestone's short GO is recorded. | ADR-062 | Open |
+| HB-7 | While the OS randomness keeps failing, `Hub::pump` returns `Unavailable` at the first contact whose send-queue switch is refused (EXT2d-1): the routes of contacts later in index order are not processed in that pump, also those that need no draw (a first route, a Q236 skip, the cap). Fix: continue the loop and return `Unavailable` at the end. | Cross-review `37abef9..0dfdb10` X-2 | Open |
+| HB-8 | `Hub::register_contact` drops the `bool` of `register_route`, so a switch refused there would drop a route silently. No current caller reaches it (every caller registers a contact without a send registration, so no draw is made). Fix: map `false` to `Err(Unavailable)`. | Cross-review `37abef9..0dfdb10` X-3 | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

@@ -1193,6 +1193,27 @@ reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
 
 ---
 
+### ADR-062 — Build phase M8–M10 and a consolidated hardening phase before release
+
+**Status.** Accepted (Owner, 2026-11-17, in chat: authorisation to reduce testing during the coding phase, then "ja mach die ADR, meine Zustimmung hast du" to the plan below); process decision — no change to docs/03, docs/01, wire, labels, vectors or the backup format. The owner wants to test the product himself and bring in ideas; the tool must be maximally secure in the end.
+
+**Context.** M7 consumed many verification rounds, hand-mutant campaigns and red-edit catalogues per unit. The owner's goal for the coding phase is running software, quickly; the reviewer acts as project lead. The owner expects the code to be examined many times before release, so testing and verification depth move from the build units to a consolidated phase before M12.
+
+**Decision.** (1) Scope: from the M7 merge. M8 (UI), M9 (screen-capture resistance and client hardening) and M10 (relay hardening, ops) are the BUILD PHASE and are implemented back to back.
+(2) Per unit in the build phase: (a) the existing test suite and all existing gates except mutation testing stay green (mutation: ADR-047 Amendment 14, weekly or on demand); (b) new code carries the tests that evidence its acceptance criteria — no hand-mutant campaigns, no red-edit catalogues, no multi-round verification loops; (c) ONE cross-review by a model other than the implementing one, scoped to the CLAUDE.md §1 invariants, before each push; (d) residual cases that violate neither a §1 invariant nor a threat-model statement go to the hardening backlog (`docs/HARDENING-BACKLOG.md`) instead of being built.
+(3) Per milestone in the build phase: one end-to-end test "two clients and a relay exchange messages through the new code path" and a short milestone report. The full milestone review (directorate) is not run per milestone; the next milestone may start when the PR run is green and the reviewer has recorded a short GO in `docs/reviews/`.
+(4) Exceptions that keep full rigour inside the build phase: any change to `secmp-crypto`, `secmp-proto`, the wire format, labels, frozen vectors, docs/03 or docs/01; any new `unsafe` block (M9 platform code). Each such unit gets an independent verification of the diff (executed evidence) before delivery.
+(5) ALPHA after M10: the owner and a small trusted group use the product. No security claims are made for it; the README banner stays "pre-release — do not use".
+(6) HARDENING PHASE (extends M11), before M12 (release gate), all of: a full mutation run with zero undocumented survivors; fuzz campaigns; external cross-reviews over the whole code base by at least two different model families; the milestone reviews of M8–M10 that were deferred; every item of the hardening backlog closed or explicitly accepted by the owner; ProVerif, Kani and ct as before.
+(7) The hardening backlog is `docs/HARDENING-BACKLOG.md`, seeded with the known gaps at M7.
+(8) Unchanged: the CLAUDE.md §1 invariants and §6 stop conditions; never weaken a lint, add `#[allow]` for a security lint, mark a test `#[ignore]`, disable a gate or claim a test ran that did not; the owner's reservations (money, secrets, GitHub settings, and spec, threat-model and crypto ADRs); no merge without green required checks.
+
+**Alternatives.** (a) Keep the full review and verification per milestone: the pace of M7 over M8–M10 is not acceptable to the owner, who prefers a working product to test. (b) Drop the deferred review and verification: rejected — a release without them contradicts the owner's aim of a maximally secure tool; they are deferred, not removed. (c) Skip the cross-review and the end-to-end test in the build phase: rejected — they are the cheap minimum that still catches invariant violations and broken paths early.
+
+**Consequences.** Defects found in the hardening phase sit under more code and cost more to fix. Security evidence for build-phase code is weaker until the hardening phase is done; alpha users must treat the product as unaudited. Mitigations: (2a) the suite and gates stay green, (2c) one cross-review per push, (3) the end-to-end test per milestone, (4) full rigour for crypto, protocol, wire and `unsafe` changes. DoD (docs/06 §8) item 8 and the milestone-sequence rule are relaxed for M8–M10 only; from M11 on they apply again. The backlog is a release gate, so it cannot be forgotten.
+
+---
+
 *Template for new entries:*
 
 ### ADR-0NN — Title

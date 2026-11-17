@@ -1,6 +1,6 @@
 # SecMPro — Milestone Plan (v1 and v1.1)
 
-Status: baseline, revision 2 (2026-09-25, after adversarial review). This is the execution plan for the implementing agent (Claude Code / Opus) and the reviewer (Fable). Milestones are strictly sequential; the next one starts only after the previous one's review is recorded in `docs/reviews/`. Sizes are relative (S ≈ one focused session, M ≈ 2–4, L ≈ 5–8, XL ≈ 8+).
+Status: baseline, revision 2 (2026-09-25, after adversarial review). This is the execution plan for the implementing agent (Claude Code / Opus) and the reviewer (Fable). Milestones are strictly sequential; the next one starts only after the previous one's review is recorded in `docs/reviews/`. For M8–M10 ADR-062 (owner, 2026-11-17) replaces the full review by a short reviewer GO; the deferred reviews fall into the hardening phase (M11). Sizes are relative (S ≈ one focused session, M ≈ 2–4, L ≈ 5–8, XL ≈ 8+).
 
 Every milestone ends with a **Milestone Report** (`docs/templates/milestone-report.md`) and a **Review** (`docs/templates/review-checklist.md`). The Definition of Done in `06-engineering-standards.md` §8 applies to all.
 
@@ -184,6 +184,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 ---
 
 ### M11 — Security verification, audit preparation and release engineering (M/L)
+
+**Hardening phase (ADR-062, owner 2026-11-17).** M11 also carries the consolidated verification deferred from the build phase M8–M10: a full mutation run with zero undocumented survivors, fuzz campaigns, external cross-reviews (at least two model families) over the whole code base, the deferred reviews of M8–M10, and closure or owner acceptance of every item of `docs/HARDENING-BACKLOG.md`. M12 does not start before this is done.
 
 **Deliverables.** ⚙ 24 h fuzz campaign (corpora committed); mutation and coverage reports; `formal/` finalised with `CLAIMS.md` results; reproducible release builds for Linux and Windows on two builders with matching hashes (`xtask repro-check` real); SLSA L3 provenance; ⚙ offline minisign signing procedure executed; SBOMs; `docs/audit-package.md`; disclosure texts; `security.txt`; the M12 acceptance protocol scripted where possible (`xtask acceptance`).
 

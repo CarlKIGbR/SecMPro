@@ -33,9 +33,9 @@ These are the properties every line of code must preserve. Violating one is a bl
 2. Write a short **plan** at the top of `docs/reviews/MNN-report.md` (from `docs/templates/milestone-report.md`): what you will build, in which order, which tests prove each acceptance criterion. Keep it updated as you go.
 3. Implement in small commits (Conventional Commits). After every logical unit run `cargo xtask ci-fast`; run `cargo xtask ci-full` before the report.
 4. Every function that touches the wire or a key gets: unit tests including failure paths, a property test where the input space is large, a fuzz target if it parses bytes, and — for crypto/protocol code — external or frozen test vectors.
-5. When the acceptance criteria are met and `cargo xtask ci` is green, finish the report: evidence (exact commands and outputs/summary), deviations from spec (must be empty or ADR'd), open risks, questions. Open the PR. Stop. Do not start the next milestone until the review is recorded as approved.
+5. When the acceptance criteria are met and `cargo xtask ci` is green, finish the report: evidence (exact commands and outputs/summary), deviations from spec (must be empty or ADR'd), open risks, questions. Open the PR. Stop. Do not start the next milestone until the review is recorded as approved. (M8–M10: ADR-062 applies — a short reviewer GO instead of the full review.)
 
-Work **one milestone at a time**, sequentially, exactly as listed. Do not "prepare" later milestones.
+Work **one milestone at a time**, sequentially, exactly as listed. Do not "prepare" later milestones. ADR-062 (owner, 2026-11-17) defines the build phase M8–M10 (back to back, short GO per milestone, consolidated hardening phase before M12); §1 and §6 apply unchanged.
 
 ## 3. Commands
 

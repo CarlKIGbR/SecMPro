@@ -166,6 +166,8 @@ A milestone is done only when all of the following hold and are evidenced in the
 7. Open risks and deviations listed explicitly in the report (empty list is a claim, not a default).
 8. Reviewer (Fable) sign-off recorded in `docs/reviews/Mxx-review.md`.
 
+Build phase (ADR-062, owner 2026-11-17): for M8–M10 item 8 is a short reviewer GO in `docs/reviews/`, and the mutation part of item 3 follows ADR-047 Amendment 14; the full milestone reviews are deferred to the hardening phase, which closes before M12. Units that change `secmp-crypto`, `secmp-proto`, the wire format, labels, vectors, docs/03 or docs/01, or add `unsafe`, keep the full rigour of ADR-062 (4).
+
 ## 9. Guard rails for AI-written crypto code (review focus list)
 
 Reviewers check every crypto/protocol PR against: invented constructions; nonce/counter handling (reset on restart? same nonce both directions?); missing domain separation or transcript binding; non-constant-time comparisons; constant-time results (`Choice`, `ct_eq`) turned into `bool` before being combined with another check (`bool::from(a) && b` is a secret-dependent branch even when both arms reject — combine with `&`/`|` on `Choice` and convert exactly once, at the final decision; M1 review C4, caught by the `ct` gate); unchecked inputs (zero DH, non-canonical points, malformed KEM keys); secrets in `Debug`/logs/errors; tests that only round-trip against the same code (external vectors mandatory); panics on malformed input; hallucinated crate names or APIs (must exist at the pinned version — CI catches, but review looks for near-miss crates); error messages that create oracles (uniform errors for all auth failures); persistence ordering (persist-before-send); and timing side channels in "helpful" early returns.

@@ -101,12 +101,12 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`, budgets by `expect::JOB_BUDGE
 | `xwin-cross` | `cargo-xwin` cross-build in two invocations: all targets less the store-dependent crates of `expect::XWIN_EXCLUDE` and `expect::XWIN_LIB_ONLY`, then `--lib --bins` of the two packages that dev-depend on the excluded testkit, `secmp-crypto` and `secmp-transport` (ADR-034 Amendment 1 rev. 2) | 60 |
 | `linux-full` | `ci-full` steps 1–14 less the delegated ones (`windows-*`, `mutants`, `ct`, `fuzz`, `kani`, `proverif-link`, `harness`) | 240 |
 | `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
-| `mutants-shard` ×24 (ADR-047 Amendment 11), `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |
+| `mutants-shard` ×24 (ADR-047 Amendment 11), `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants`; only in the weekly scheduled run (Sunday's cron) and on demand (`ci-dispatch.yml` suite `mutants`), never on a pull request, not needed by `ci-verdict` (ADR-047 Amendment 14) | 300, 30 |
 | `proverif-hx`, `proverif-link` | ProVerif SecMP-HX and SecMP-LINK models (step 10), `--delegated proverif-link` | 180, 120 |
 | `kani` | Kani harnesses (step 9: every `KANI_PACKAGES`, `-Z stubbing` where used, the verified-harness and cover pins), `--delegated kani` (M6, WEISUNG M6-11, VD-M6-A-23: `linux-full` had passed 240 min); `SECMP_RUNNER_TRACE=1`: xtask writes a `runner-trace` line (memory, swap, disk, largest process) every 20 s to the job log (M6-15); every `cargo kani` runs under a cbmc RSS guard (`expect::KANI_CBMC_RSS_LIMIT_KIB`, 14.5 GB): above it the step stops and fails naming the harness, and it prints the peak RSS per harness (M7, TEST-SPEC-M7 G7-12) | 150 |
 | `fuzz` | fuzz smoke (step 6, every target, `FUZZ_SMOKE_SECONDS` each), `--delegated fuzz` (M6-CI, WEISUNG M6-CI-1 §4, ADR-047 Amendment 5) | 120 |
 | `harness` | the testkit `harness` binary (step 5 `harness`: in-process harness, virtual-time and loopback simulations, its property tests with the CI run seed), `--delegated harness` from `linux-fast` and `linux-full` (M7, TEST-SPEC-M7 G7-07, ADR-045 Amendment 12); every event, like `linux-fast` | 150 |
-| `ci-verdict` | the aggregate check: green only if every other job above ended `success` (`needs:` all of them, `NEEDS_JSON`, `step ci-verdict`; ADR-045 Amendment 2) | 15 |
+| `ci-verdict` | the aggregate check: green only if every other job above but the weekly `mutants-shard`/`mutants` ended `success` (`needs:` all of them, `NEEDS_JSON`, `step ci-verdict`; ADR-045 Amendment 2, ADR-047 Amendment 14) | 15 |
 
 Integration precondition (OPEN-M6-C-1, closed by spec reading): a contact enters the scheduler only after its first ratchet step, so both parties hold a sending chain before any combined relay link is built.
 
@@ -125,7 +125,7 @@ Nothing that touches the network or wall clock in unit tests; `secmp-client-core
 5. KATs + differential tests (feature `kat`)
 6. Fuzz smoke (2 min/target); own job `fuzz`, `--delegated fuzz` (ADR-047 Amendment 5)
 7. Coverage gate
-8. Mutation gate (nightly, and on PRs touching `secmp-crypto`/`secmp-proto`/`secmp-relay`/`secmp-client-core`/`secmp-transport`/`secmp-store`)
+8. Mutation gate (weekly and on demand during the coding phase, never on pull requests, a release gate from the pre-release hardening phase on — ADR-047 Amendment 14; packages `secmp-crypto`/`secmp-proto`/`secmp-relay`/`secmp-client-core`/`secmp-transport`/`secmp-store`)
 9. Miri + Kani (nightly, and on PRs touching `secmp-sys-*`/parsers)
 10. ProVerif models (**mandatory**; CI installs `proverif` from the distribution package or opam; a missing prover fails the gate)
 11. Windows: native build + tests on GitHub-hosted `windows-latest` (every PR); `cargo-xwin` cross-build job as a compile-compatibility check only (with NASM once `aws-lc-rs` is in the graph; a hard job from M1 on); from M9: tests on the owner's libvirt VM runner (nightly + on PRs touching platform code) — **owner-operated**; if unavailable the report says so and the milestone is not closed

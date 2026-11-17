@@ -41,7 +41,7 @@ Work **one milestone at a time**, sequentially, exactly as listed. Do not "prepa
 
 ```
 cargo xtask ci-fast       # minutes: fmt, clippy (deny set), forbid(unsafe) grep, deny/vet/audit/cooldown, nextest, KATs
-cargo xtask ci-full       # everything: ci-fast + fuzz smoke, coverage, mutants (crypto/proto), Miri/Kani subsets, ProVerif (mandatory), ref/ vector cross-check, unit exposure score
+cargo xtask ci-full       # everything: ci-fast + fuzz smoke, coverage, mutants (crypto/proto), Miri/Kani subsets, ProVerif (mandatory), ref/ vector cross-check, unit exposure score; in the coding phase add `--delegated mutants` (mutants: weekly CI + `ci-dispatch` suite `mutants`, ADR-047 Amendment 14)
 cargo xtask vectors       # cross-generate vectors from ref/ and the Rust code, compare, freeze — initial generation in M1–M5; afterwards only with a spec revision
 cargo xtask repro-check   # reproducible build check (release profile)
 cargo xtask sbom          # CycloneDX SBOM

@@ -292,8 +292,9 @@ fn settings_step<S: CellSource>(
     Some((previous, result))
 }
 
-/// The revert of a failed save: `true` when the scheduler is back on `previous`; a refusal is a second `Notice::Refused` and
-/// `sched_mode` keeps the mode the scheduler is in. The caller submits the outputs of a revert that worked.
+/// The revert of a failed save: `Ok(outputs)` when the scheduler is back on `previous` (`sched_mode` is set to it;
+/// the caller submits the outputs); `Err(())` on a refusal, after a second `Notice::Refused`; `sched_mode` then keeps
+/// the mode the scheduler is in.
 fn revert_step<S: CellSource>(
     sched: &mut Scheduler,
     sched_mode: &mut Mode,

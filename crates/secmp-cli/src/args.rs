@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use secmp_crypto::Zeroizing;
+
 /// What the program was started for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -29,6 +31,24 @@ pub enum Command {
         /// The name presented in a handshake.
         name: Option<String>,
     },
+    /// `contacts list <dir> --passphrase-file F`: offline, the profile's contacts.
+    ContactsList {
+        /// The profile directory.
+        dir: PathBuf,
+        /// The passphrase file.
+        passphrase_file: PathBuf,
+    },
+    /// `import <backup> <newdir> --passphrase-file F --backup-passphrase-file G`: a backup into a new profile.
+    Import {
+        /// The backup file.
+        backup: PathBuf,
+        /// The new profile's directory.
+        dir: PathBuf,
+        /// The new profile's passphrase file.
+        passphrase_file: PathBuf,
+        /// The backup's passphrase file.
+        backup_passphrase_file: PathBuf,
+    },
 }
 
 /// The command line is not one of the above.
@@ -36,7 +56,7 @@ pub enum Command {
 pub struct Usage;
 
 /// The usage text (stderr).
-pub const USAGE: &str = "usage:\n  secmp-cli\n  secmp-cli profile new <dir> --passphrase-file <file> [--relay <file>]\n  secmp-cli open <dir> --passphrase-file <file> [--direct] [--name <name>]\n  note: an accepted invitation is consumed at the relay before it is stored; quitting during `accepting` loses it\n";
+pub const USAGE: &str = "usage:\n  secmp-cli\n  secmp-cli profile new <dir> --passphrase-file <file> [--relay <file>]\n  secmp-cli open <dir> --passphrase-file <file> [--direct] [--name <name>]\n  secmp-cli contacts list <dir> --passphrase-file <file>\n  secmp-cli import <backup> <newdir> --passphrase-file <file> --backup-passphrase-file <file>\n  in a session: invite create | invite accept <uri> | contacts list | contacts sas <id> | contacts verify <id> <digits> | status | identity rotate | rotate <id> | send <id> <text> | export <path> --backup-passphrase-file <file> [--confirm] [--force] | quit\n  note: an accepted invitation is consumed at the relay before it is stored; quitting during `accepting` loses it\n";
 
 /// Parse the arguments after the program name.
 ///
@@ -63,6 +83,29 @@ pub fn parse(args: &[String]) -> Result<Command, Usage> {
                 passphrase_file: flags.value("--passphrase-file")?.ok_or(Usage)?.into(),
                 direct: flags.switch("--direct")?,
                 name: flags.value("--name")?.map(str::to_owned),
+            };
+            flags.finish()?;
+            Ok(command)
+        }
+        (Some("contacts"), Some("list")) => {
+            let (dir, mut flags) = dir_and_flags(it)?;
+            let command = Command::ContactsList {
+                dir,
+                passphrase_file: flags.value("--passphrase-file")?.ok_or(Usage)?.into(),
+            };
+            flags.finish()?;
+            Ok(command)
+        }
+        (Some("import"), Some(backup)) if !backup.starts_with("--") => {
+            let (dir, mut flags) = dir_and_flags(it)?;
+            let command = Command::Import {
+                backup: PathBuf::from(backup),
+                dir,
+                passphrase_file: flags.value("--passphrase-file")?.ok_or(Usage)?.into(),
+                backup_passphrase_file: flags
+                    .value("--backup-passphrase-file")?
+                    .ok_or(Usage)?
+                    .into(),
             };
             flags.finish()?;
             Ok(command)
@@ -146,22 +189,86 @@ impl<'a> Flags<'a> {
     }
 }
 
-/// A line the user types into an open session.
-#[derive(Debug, PartialEq, Eq)]
+/// The longest line of an open session (bytes, without the newline); a longer one is dropped and answered as a usage error.
+pub const LINE_MAX: usize = 65_536;
+
+/// A line the user types into an open session. `Debug` prints the variant name only: a line may hold a secret (the URI, a
+/// path, a text); a line is never compared with `==`.
 pub enum Line {
     /// `invite create`.
     InviteCreate,
-    /// `invite accept <uri>`.
-    InviteAccept(String),
+    /// `invite accept <uri>`: the URI is a secret.
+    InviteAccept(Zeroizing<String>),
     /// `contacts list`.
     ContactsList,
+    /// `contacts sas <id>`.
+    ContactsSas(i64),
+    /// `contacts verify <id> <digits…>`: the digits, their groups joined.
+    ContactsVerify(i64, String),
+    /// `status`.
+    Status,
+    /// `identity rotate`.
+    IdentityRotate,
+    /// `rotate <id>`.
+    Rotate(i64),
     /// `send <id> <text…>`.
     Send(i64, String),
+    /// `export <path> --backup-passphrase-file G [--confirm] [--force]`.
+    Export {
+        /// The file to create.
+        path: PathBuf,
+        /// The backup passphrase file.
+        passphrase_file: PathBuf,
+        /// The user's confirmation.
+        confirm: bool,
+        /// Also into a cloud-synchronised folder.
+        force: bool,
+    },
     /// `quit`.
     Quit,
 }
 
-/// Parse one line of an open session.
+impl core::fmt::Debug for Line {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::InviteCreate => "InviteCreate",
+            Self::InviteAccept(_) => "InviteAccept",
+            Self::ContactsList => "ContactsList",
+            Self::ContactsSas(_) => "ContactsSas",
+            Self::ContactsVerify(..) => "ContactsVerify",
+            Self::Status => "Status",
+            Self::IdentityRotate => "IdentityRotate",
+            Self::Rotate(_) => "Rotate",
+            Self::Send(..) => "Send",
+            Self::Export { .. } => "Export",
+            Self::Quit => "Quit",
+        })
+    }
+}
+
+/// The flags of an `export` line: `--backup-passphrase-file G` once, `--confirm` and `--force` at most once each.
+fn export_line(path: &str, flags: &str) -> Result<Line, Usage> {
+    let (mut file, mut confirm, mut force) = (None, false, false);
+    let mut words = flags.split(' ');
+    while let Some(word) = words.next() {
+        match word {
+            "--backup-passphrase-file" if file.is_none() => {
+                file = Some(words.next().filter(|w| !w.is_empty()).ok_or(Usage)?);
+            }
+            "--confirm" if !confirm => confirm = true,
+            "--force" if !force => force = true,
+            _ => return Err(Usage),
+        }
+    }
+    Ok(Line::Export {
+        path: PathBuf::from(path),
+        passphrase_file: PathBuf::from(file.ok_or(Usage)?),
+        confirm,
+        force,
+    })
+}
+
+/// Parse one line of an open session. Pure and total: every `&str` is a [`Line`] or a [`Usage`].
 ///
 /// # Errors
 /// [`Usage`] for an unknown verb, a missing or malformed argument.
@@ -171,9 +278,24 @@ pub fn parse_line(line: &str) -> Result<Line, Usage> {
     match (words.next(), words.next(), words.next()) {
         (Some("invite"), Some("create"), None) => Ok(Line::InviteCreate),
         (Some("invite"), Some("accept"), Some(uri)) if !uri.is_empty() && !uri.contains(' ') => {
-            Ok(Line::InviteAccept(uri.to_owned()))
+            Ok(Line::InviteAccept(Zeroizing::new(uri.to_owned())))
         }
         (Some("contacts"), Some("list"), None) => Ok(Line::ContactsList),
+        (Some("contacts"), Some("sas"), Some(id)) => {
+            Ok(Line::ContactsSas(id.parse().map_err(|_| Usage)?))
+        }
+        (Some("contacts"), Some("verify"), Some(rest)) => {
+            let (id, groups) = rest.split_once(' ').ok_or(Usage)?;
+            let digits: String = groups.split(' ').collect();
+            if digits.is_empty() {
+                return Err(Usage);
+            }
+            Ok(Line::ContactsVerify(id.parse().map_err(|_| Usage)?, digits))
+        }
+        (Some("status"), None, None) => Ok(Line::Status),
+        (Some("identity"), Some("rotate"), None) => Ok(Line::IdentityRotate),
+        (Some("rotate"), Some(id), None) => Ok(Line::Rotate(id.parse().map_err(|_| Usage)?)),
+        (Some("export"), Some(path), Some(flags)) if !path.is_empty() => export_line(path, flags),
         (Some("send"), Some(id), Some(text)) if !text.is_empty() => {
             Ok(Line::Send(id.parse().map_err(|_| Usage)?, text.to_owned()))
         }
@@ -221,6 +343,43 @@ mod tests {
     }
 
     #[test]
+    fn the_one_shot_forms() {
+        assert_eq!(
+            parse(&args(&["contacts", "list", "d", "--passphrase-file", "f"])),
+            Ok(Command::ContactsList {
+                dir: "d".into(),
+                passphrase_file: "f".into()
+            })
+        );
+        assert_eq!(
+            parse(&args(&[
+                "import",
+                "b",
+                "n",
+                "--backup-passphrase-file",
+                "g",
+                "--passphrase-file",
+                "f"
+            ])),
+            Ok(Command::Import {
+                backup: "b".into(),
+                dir: "n".into(),
+                passphrase_file: "f".into(),
+                backup_passphrase_file: "g".into()
+            })
+        );
+        for bad in [
+            &["contacts", "list"][..],
+            &["contacts", "list", "d"],
+            &["import", "b"],
+            &["import", "b", "n", "--passphrase-file", "f"],
+            &["import", "b", "n", "--backup-passphrase-file", "g"],
+        ] {
+            assert_eq!(parse(&args(bad)), Err(Usage), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn everything_else_is_usage() {
         for bad in [
             &["frobnicate"][..],
@@ -249,17 +408,50 @@ mod tests {
 
     #[test]
     fn the_session_lines() {
-        assert_eq!(parse_line("invite create"), Ok(Line::InviteCreate));
-        assert_eq!(
+        assert!(matches!(
+            parse_line("invite create"),
+            Ok(Line::InviteCreate)
+        ));
+        assert!(matches!(
             parse_line("invite accept secmp://i/abc"),
-            Ok(Line::InviteAccept("secmp://i/abc".to_owned()))
-        );
-        assert_eq!(parse_line("contacts list\r"), Ok(Line::ContactsList));
-        assert_eq!(
+            Ok(Line::InviteAccept(u)) if u.as_str() == "secmp://i/abc"
+        ));
+        assert!(matches!(
+            parse_line("contacts list\r"),
+            Ok(Line::ContactsList)
+        ));
+        assert!(matches!(
             parse_line("send 12 hello  wide world"),
-            Ok(Line::Send(12, "hello  wide world".to_owned()))
-        );
-        assert_eq!(parse_line("quit"), Ok(Line::Quit));
+            Ok(Line::Send(12, t)) if t == "hello  wide world"
+        ));
+        assert!(matches!(parse_line("quit"), Ok(Line::Quit)));
+        assert!(matches!(
+            parse_line("contacts sas 3"),
+            Ok(Line::ContactsSas(3))
+        ));
+        assert!(matches!(
+            parse_line("contacts verify 3 12345 67890"),
+            Ok(Line::ContactsVerify(3, d)) if d == "1234567890"
+        ));
+        assert!(matches!(parse_line("status"), Ok(Line::Status)));
+        assert!(matches!(
+            parse_line("identity rotate"),
+            Ok(Line::IdentityRotate)
+        ));
+        assert!(matches!(parse_line("rotate 4"), Ok(Line::Rotate(4))));
+        assert!(matches!(
+            parse_line("export /x/b.smpb --backup-passphrase-file g --confirm --force"),
+            Ok(Line::Export { path, passphrase_file, confirm: true, force: true })
+                if path.to_str() == Some("/x/b.smpb") && passphrase_file.to_str() == Some("g")
+        ));
+        assert!(matches!(
+            parse_line("export b --backup-passphrase-file g"),
+            Ok(Line::Export {
+                confirm: false,
+                force: false,
+                ..
+            })
+        ));
         for bad in [
             "",
             "invite",
@@ -272,8 +464,28 @@ mod tests {
             "contacts",
             "bogus line",
             "invite create now",
+            "contacts sas",
+            "contacts sas x",
+            "contacts verify 3",
+            "contacts verify 3 ",
+            "contacts verify x 1",
+            "status now",
+            "identity",
+            "identity rotate now",
+            "rotate",
+            "rotate x",
+            "rotate 1 2",
+            "export",
+            "export b",
+            "export b --confirm",
+            "export b --backup-passphrase-file",
+            "export b --backup-passphrase-file g --confirm --confirm",
+            "export b --backup-passphrase-file g --bogus",
         ] {
-            assert_eq!(parse_line(bad), Err(Usage), "{bad:?}");
+            assert!(parse_line(bad).is_err(), "{bad:?}");
         }
+        // the debug form of a line never shows what it holds
+        let shown = format!("{:?}", parse_line("invite accept secmp://i/secret"));
+        assert!(!shown.contains("secret"), "{shown}");
     }
 }

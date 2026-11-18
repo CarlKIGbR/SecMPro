@@ -309,3 +309,613 @@ fn single_writer_lock() {
     expect(&mut first, SHORT, "closed");
     assert_eq!(first.wait_exit(SHORT).and_then(|s| s.code()), Some(0));
 }
+
+// ---- M7-C2: the verbs of a paired session (CL-04 … CL-09) and the totality of the line parser (CL-14) -----------------------
+
+/// The deadline of a row that pairs two profiles: C-1 measured 176–326 s for one invitation chain.
+const ROW: Duration = Duration::from_secs(600);
+
+/// `expect` that also keeps every line it read (the skipped ones and the found one) on `tape`.
+fn expect_tape(p: &mut CliProc, within: Duration, want: &str, tape: &mut Vec<Json>) -> Json {
+    expect_where(p, within, tape, &format!("`{want}`"), |v| kind(v) == want)
+}
+
+/// The first line within `within` for which `want` holds; every line read goes to `tape`.
+fn expect_where(
+    p: &mut CliProc,
+    within: Duration,
+    tape: &mut Vec<Json>,
+    what: &str,
+    want: impl Fn(&Json) -> bool,
+) -> Json {
+    let (found, skipped) = p.wait_for(within, want);
+    tape.extend(skipped.iter().cloned());
+    assert!(
+        found.is_some(),
+        "no {what} line within {within:?}; saw {skipped:?}; stderr: {}",
+        p.stderr_text()
+    );
+    let found = found.unwrap();
+    tape.push(found.clone());
+    found
+}
+
+/// Two paired profiles on one relay: alice invited, bob accepted; both processes are open.
+struct Pair {
+    root: PathBuf,
+    relay: E2eRelay,
+    a: CliProc,
+    b: CliProc,
+    a_dir: PathBuf,
+    a_pass: PathBuf,
+    /// alice's id of bob, and bob's id of alice.
+    a_of_b: u64,
+    b_of_a: u64,
+    /// The invitation's URI.
+    uri: String,
+    /// Every line the two processes wrote while the pair was made.
+    tape: Vec<Json>,
+}
+
+/// `new_profile` + `seed_spares` (before `open`) + `invite create` / `accept`, `--direct`.
+fn pair(root: &Path, label: &str) -> Pair {
+    let relay = E2eRelay::start(&root.join("relay"));
+    let pass_text = PASS.strip_suffix(b"\n").unwrap();
+    let (a_dir, a_pass) = new_profile(root, "alice", Some(&relay.ref_path()));
+    let (b_dir, b_pass) = new_profile(root, "bob", Some(&relay.ref_path()));
+    relay.seed_spares(&a_dir, pass_text, 2, &format!("{label}-a"));
+    relay.seed_spares(&b_dir, pass_text, 2, &format!("{label}-b"));
+    let mut tape = Vec::new();
+    let mut a = open(&a_dir, &a_pass, "alice");
+    expect_tape(&mut a, ROW, "opened", &mut tape);
+    a.send_line("invite create");
+    let uri = text(&expect_tape(&mut a, ROW, "invitation", &mut tape), "uri");
+    let mut b = open(&b_dir, &b_pass, "bob");
+    expect_tape(&mut b, ROW, "opened", &mut tape);
+    let b_of_a = accept_tape(&mut b, &uri, &mut tape).expect("the invitation was accepted");
+    let a_of_b = expect_tape(&mut a, ROW, "contact", &mut tape)
+        .get("id")
+        .and_then(Json::as_u64)
+        .unwrap();
+    Pair {
+        root: root.to_owned(),
+        relay,
+        a,
+        b,
+        a_dir,
+        a_pass,
+        a_of_b,
+        b_of_a,
+        uri,
+        tape,
+    }
+}
+
+/// `accept` that keeps the lines it read; returns the contact's id.
+fn accept_tape(p: &mut CliProc, uri: &str, tape: &mut Vec<Json>) -> Option<u64> {
+    for _ in 0..20 {
+        p.send_line(&format!("invite accept {uri}"));
+        let (found, skipped) = p.wait_for(ROW, |v| kind(v) == "contact" || kind(v) == "error");
+        tape.extend(skipped);
+        let line = found.expect("an answer to `invite accept`");
+        tape.push(line.clone());
+        if kind(&line) == "contact" {
+            return line.get("id").and_then(Json::as_u64);
+        }
+        assert_eq!(text(&line, "code"), "invitation", "{line:?}");
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    None
+}
+
+/// `contacts sas <id>`: the 60 digits.
+fn sas(p: &mut CliProc, id: u64, tape: &mut Vec<Json>) -> String {
+    p.send_line(&format!("contacts sas {id}"));
+    let line = expect_tape(p, ROW, "sas", tape);
+    assert_eq!(line.get("contact").and_then(Json::as_u64), Some(id));
+    text(&line, "digits")
+}
+
+/// `contacts verify <id> <digits>`: the answer's `ok`.
+fn verify(p: &mut CliProc, id: u64, digits: &str, tape: &mut Vec<Json>) -> bool {
+    p.send_line(&format!("contacts verify {id} {digits}"));
+    let line = expect_tape(p, ROW, "verified", tape);
+    assert_eq!(line.get("contact").and_then(Json::as_u64), Some(id));
+    line.get("ok").and_then(Json::as_bool).unwrap()
+}
+
+/// Both sides verify each other (receipts go only to verified contacts, spec §10.4).
+fn verify_both(p: &mut Pair) {
+    let mut tape = std::mem::take(&mut p.tape);
+    let digits = sas(&mut p.a, p.a_of_b, &mut tape);
+    assert_eq!(
+        sas(&mut p.b, p.b_of_a, &mut tape),
+        digits,
+        "the same safety number"
+    );
+    assert!(verify(&mut p.a, p.a_of_b, &digits, &mut tape));
+    assert!(verify(&mut p.b, p.b_of_a, &digits, &mut tape));
+    p.tape = tape;
+}
+
+/// A line of `contacts list` for `id`.
+fn listed(p: &mut CliProc, id: u64, tape: &mut Vec<Json>) -> Json {
+    p.send_line("contacts list");
+    let list = expect_tape(p, ROW, "contacts", tape);
+    let found = list
+        .get("list")
+        .and_then(Json::as_array)
+        .unwrap()
+        .iter()
+        .find(|c| c.get("id").and_then(Json::as_u64) == Some(id))
+        .cloned();
+    assert!(found.is_some(), "contact {id} is not listed: {list:?}");
+    found.unwrap()
+}
+
+fn quit(p: &mut CliProc) {
+    p.send_line("quit");
+    expect(p, SHORT, "closed");
+}
+
+/// CL-04: `contacts list` shows id, name and state; `contacts verify <id> <60 digits>` with the digits of the peer's `contacts
+/// sas` answers `verified` and the list shows the contact verified; a wrong number is `ok: false` and changes nothing.
+#[test]
+fn contacts_list_and_verify() {
+    let root = scratch("cl04");
+    let mut p = pair(&root, "cl04");
+    let mut tape = Vec::new();
+    let c = listed(&mut p.a, p.a_of_b, &mut tape);
+    assert_eq!(text(&c, "state"), "unverified");
+    assert!(c.get("name").and_then(Json::as_str).is_some(), "{c:?}");
+    let digits = sas(&mut p.b, p.b_of_a, &mut tape);
+    assert_eq!(digits.len(), 60);
+    assert!(digits.bytes().all(|d| d.is_ascii_digit()));
+    let mut wrong = digits.clone().into_bytes();
+    let last = wrong.last_mut().unwrap();
+    *last = if *last == b'0' { b'1' } else { b'0' };
+    let wrong = String::from_utf8(wrong).unwrap();
+    assert!(!verify(&mut p.a, p.a_of_b, &wrong, &mut tape));
+    assert_eq!(
+        text(&listed(&mut p.a, p.a_of_b, &mut tape), "state"),
+        "unverified"
+    );
+    assert!(verify(&mut p.a, p.a_of_b, &digits, &mut tape));
+    assert_eq!(
+        text(&listed(&mut p.a, p.a_of_b, &mut tape), "state"),
+        "verified"
+    );
+    quit(&mut p.a);
+    quit(&mut p.b);
+}
+
+/// CL-05: `send <id> <text>` answers `queued` with the `msg_id`; later the `relayed` and the `delivered` events of that
+/// `msg_id` follow (both sides verified first: receipts only for verified contacts, §10.4); the peer prints the `message`.
+#[test]
+fn send_and_tail() {
+    let root = scratch("cl05");
+    let mut p = pair(&root, "cl05");
+    verify_both(&mut p);
+    let mut tape = Vec::new();
+    p.a.send_line(&format!("send {} hello bob", p.a_of_b));
+    let queued = expect_tape(&mut p.a, ROW, "queued", &mut tape);
+    let id = text(&queued, "msg_id");
+    assert_eq!(id.len(), 32);
+    for event in ["relayed", "delivered"] {
+        let line = expect_where(&mut p.a, ROW, &mut tape, event, |v| {
+            kind(v) == event && text(v, "msg_id") == id
+        });
+        assert_eq!(line.get("contact").and_then(Json::as_u64), Some(p.a_of_b));
+    }
+    let got = expect_tape(&mut p.b, ROW, "message", &mut tape);
+    assert_eq!(text(&got, "text"), "hello bob");
+    assert_eq!(text(&got, "msg_id"), id);
+    quit(&mut p.a);
+    quit(&mut p.b);
+}
+
+/// CL-06: `status` answers the mode, the direct flag, the numbers of links, contacts and spares, and the relay view lines
+/// (AP-03); one profile, no pair.
+#[test]
+fn status_shape() {
+    let root = scratch("cl06");
+    let (dir, pass) = new_profile(&root, "alice", None);
+    let mut p = open(&dir, &pass, "alice");
+    expect(&mut p, LONG, "opened");
+    p.send_line("status");
+    let s = expect(&mut p, SHORT, "status");
+    assert!(["strict", "balanced", "low_bw"].contains(&text(&s, "mode").as_str()));
+    assert_eq!(text(&s, "mode"), "balanced", "direct implies Balanced");
+    assert_eq!(s.get("direct").and_then(Json::as_bool), Some(true));
+    assert!(s.get("links").and_then(Json::as_u64).is_some());
+    assert_eq!(s.get("contacts").and_then(Json::as_u64), Some(0));
+    assert!(s.get("spares").and_then(Json::as_u64).is_some());
+    let view = s.get("relay_view").and_then(Json::as_array).unwrap();
+    assert!(view.len() >= 5, "the five items of AP-03: {view:?}");
+    assert!(
+        view.iter()
+            .all(|l| l.as_str().is_some_and(|l| !l.is_empty()))
+    );
+    quit(&mut p);
+}
+
+/// CL-07: `export <path> --backup-passphrase-file G` without `--confirm` is `error/confirm_required` and writes nothing; with
+/// it the file is written (mode 0600) and `exported`; `import` into a new directory answers `imported` with the contacts, the
+/// imported profile lists the contact in the state `reinvite_required`, and a `send` to it is `error/reinvite_required`.
+#[test]
+fn export_import() {
+    let root = scratch("cl07");
+    let mut p = pair(&root, "cl07");
+    let backup = root.join("backup.smpb");
+    let backup_pass = root.join("backup.pass");
+    write_secret_file(&backup_pass, b"backup horse\n");
+    let line = format!(
+        "export {} --backup-passphrase-file {}",
+        backup.display(),
+        backup_pass.display()
+    );
+    p.a.send_line(&line);
+    let refused = expect(&mut p.a, SHORT, "error");
+    assert_eq!(text(&refused, "code"), "confirm_required");
+    assert!(!backup.exists(), "nothing written without the confirmation");
+    p.a.send_line(&format!("{line} --confirm"));
+    expect(&mut p.a, ROW, "exported");
+    assert!(backup.exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    quit(&mut p.a);
+    quit(&mut p.b);
+
+    let new_dir = root.join("restored");
+    let new_pass = root.join("restored.pass");
+    write_secret_file(&new_pass, PASS);
+    let out = run(&[
+        "import",
+        backup.to_str().unwrap(),
+        new_dir.to_str().unwrap(),
+        "--passphrase-file",
+        new_pass.to_str().unwrap(),
+        "--backup-passphrase-file",
+        backup_pass.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{:?}", out.status);
+    let l = lines(&out);
+    assert_eq!(l.len(), 1);
+    assert_eq!(kind(l.first().unwrap()), "imported");
+    assert_eq!(
+        l.first().unwrap().get("contacts").and_then(Json::as_u64),
+        Some(1)
+    );
+    let out = run(&[
+        "contacts",
+        "list",
+        new_dir.to_str().unwrap(),
+        "--passphrase-file",
+        new_pass.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{:?}", out.status);
+    let l = lines(&out);
+    let list = l
+        .first()
+        .unwrap()
+        .get("list")
+        .and_then(Json::as_array)
+        .unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(text(list.first().unwrap(), "state"), "reinvite_required");
+    let id = list
+        .first()
+        .unwrap()
+        .get("id")
+        .and_then(Json::as_u64)
+        .unwrap();
+    let mut r = open(&new_dir, &new_pass, "restored");
+    expect(&mut r, LONG, "opened");
+    r.send_line(&format!("send {id} hello again"));
+    let refused = expect(&mut r, SHORT, "error");
+    assert_eq!(text(&refused, "code"), "reinvite_required");
+    quit(&mut r);
+}
+
+/// CL-08: `identity rotate` answers `identity_rotated` (without the fingerprint) and then one `key_change_sent` per contact: A
+/// with the contacts B and C gives two lines.
+#[test]
+fn identity_rotate() {
+    let root = scratch("cl08");
+    let relay = E2eRelay::start(&root.join("relay"));
+    let pass_text = PASS.strip_suffix(b"\n").unwrap();
+    let (a_dir, a_pass) = new_profile(&root, "alice", Some(&relay.ref_path()));
+    let (b_dir, b_pass) = new_profile(&root, "bob", Some(&relay.ref_path()));
+    let (c_dir, c_pass) = new_profile(&root, "carol", Some(&relay.ref_path()));
+    relay.seed_spares(&a_dir, pass_text, 4, "cl08-a");
+    relay.seed_spares(&b_dir, pass_text, 2, "cl08-b");
+    relay.seed_spares(&c_dir, pass_text, 2, "cl08-c");
+    let mut tape = Vec::new();
+    let mut a = open(&a_dir, &a_pass, "alice");
+    expect_tape(&mut a, ROW, "opened", &mut tape);
+    let mut ids = Vec::new();
+    let mut others = Vec::new();
+    for (dir, pass, name) in [(&b_dir, &b_pass, "bob"), (&c_dir, &c_pass, "carol")] {
+        a.send_line("invite create");
+        let uri = text(&expect_tape(&mut a, ROW, "invitation", &mut tape), "uri");
+        let mut o = open(dir, pass, name);
+        expect_tape(&mut o, ROW, "opened", &mut tape);
+        assert!(accept_tape(&mut o, &uri, &mut tape).is_some());
+        let contact = expect_tape(&mut a, ROW, "contact", &mut tape);
+        ids.push(contact.get("id").and_then(Json::as_u64).unwrap());
+        others.push(o);
+    }
+    assert_ne!(ids.first(), ids.get(1));
+    a.send_line("identity rotate");
+    let rotated = expect_tape(&mut a, ROW, "identity_rotated", &mut tape);
+    assert_eq!(
+        rotated.as_object().map(|o| o.keys().count()),
+        Some(1),
+        "only its type"
+    );
+    let mut sent = Vec::new();
+    for _ in 0..2 {
+        let line = expect_tape(&mut a, ROW, "key_change_sent", &mut tape);
+        sent.push(line.get("contact").and_then(Json::as_u64).unwrap());
+    }
+    sent.sort_unstable();
+    ids.sort_unstable();
+    assert_eq!(sent, ids, "one line per contact");
+    quit(&mut a);
+    for o in &mut others {
+        quit(o);
+    }
+}
+
+/// Every key and string value of `v`, recursively: `f(key, value)`; array items have the key of their array.
+fn walk(key: &str, v: &Json, f: &mut impl FnMut(&str, &Json)) {
+    f(key, v);
+    if let Some(object) = v.as_object() {
+        for (k, item) in object {
+            walk(k, item, f);
+        }
+    } else if let Some(array) = v.as_array() {
+        for item in array {
+            walk(key, item, f);
+        }
+    }
+}
+
+/// CL-09: every line of every verb is one JSON object with a `type`; no key names key material (`key`, `seed`, `secret`,
+/// `fingerprint`, `passphrase`); no value is the passphrase, the access key (hex) or the invitation's URI outside the
+/// `invitation` line; the only timestamp is the `at_ms` of a core event.
+#[test]
+fn jsonl_schema() {
+    let root = scratch("cl09");
+    let mut p = pair(&root, "cl09");
+    let uri = p.uri.clone();
+    verify_both(&mut p);
+    let access = std::fs::read_to_string(p.relay.ref_path())
+        .unwrap()
+        .lines()
+        .find_map(|l| l.strip_prefix("access_key = ").map(str::to_owned))
+        .unwrap();
+    assert_eq!(access.len(), 64);
+    let backup = p.root.join("backup.smpb");
+    let backup_pass = p.root.join("backup.pass");
+    write_secret_file(&backup_pass, b"backup horse\n");
+
+    let mut tape = std::mem::take(&mut p.tape);
+    p.a.send_line(&format!("send {} schema", p.a_of_b));
+    expect_tape(&mut p.a, ROW, "queued", &mut tape);
+    p.a.send_line("status");
+    expect_tape(&mut p.a, ROW, "status", &mut tape);
+    p.a.send_line(&format!("rotate {}", p.a_of_b));
+    expect_where(&mut p.a, ROW, &mut tape, "`rotated` or `error`", |v| {
+        kind(v) == "rotated" || kind(v) == "error"
+    });
+    p.a.send_line("export nowhere");
+    expect_tape(&mut p.a, SHORT, "error", &mut tape);
+    p.a.send_line(&format!(
+        "export {} --backup-passphrase-file {} --confirm",
+        backup.display(),
+        backup_pass.display()
+    ));
+    expect_tape(&mut p.a, ROW, "exported", &mut tape);
+    p.a.send_line("identity rotate");
+    expect_tape(&mut p.a, ROW, "identity_rotated", &mut tape);
+    expect_tape(&mut p.a, ROW, "key_change_sent", &mut tape);
+    expect_tape(&mut p.b, ROW, "message", &mut tape);
+    p.a.send_line("quit");
+    expect_tape(&mut p.a, SHORT, "closed", &mut tape);
+    p.b.send_line("quit");
+    expect_tape(&mut p.b, SHORT, "closed", &mut tape);
+    // the one-shots
+    let fresh = p.root.join("fresh");
+    let fresh_pass = p.root.join("fresh.pass");
+    write_secret_file(&fresh_pass, PASS);
+    let out = run(&[
+        "profile",
+        "new",
+        fresh.to_str().unwrap(),
+        "--passphrase-file",
+        fresh_pass.to_str().unwrap(),
+    ]);
+    tape.extend(lines(&out));
+    let new_dir = p.root.join("restored");
+    let new_pass = p.root.join("restored.pass");
+    write_secret_file(&new_pass, PASS);
+    let out = run(&[
+        "import",
+        backup.to_str().unwrap(),
+        new_dir.to_str().unwrap(),
+        "--passphrase-file",
+        new_pass.to_str().unwrap(),
+        "--backup-passphrase-file",
+        backup_pass.to_str().unwrap(),
+    ]);
+    tape.extend(lines(&out));
+    let out = run(&[
+        "contacts",
+        "list",
+        p.a_dir.to_str().unwrap(),
+        "--passphrase-file",
+        p.a_pass.to_str().unwrap(),
+    ]);
+    tape.extend(lines(&out));
+
+    check_schema(&tape, &uri, &access);
+}
+
+/// The rules of CL-09 over every line of `tape`.
+fn check_schema(tape: &[Json], uri: &str, access: &str) {
+    let secrets = ["correct horse", "backup horse", access];
+    let mut seen_types = std::collections::BTreeSet::new();
+    for line in tape {
+        assert!(line.as_object().is_some(), "{line:?}");
+        seen_types.insert(kind(line));
+        let is_invitation = kind(line) == "invitation";
+        walk("", line, &mut |key, v| {
+            let k = key.to_ascii_lowercase();
+            for bad in ["key", "seed", "secret", "fingerprint", "passphrase"] {
+                assert!(!k.contains(bad), "key `{key}` in {line:?}");
+            }
+            if k.ends_with("_ms") || k.contains("time") || k == "ts" || k == "at" {
+                assert_eq!(key, "at_ms", "a timestamp other than at_ms: {line:?}");
+            }
+            if let Some(s) = v.as_str() {
+                for secret in &secrets {
+                    assert!(!s.contains(secret), "a secret in {line:?}");
+                }
+                if !is_invitation {
+                    assert!(
+                        !s.contains(uri) && !s.contains("secmp://i/"),
+                        "the URI in {line:?}"
+                    );
+                }
+            }
+        });
+    }
+    for want in [
+        "created",
+        "opened",
+        "invitation",
+        "contact",
+        "contacts",
+        "sas",
+        "verified",
+        "queued",
+        "status",
+        "exported",
+        "identity_rotated",
+        "key_change_sent",
+        "imported",
+        "closed",
+        "error",
+        "message",
+    ] {
+        assert!(
+            seen_types.contains(want),
+            "no `{want}` line: {seen_types:?}"
+        );
+    }
+}
+
+/// CL-14: ten thousand random lines (seeded from `SECMP_PROPTEST_SEED` as the property tests are; lines that start with `quit`
+/// are dropped) into one `open`: nothing panics, and every line is answered by one JSON line — the lines that need the
+/// runtime are rare, the rest are usage errors.
+#[test]
+fn stdin_commands_are_total() {
+    // the first eight reach the runtime (rarely); the others are only ever mangled (a tail that makes a usage error)
+    const VERBS: [&str; 10] = [
+        "status",
+        "contacts list",
+        "contacts sas 7",
+        "contacts verify 7 123 456",
+        "send 7 text",
+        "rotate 7",
+        "invite create",
+        "invite accept secmp://i/x",
+        "export x --backup-passphrase-file y",
+        "identity rotate",
+    ];
+    const MANGLED: [&str; 8] = [
+        "status",
+        "contacts list",
+        "contacts sas 7",
+        "rotate 7",
+        "invite create",
+        "invite accept secmp://i/x",
+        "export x --backup-passphrase-file y",
+        "identity rotate",
+    ];
+    let seed = std::env::var("SECMP_PROPTEST_SEED")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0x5EC3_7000_C114);
+    let mut state = seed | 1;
+    let mut next = move || {
+        // xorshift64*
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+    let root = scratch("cl14");
+    let (dir, pass) = new_profile(&root, "alice", None);
+    let mut p = open(&dir, &pass, "alice");
+    expect(&mut p, LONG, "opened");
+    let (mut sent, mut runtime_calls) = (0_u32, 0_u32);
+    while sent < 10_000 {
+        let r = next();
+        let line = match r % 100 {
+            // a verb of the grammar, rarely: it reaches the runtime (a call waits for a chunk of the loop)
+            0 if runtime_calls < 60 => {
+                runtime_calls = runtime_calls.saturating_add(1);
+                VERBS
+                    .get(usize::try_from((r >> 8) % 8).unwrap())
+                    .unwrap()
+                    .to_string()
+            }
+            // a verb with a mangled tail: a usage error
+            1..=30 => {
+                let verb = MANGLED.get(usize::try_from((r >> 8) % 8).unwrap()).unwrap();
+                let cut = usize::try_from((r >> 16) % 6).unwrap().min(verb.len());
+                let head = verb.get(..verb.len().saturating_sub(cut)).unwrap();
+                format!("{head} \u{e9}\u{1f642}\t\"\\")
+            }
+            // random text, ASCII and not
+            _ => {
+                let n = (r >> 24) % 40;
+                (0..n)
+                    .map(|_| {
+                        let c = u32::try_from((next() >> 8) % 0x3000).unwrap();
+                        char::from_u32(c)
+                            .filter(|c| *c != '\n' && *c != '\r')
+                            .unwrap_or('x')
+                    })
+                    .collect()
+            }
+        };
+        if line.starts_with("quit") {
+            continue;
+        }
+        p.send_line(&line);
+        sent = sent.saturating_add(1);
+    }
+    p.send_line("quit");
+    let mut answers = 0_u32;
+    loop {
+        let v = p
+            .next_json(ROW)
+            .expect("a line, or the process ended without `closed`");
+        if kind(&v) == "closed" {
+            break;
+        }
+        answers = answers.saturating_add(1);
+    }
+    assert_eq!(answers, sent, "one JSON line per line");
+    let status = p.wait_exit(SHORT).expect("the process ends");
+    assert_eq!(status.code(), Some(0));
+}

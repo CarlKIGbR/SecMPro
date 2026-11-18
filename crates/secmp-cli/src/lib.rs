@@ -9,8 +9,12 @@
 //!
 //! **Commands.** No arguments: the banner. `profile new <dir> --passphrase-file F [--relay R]`. `open <dir>
 //! --passphrase-file F [--direct] [--name N]`, then command lines on stdin (`invite create`, `invite accept <uri>`,
-//! `contacts list`, `send <id> <text…>`, `quit`) and one JSON object per line on stdout. Exit codes: 0 ok, 1 other, 2 usage
-//! (stderr only), 3 transport unavailable, 4 unlock, 5 busy.
+//! `contacts list`, `contacts sas <id>`, `contacts verify <id> <digits…>`, `status`, `identity rotate`, `rotate <id>`,
+//! `send <id> <text…>`, `export <path> --backup-passphrase-file G [--confirm] [--force]`, `quit`; a line is at most 65 536
+//! bytes) and one JSON object per line on stdout. Offline, on a profile no process has open: `contacts list <dir>
+//! --passphrase-file F` and `import <backup> <newdir> --passphrase-file F --backup-passphrase-file G` (the backup's
+//! passphrase file follows the rules of the profile's). Exit codes: 0 ok, 1 other, 2 usage (stderr only), 3 transport
+//! unavailable, 4 unlock, 5 busy.
 #![forbid(unsafe_code)]
 
 pub mod args;
@@ -62,6 +66,16 @@ fn dispatch(args: &[String]) -> u8 {
             passphrase_file,
             relay,
         }) => daemon::profile_new(&dir, &passphrase_file, relay.as_deref()),
+        Ok(Command::ContactsList {
+            dir,
+            passphrase_file,
+        }) => daemon::contacts_list(&dir, &passphrase_file),
+        Ok(Command::Import {
+            backup,
+            dir,
+            passphrase_file,
+            backup_passphrase_file,
+        }) => daemon::import(&backup, &dir, &passphrase_file, &backup_passphrase_file),
         Ok(Command::Open {
             dir,
             passphrase_file,

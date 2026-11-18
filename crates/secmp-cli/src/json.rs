@@ -59,6 +59,13 @@ impl Obj {
         self
     }
 
+    /// A boolean field.
+    #[must_use]
+    pub fn flag(mut self, key: &'static str, value: bool) -> Self {
+        let _ = write!(self.0, ",{}:{value}", string(key));
+        self
+    }
+
     /// A field whose value is already rendered JSON ([`list`], [`Obj::done`]).
     #[must_use]
     pub fn raw(mut self, key: &'static str, value: &str) -> Self {

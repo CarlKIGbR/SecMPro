@@ -3838,6 +3838,96 @@ fn receive_transaction_holds_the_journal_row() -> R {
     })
 }
 
+/// SE-189 (M7-C2): the `OK_SEND` of a real message's last cell raises `Relayed(msg_id)` once; none before it, none for the
+/// `OK_SEND` of a dummy, none for a second `OK_SEND` of the same cell.
+#[cfg(feature = "kat")]
+#[test]
+fn relayed_event_once() -> R {
+    big(|| {
+        let mut w = established("se189", 41)?;
+        let dummy = w.g.prepare_direct(9_000).map_err(|_| "prepare")?;
+        w.g.relayed_direct(dummy.token, 76);
+        assert!(w.g.take_events().is_empty(), "a dummy raises nothing");
+        w.g.outbox_mut().enqueue(text(9, 12), 0);
+        let prepared = w.g.prepare_direct(10_000).map_err(|_| "prepare")?;
+        assert!(w.g.take_events().is_empty(), "none before the OK_SEND");
+        w.g.relayed_direct(prepared.token, 77);
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::Relayed(id)] if *id == [9; 16]
+        ));
+        w.g.relayed_direct(prepared.token, 77);
+        assert!(w.g.take_events().is_empty(), "once");
+        Ok(())
+    })
+}
+
+/// SE-190 (M7-C2): `Delivered(msg_id)` is raised when the `Receipt{delivered}` for a message of ours is committed — not
+/// when the cell failed to commit, and once.
+#[cfg(feature = "kat")]
+#[test]
+fn delivered_event_after_receipt_commit() -> R {
+    big(|| {
+        let mut w = established("se190", 43)?;
+        w.h.set_send_receipts(true);
+        w.g.outbox_mut().enqueue(text(5, 12), 0);
+        let prepared = w.g.prepare_direct(10_000).map_err(|_| "prepare")?;
+        w.g.relayed_direct(prepared.token, 77);
+        w.g.take_events();
+        deliver(&mut w.h, &prepared.cell)?;
+        let receipt = next(&mut w.h, 11_000)?;
+        // the receive transaction fails: nothing is committed, nothing raised; the cell comes again
+        secmp_store::kat::fail_at(secmp_store::kat::FailAt(1));
+        assert!(w.g.deliver_direct(&receipt).is_err());
+        assert!(w.g.take_events().is_empty(), "none before the commit");
+        deliver(&mut w.g, &receipt)?;
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::Delivered(id)] if *id == [5; 16]
+        ));
+        // the cells after it (dummies): no second event
+        let again = next(&mut w.h, 12_000)?;
+        deliver(&mut w.g, &again)?;
+        assert!(w.g.take_events().is_empty(), "once");
+        Ok(())
+    })
+}
+
+/// SE-191 (M7-C2; Q222 (2)): `KeyChangeSent` is raised by the `OK_SEND` that settles the `KeyChange` content — the last of
+/// its cells — once; the `OK_SEND` of a dummy raises nothing.
+#[cfg(feature = "kat")]
+#[test]
+fn key_change_sent_at_ok_send() -> R {
+    big(|| {
+        let mut w = established("se191", 47)?;
+        let rotation = w
+            .host
+            .profile
+            .rotate_identity(&[1], &w.host.clock, &mut entropy(48))?;
+        let body = rotation.key_changes.into_iter().next().ok_or("body")?;
+        w.h.queue_key_change(body).map_err(|_| "queue")?;
+        let mut sent_at = None;
+        for i in 0_u64..8 {
+            let prepared =
+                w.h.prepare_direct(30_000_u64.saturating_add(i.saturating_mul(1_000)))
+                    .map_err(|_| "prepare")?;
+            w.h.relayed_direct(prepared.token, i.saturating_add(100));
+            let events = w.h.take_events();
+            match events.as_slice() {
+                [] => {}
+                [SessionEvent::KeyChangeSent] => {
+                    assert!(sent_at.is_none(), "once");
+                    sent_at = Some(i);
+                }
+                _ => return Err("an unexpected event".into()),
+            }
+        }
+        let at = sent_at.ok_or("never raised")?;
+        assert!(at >= 1, "a KeyChange is fragmented: not at its first cell");
+        Ok(())
+    })
+}
+
 /// SE-186 (RJ, Q280; CLAUDE.md §1.8): the journal row is `6 ‖ RouteUpdateBody` of exactly the first `RelayQueue` route of
 /// the received routes — 157 bytes without a direct endpoint, at most 446 with one — and decodes strictly: it round-trips
 /// and `control_row_of` gives it as a journal entry with that body; routes without a `RelayQueue` route make no row; a

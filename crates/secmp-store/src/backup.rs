@@ -128,23 +128,23 @@ pub fn export(
     confirm: bool,
     force: bool,
 ) -> Result<()> {
-    export_checked(
-        store,
-        path,
-        passphrase,
-        (confirm, force),
-        Argon2Params::PROFILE,
-    )
+    snapshot(store, confirm, force, path)?.write(passphrase, Argon2Params::PROFILE)
 }
 
-/// [`export`] with `params`: the confirmation and the cloud-folder refusal, then the file.
-fn export_checked(
-    store: &Store,
-    path: &Path,
-    passphrase: &[u8],
-    (confirm, force): (bool, bool),
-    params: Argon2Params,
-) -> Result<()> {
+/// What an export has read from the store: the checked target and the sections of the body. It holds no store, so the key
+/// derivation and the file write ([`Snapshot::write`], seconds) can run where the store's lock is not held.
+pub struct Snapshot {
+    target: std::path::PathBuf,
+    table: Vec<(u8, u32)>,
+    body: Zeroizing<Vec<u8>>,
+}
+
+/// The confirmation and the cloud-folder refusal, the check that `path` does not exist, then the rows of `store` into
+/// buffers (milliseconds; no key derivation).
+///
+/// # Errors
+/// As [`export`], but no file is written.
+pub fn snapshot(store: &Store, confirm: bool, force: bool, path: &Path) -> Result<Snapshot> {
     if !confirm {
         return Err(Error::ConfirmRequired);
     }
@@ -156,8 +156,44 @@ fn export_checked(
     if std::fs::symlink_metadata(&target).is_ok() {
         return Err(Error::Unavailable);
     }
-    let bytes = export_bytes(store, passphrase, params)?;
-    write_new(&target, &bytes)
+    let sections = Contents::of(store)?.encode()?;
+    let mut table = Vec::with_capacity(4);
+    for (tag, s) in TAGS.iter().zip(&sections) {
+        table.push((*tag, len_u32(s.len())?));
+    }
+    let mut body = Zeroizing::new(Vec::new());
+    for s in &sections {
+        body.extend_from_slice(s);
+    }
+    Ok(Snapshot {
+        target,
+        table,
+        body,
+    })
+}
+
+/// A test hook (feature `kat`): while set, [`Snapshot::write`] waits on this barrier before it derives the key.
+#[cfg(feature = "kat")]
+pub static WRITE_BARRIER: std::sync::Mutex<Option<std::sync::Arc<std::sync::Barrier>>> =
+    std::sync::Mutex::new(None);
+
+impl Snapshot {
+    /// Derive the key from `passphrase` with `params`, seal the body and create the file (`0600`, never over an existing
+    /// one).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the file exists or cannot be written, or the randomness fails.
+    pub fn write(self, passphrase: &[u8], params: Argon2Params) -> Result<()> {
+        #[cfg(feature = "kat")]
+        {
+            let barrier = WRITE_BARRIER.lock().ok().and_then(|mut b| b.take());
+            if let Some(barrier) = barrier {
+                barrier.wait();
+            }
+        }
+        let bytes = seal_file(passphrase, params, &self.table, &self.body)?;
+        write_new(&self.target, &bytes)
+    }
 }
 
 /// `path` with its parent canonicalised (symbolic links and `..` resolved; a relative path against the current
@@ -452,20 +488,6 @@ fn seal_file(
     Ok([&MAGIC[..], &header, &n, &sealed].concat())
 }
 
-/// The backup file of `store` under `passphrase` with `params`.
-fn export_bytes(store: &Store, passphrase: &[u8], params: Argon2Params) -> Result<Vec<u8>> {
-    let sections = Contents::of(store)?.encode()?;
-    let mut table = Vec::with_capacity(4);
-    for (tag, s) in TAGS.iter().zip(&sections) {
-        table.push((*tag, len_u32(s.len())?));
-    }
-    let mut body = Zeroizing::new(Vec::new());
-    for s in &sections {
-        body.extend_from_slice(s);
-    }
-    seal_file(passphrase, params, &table, &body)
-}
-
 /// Write the backup file of `store` to `path` with `params` (feature `kat`: the small parameters of the test rows; the
 /// export confirmation and the cloud-folder refusal are [`export`]'s).
 ///
@@ -479,7 +501,7 @@ pub fn export_kat(
     passphrase: &[u8],
     params: Argon2Params,
 ) -> Result<()> {
-    export_checked(store, path, passphrase, (true, true), params)
+    snapshot(store, true, true, path)?.write(passphrase, params)
 }
 
 /// The fields of a backup file that the byte checks accepted.

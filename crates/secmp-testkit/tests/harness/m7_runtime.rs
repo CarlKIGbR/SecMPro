@@ -52,3 +52,45 @@ fn export_through_call_core_is_refused() {
         serving.await.unwrap();
     });
 }
+
+/// B0 (CLAUDE.md §1.4; M7-C2): a call that takes seconds (the `kat` hook holds the next `Core::handle` for 3 s) runs as a hub
+/// job on the blocking pool: the loop keeps running chunks meanwhile (the `kat` chunk counter advances at least twice), and
+/// the call is answered after the hold.
+#[test]
+fn loop_keeps_running_during_a_slow_call() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use secmp_client_core::api::runtime::hooks;
+
+    let root = std::env::temp_dir().join(format!("secmp-m7-slow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("profile");
+    std::fs::create_dir_all(&dir).unwrap();
+    create_profile(&dir, b"correct horse", None).unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, async {
+        let cfg = RuntimeConfig {
+            direct: true,
+            name: "m7-slow".to_owned(),
+        };
+        let (client, serve) = start(&dir, b"correct horse", cfg).unwrap();
+        let serving = tokio::task::spawn_local(serve.run());
+        let before = hooks::CHUNKS.load(Ordering::SeqCst);
+        hooks::HOLD_HANDLE_MS.store(3_000, Ordering::SeqCst);
+        let started = Instant::now();
+        let answer = client.call(Call::Core(Request::Contacts)).await;
+        let took = started.elapsed();
+        assert!(matches!(answer, Ok(Answer::Core(_))));
+        assert!(took >= Duration::from_secs(3), "{took:?}");
+        let chunks = hooks::CHUNKS.load(Ordering::SeqCst).saturating_sub(before);
+        assert!(chunks >= 2, "{chunks} chunks ran during the call");
+        let closed = client.call(Call::Quit).await;
+        assert!(matches!(closed, Ok(Answer::Closed)));
+        serving.await.unwrap();
+    });
+}

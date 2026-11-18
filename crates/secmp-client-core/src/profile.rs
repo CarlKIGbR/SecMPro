@@ -461,8 +461,18 @@ impl Profile {
         let (keys, section) = IdentityKeys::generate_with_section(entropy)?;
         let mut key_changes = Vec::with_capacity(sessions.len());
         let mut rows = Vec::with_capacity(sessions.len());
+        // one signed message for every contact (spec §7.6): signed once, cloned per session (a ML-DSA signature per contact
+        // would cost seconds of the hub's lock at many contacts)
+        let signed = if sessions.is_empty() {
+            None
+        } else {
+            Some(secmp_proto::tr::content::key_change_body(
+                &old,
+                keys.public(),
+            )?)
+        };
         for _ in sessions {
-            let body = secmp_proto::tr::content::key_change_body(&old, keys.public())?;
+            let body = signed.clone().ok_or(Error::Unavailable)?;
             let pending = PendingControl::KeyChange(body);
             rows.push(pending.encode().map_err(|_| Error::Unavailable)?);
             if let PendingControl::KeyChange(body) = pending {
@@ -695,6 +705,35 @@ mod tests {
             gone.ops.first().map(|o| o.when),
             Some(crate::scheduler::control::When::AfterEmptyFetch(_))
         ));
+    }
+
+    /// M7-C2 (B0; spec §7.6): `Profile::rotate_identity` with three contacts signs its `KeyChange` once: the three bodies
+    /// are byte-equal.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn rotation_signs_once() -> R {
+        use crate::sessions::tests::{big, connect, party};
+        use crate::testutil::entropy;
+        use secmp_proto::Encode as _;
+
+        big(|| {
+            let host = party("rs-h", 71)?;
+            for (n, seed) in [(73_u64, 100_u64), (75, 200), (77, 300)] {
+                let guest = party(&format!("rs-g{n}"), n)?;
+                connect(&host, &guest, seed)?;
+            }
+            let rotation =
+                host.profile
+                    .rotate_identity(&[1, 2, 3], &host.clock, &mut entropy(310))?;
+            let bodies: Vec<_> = rotation
+                .key_changes
+                .iter()
+                .map(|b| b.encode().map(|v| v.to_vec()))
+                .collect::<Result<_, _>>()?;
+            assert_eq!(bodies.len(), 3);
+            assert!(bodies.iter().all(|b| Some(b) == bodies.first()));
+            Ok(())
+        })
     }
 
     /// SE-09 [O-28] (§7.7; §7.6 `docs/03:503`; Q164, D-B5): `Profile::rotate_identity` with two contacts gives a new

@@ -603,6 +603,12 @@ pub enum SessionEvent {
     /// or more are pending; raised once until no `KeyChange` is left. It changes nothing: no timeout, no skip, no
     /// re-invitation (owner-reserved, ADR-060 (7)).
     SuccessionPending,
+    /// The last cell of a real message had its `OK_SEND` (M7-C2): the relay holds it.
+    Relayed(MsgId),
+    /// A `Receipt{delivered}` for a message of ours was committed (M7-C2).
+    Delivered(MsgId),
+    /// The `OK_SEND` that settles the `KeyChange` content towards this contact (M7-C2, Q222 (2)).
+    KeyChangeSent,
 }
 
 /// Why real content is refused at the one send entry ([`Conversation::may_send_real`]).
@@ -2250,18 +2256,25 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 self.relayed_cells.remove(id);
                 self.outbox.relayed(id, cell_id);
                 self.relayed_at.insert(*id, self.last_now_ms);
+                self.events.push(SessionEvent::Relayed(*id));
             }
         }
         // a cell of the current attempt of a control content: done once all its cells have their `OK_SEND` (Q222 (2));
         // a superseded attempt counts nothing
+        let mut key_change_settled = false;
         if let Owner::Control(r) = &sent.owner
             && let Some(e) = self.controls.get_mut(&r.id)
             && e.attempt == r.attempt
         {
             e.relayed = e.relayed.saturating_add(1);
-            if e.relayed >= e.total {
+            if e.relayed >= e.total && !e.done {
                 e.done = true;
+                // the row is `tag ‖ body`; tag 3 is a `KeyChange` (see `PendingControl`)
+                key_change_settled = e.row.first() == Some(&3);
             }
+        }
+        if key_change_settled {
+            self.events.push(SessionEvent::KeyChangeSent);
         }
         self.by_cell.insert(cell_id, sent);
         // an evicted id is always among the newest `QUEUE_CAPACITY`: older entries are dead weight
@@ -2462,8 +2475,19 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             Delivery::Receipt(body) => {
                 // durable already (in the receive commit); only the in-memory view follows
                 for id in &body.msg_ids {
+                    // a message of ours that was not delivered yet: once (a repeated receipt, a stranger's id: nothing)
+                    let ours = matches!(
+                        self.outbox.state(id),
+                        Some(
+                            crate::scheduler::outbox::MsgState::Queued
+                                | crate::scheduler::outbox::MsgState::Relayed(_)
+                        )
+                    );
                     self.outbox.delivered_committed(id);
                     self.relayed_at.remove(id);
+                    if ours {
+                        self.events.push(SessionEvent::Delivered(*id));
+                    }
                 }
             }
             Delivery::Routes(rs) => {

@@ -16,7 +16,7 @@
 //! scheduler's own delayed `QUEUE_NEW` (spec §10.6 (2), (3)), their seeds made durable by [`Hub::pool_material`] before the
 //! request leaves; an invitation or a rotation hands a named spare out ([`Action::TakeSpare`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -78,6 +78,20 @@ pub enum Call {
         /// The URI (a secret).
         uri: Zeroizing<String>,
     },
+    /// Write the backup file (CS-3.5): the rows are read on the loop, the key derivation and the file are written off it
+    /// (`Call::Core(Request::Export)` stays refused, [`admitted`]).
+    Export {
+        /// The file to create.
+        path: std::path::PathBuf,
+        /// The backup passphrase (a secret).
+        passphrase: Zeroizing<Vec<u8>>,
+        /// The user's confirmation (CS-3.5).
+        confirm: bool,
+        /// Also into a cloud-synchronised folder.
+        force: bool,
+    },
+    /// The runtime's own numbers ([`StatusView`]).
+    Status,
     /// Shut the runtime down.
     Quit,
 }
@@ -89,6 +103,8 @@ impl core::fmt::Debug for Call {
             Self::Core(_) => "Core",
             Self::InviteCreate { .. } => "InviteCreate",
             Self::InviteAccept { .. } => "InviteAccept",
+            Self::Export { .. } => "Export",
+            Self::Status => "Status",
             Self::Quit => "Quit",
         })
     }
@@ -109,8 +125,25 @@ pub enum Answer {
     /// The pool has no spare queue (spec §10.6 (3)): the first spares of a profile are created at random times after its
     /// first open, so an invitation has to wait for them.
     PoolEmpty,
+    /// The runtime's numbers.
+    Status(StatusView),
     /// The runtime has shut down.
     Closed,
+}
+
+/// What `Call::Status` answers: the numbers of the runtime (no id, no key).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatusView {
+    /// The scheduler's effective mode.
+    pub mode: Mode,
+    /// Direct TLS instead of Tor.
+    pub direct: bool,
+    /// The links the scheduler holds (at the start of the call's job).
+    pub links: usize,
+    /// The contacts.
+    pub contacts: usize,
+    /// The spare queues of the pool.
+    pub spares: usize,
 }
 
 impl core::fmt::Debug for Answer {
@@ -121,6 +154,7 @@ impl core::fmt::Debug for Answer {
             Self::Invitation { .. } => "Invitation",
             Self::Accepting => "Accepting",
             Self::PoolEmpty => "PoolEmpty",
+            Self::Status(_) => "Status",
             Self::Closed => "Closed",
         })
     }
@@ -331,6 +365,48 @@ pub fn create_profile(dir: &Path, passphrase: &[u8], relay: Option<&str>) -> Res
         profile.add_relay(&relay, &access)?;
     }
     Ok(())
+}
+
+/// The contacts of the profile in `dir`, offline (no runtime, no network): the profile is opened and closed.
+///
+/// # Errors
+/// [`Error::Unlock`] for a wrong passphrase; [`Error::Unavailable`] for a profile that does not open or one another process
+/// holds.
+pub fn list_contacts(
+    dir: &Path,
+    passphrase: &[u8],
+) -> Result<Vec<crate::contacts::Contact>, Error> {
+    let mut core = Core::open(dir, passphrase, SystemClock::new(), OsSource::default)?;
+    match core.handle(Request::Contacts)? {
+        Response::Contacts(contacts) => Ok(contacts),
+        _ => Err(Error::Unavailable),
+    }
+}
+
+/// Restore the backup file `backup` into a new profile in `dir` under `passphrase` (CS-3.5; [`Core::restore`]); returns the
+/// number of contacts it holds, each to be invited again.
+///
+/// # Errors
+/// As [`Core::restore`].
+pub fn import_profile(
+    dir: &Path,
+    passphrase: &[u8],
+    backup: &Path,
+    backup_passphrase: &[u8],
+) -> Result<usize, Error> {
+    let mut core = Core::restore(
+        dir,
+        passphrase,
+        backup,
+        backup_passphrase,
+        SystemClock::new(),
+        OsSource::default,
+    )?;
+    // the restored contacts have no session: they are the store's contacts, not the core's index
+    match core.handle(Request::Contacts)? {
+        Response::Contacts(contacts) => Ok(contacts.len()),
+        _ => Err(Error::Unavailable),
+    }
 }
 
 // ---- the parts ----------------------------------------------------------------------------------------------------------
@@ -590,42 +666,217 @@ struct Engine<P: Providers> {
     notices: mpsc::UnboundedSender<Notice>,
     consuming: Arc<Mutex<BTreeMap<u32, Id>>>,
     known: BTreeSet<i64>,
+    direct: bool,
     takes: Vec<Take>,
 }
 
 /// What the hub and the core ask of the scheduler after a visit.
+#[derive(Default)]
 struct Visit {
     actions: Vec<Action>,
     ops: Vec<crate::scheduler::control::OpSpec>,
 }
 
+/// One visit to the hub (under its lock): what the sessions delivered, time, new contacts, and what it asks for.
+fn visit_hub(
+    hub: &mut RtHub,
+    now: u64,
+    known: &mut BTreeSet<i64>,
+    notices: &mpsc::UnboundedSender<Notice>,
+) -> Visit {
+    if hub.pump().is_err() {
+        let _ = notices.send(Notice::Unavailable);
+    }
+    hub.tick(now);
+    // a contact that appeared (the invitee's accept, the inviter's accepted handshake) is announced once
+    let now_known: BTreeSet<i64> = hub.core().contact_ids().collect();
+    for id in now_known.difference(known) {
+        hub.core_mut().raise(Event::ContactAdded(ContactId(*id)));
+    }
+    *known = now_known;
+    let actions = hub.take_actions();
+    let ops = hub.core_mut().take_ops();
+    for event in hub.core_mut().take_events() {
+        let _ = notices.send(Notice::Event(event));
+    }
+    Visit { actions, ops }
+}
+
+/// What a hub job needs besides the hub: the scheduler's numbers at its start (the `Status` call), the accepts in progress
+/// and the stream of notices.
+struct JobCtx {
+    status: (Mode, bool, usize),
+    consuming: Arc<Mutex<BTreeMap<u32, Id>>>,
+    clock: TokioClock,
+    notices: mpsc::UnboundedSender<Notice>,
+}
+
+/// A hub job (B0): one visit, the calls in front of the queue that need only the hub, answered in order, and a second visit
+/// for what they raised. It runs on the blocking pool with the hub's lock held; the loop goes on with the schedule meanwhile
+/// and applies the result at a chunk boundary (CLAUDE.md §1.4).
+fn hub_job(
+    hub: &Mutex<RtHub>,
+    ctx: &JobCtx,
+    calls: Vec<Envelope>,
+    known: &mut BTreeSet<i64>,
+) -> Visit {
+    let Ok(mut hub) = hub.lock() else {
+        let _ = ctx.notices.send(Notice::Unavailable);
+        for (_, reply) in calls {
+            let _ = reply.send(Err(Error::Unavailable));
+        }
+        return Visit::default();
+    };
+    let mut visit = visit_hub(&mut hub, ctx.clock.mono_ms(), known, &ctx.notices);
+    if !calls.is_empty() {
+        for (call, reply) in calls {
+            let _ = reply.send(answer_hub(&mut hub, ctx, call));
+        }
+        let after = visit_hub(&mut hub, ctx.clock.mono_ms(), known, &ctx.notices);
+        visit.actions.extend(after.actions);
+        visit.ops.extend(after.ops);
+    }
+    visit
+}
+
+/// Whether a call is answered by a hub job; the others (`SetSettings`, `Export`, `Quit`) need the scheduler or the loop.
+const fn is_hub_call(call: &Call) -> bool {
+    match call {
+        Call::Core(Request::SetSettings(_)) | Call::Export { .. } | Call::Quit => false,
+        Call::Core(_) | Call::InviteCreate { .. } | Call::InviteAccept { .. } | Call::Status => {
+            true
+        }
+    }
+}
+
+/// One call of a hub job, under the hub's lock.
+fn answer_hub(hub: &mut RtHub, ctx: &JobCtx, call: Call) -> Result<Answer, Error> {
+    match call {
+        Call::Core(request) => {
+            if !admitted(&request) {
+                return Err(Error::Unsupported);
+            }
+            #[cfg(feature = "kat")]
+            hooks::hold_handle();
+            hub.core_mut().handle(request).map(Answer::Core)
+        }
+        Call::InviteCreate { expires_s } => {
+            if hub.spares()? == 0 {
+                return Ok(Answer::PoolEmpty);
+            }
+            let expires = hub.core().clock().unix_secs().saturating_add(expires_s);
+            let issued = hub.invite(expires)?;
+            Ok(Answer::Invitation { uri: issued.uri })
+        }
+        Call::InviteAccept { uri } => {
+            // a URI that does not parse is refused before anything else
+            crate::invitations::uri_link_data(&uri)?;
+            if hub.spares()? == 0 {
+                return Ok(Answer::PoolEmpty);
+            }
+            let (ld_id, n) = hub.begin_accept(&uri)?;
+            ctx.consuming
+                .lock()
+                .map_err(|_| Error::Unavailable)?
+                .insert(n, ld_id);
+            Ok(Answer::Accepting)
+        }
+        Call::Status => {
+            let (mode, direct, links) = ctx.status;
+            Ok(Answer::Status(StatusView {
+                mode,
+                direct,
+                links,
+                contacts: hub.core().contact_ids().count(),
+                spares: hub.spares()?,
+            }))
+        }
+        Call::Export { .. } | Call::Quit => Err(Error::Unsupported),
+    }
+}
+
+/// What the loop is waiting for: the hub job on the blocking pool.
+type Job = tokio::task::JoinHandle<(Visit, BTreeSet<i64>)>;
+
 impl<P: Providers> Engine<P> {
-    /// One visit to the hub under its lock: what the sessions delivered, time, new contacts, and what it asks for.
+    /// One visit to the hub on the loop (the start and the end, when no job runs).
     fn visit(&mut self) -> Visit {
         let now = self.clock.mono_ms();
         let Ok(mut hub) = self.hub.0.lock() else {
             let _ = self.notices.send(Notice::Unavailable);
-            return Visit {
-                actions: Vec::new(),
-                ops: Vec::new(),
-            };
+            return Visit::default();
         };
-        if hub.pump().is_err() {
-            let _ = self.notices.send(Notice::Unavailable);
+        visit_hub(&mut hub, now, &mut self.known, &self.notices)
+    }
+
+    /// Start the hub job: the calls at the front of `pending` that need only the hub go with it, in their order.
+    fn start_job(&mut self, pending: &mut VecDeque<Envelope>) -> Job {
+        let mut calls = Vec::new();
+        while pending.front().is_some_and(|(call, _)| is_hub_call(call)) {
+            calls.extend(pending.pop_front());
         }
-        hub.tick(now);
-        // a contact that appeared (the invitee's accept, the inviter's accepted handshake) is announced once
-        let now_known: BTreeSet<i64> = hub.core().contact_ids().collect();
-        for id in now_known.difference(&self.known) {
-            hub.core_mut().raise(Event::ContactAdded(ContactId(*id)));
+        let ctx = JobCtx {
+            status: (
+                self.sched.effective_mode(),
+                self.direct,
+                self.sched.links().len(),
+            ),
+            consuming: Arc::clone(&self.consuming),
+            clock: self.clock,
+            notices: self.notices.clone(),
+        };
+        let hub = Arc::clone(&self.hub.0);
+        let mut known = self.known.clone();
+        tokio::task::spawn_blocking(move || {
+            let visit = hub_job(&hub, &ctx, calls, &mut known);
+            (visit, known)
+        })
+    }
+
+    /// A finished job: what it saw is applied; a job that panicked leaves `known` as it was.
+    fn finish_job(&mut self, done: Result<(Visit, BTreeSet<i64>), tokio::task::JoinError>) {
+        match done {
+            Ok((visit, known)) => {
+                self.known = known;
+                self.apply(visit);
+            }
+            Err(_) => {
+                let _ = self.notices.send(Notice::Unavailable);
+            }
         }
-        self.known = now_known;
-        let actions = hub.take_actions();
-        let ops = hub.core_mut().take_ops();
-        for event in hub.core_mut().take_events() {
-            let _ = self.notices.send(Notice::Event(event));
-        }
-        Visit { actions, ops }
+    }
+
+    /// An export: the rows under the store's lock, here; the key derivation and the file on the blocking pool; the reply from
+    /// a task of its own, so the loop goes on (CLAUDE.md §1.4).
+    fn export(
+        &mut self,
+        (path, passphrase, confirm, force): (std::path::PathBuf, Zeroizing<Vec<u8>>, bool, bool),
+        reply: oneshot::Sender<Result<Answer, Error>>,
+    ) {
+        let snapshot = self
+            .hub
+            .0
+            .lock()
+            .map_err(|_| Error::Unavailable)
+            .and_then(|hub| hub.core().export_snapshot(confirm, force, &path));
+        let snapshot = match snapshot {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let write = tokio::task::spawn_blocking(move || {
+            snapshot.write(&passphrase, secmp_store::wrap::Argon2Params::PROFILE)
+        });
+        tokio::spawn(async move {
+            let answer = match write.await {
+                Ok(Ok(())) => Ok(Answer::Core(Response::Done)),
+                Ok(Err(e)) => Err(Error::from(e)),
+                Err(_) => Err(Error::Unavailable),
+            };
+            let _ = reply.send(answer);
+        });
     }
 
     fn apply(&mut self, visit: Visit) {
@@ -748,45 +999,42 @@ impl<P: Providers> Engine<P> {
         Ok(Answer::Core(Response::Done))
     }
 
-    /// One call, under the hub's lock.
-    fn answer(&mut self, call: Call) -> Result<Answer, Error> {
-        if let Call::Core(request) = &call
-            && !admitted(request)
-        {
-            return Err(Error::Unsupported);
-        }
-        if let Call::Core(Request::SetSettings(new)) = call {
-            return self.set_settings(new);
-        }
-        let mut hub = self.hub.0.lock().map_err(|_| Error::Unavailable)?;
-        match call {
-            Call::Core(request) => hub.core_mut().handle(request).map(Answer::Core),
-            Call::InviteCreate { expires_s } => {
-                if hub.spares()? == 0 {
-                    return Ok(Answer::PoolEmpty);
+    /// The calls that are not a hub job's, at the front of `pending`, in their order: a mode change (the scheduler), an export
+    /// (its snapshot, then the blocking pool). `Some` for a `Quit`, the reply to send after the shutdown.
+    fn loop_calls(
+        &mut self,
+        pending: &mut VecDeque<Envelope>,
+    ) -> Option<oneshot::Sender<Result<Answer, Error>>> {
+        while pending.front().is_some_and(|(call, _)| !is_hub_call(call)) {
+            let (call, reply) = pending.pop_front()?;
+            match call {
+                Call::Quit => return Some(reply),
+                Call::Export {
+                    path,
+                    passphrase,
+                    confirm,
+                    force,
+                } => self.export((path, passphrase, confirm, force), reply),
+                Call::Core(Request::SetSettings(new)) => {
+                    let _ = reply.send(self.set_settings(new));
                 }
-                let expires = hub.core().clock().unix_secs().saturating_add(expires_s);
-                let issued = hub.invite(expires)?;
-                Ok(Answer::Invitation { uri: issued.uri })
-            }
-            Call::InviteAccept { uri } => {
-                // a URI that does not parse is refused before anything else
-                crate::invitations::uri_link_data(&uri)?;
-                if hub.spares()? == 0 {
-                    return Ok(Answer::PoolEmpty);
+                Call::Core(_)
+                | Call::InviteCreate { .. }
+                | Call::InviteAccept { .. }
+                | Call::Status => {
+                    let _ = reply.send(Err(Error::Unsupported));
                 }
-                let (ld_id, n) = hub.begin_accept(&uri)?;
-                self.consuming
-                    .lock()
-                    .map_err(|_| Error::Unavailable)?
-                    .insert(n, ld_id);
-                Ok(Answer::Accepting)
             }
-            Call::Quit => Ok(Answer::Closed),
         }
+        None
     }
 
+    /// The loop keeps only the schedule: the driver in chunks, the actions and operations the hub asked for, the takes. What
+    /// needs the hub (`visit`, the calls) runs as one hub job at a time on the blocking pool while the chunks go on; its
+    /// result is applied at the next chunk boundary and the next job starts when a call or a visit is due (B0).
     async fn run(mut self) {
+        let mut pending: VecDeque<Envelope> = VecDeque::new();
+        let mut job: Option<Job> = None;
         loop {
             let until = self.clock.mono_ms().saturating_add(CHUNK_MS);
             if self.driver.run_until(&mut self.sched, until).await.is_err() {
@@ -794,31 +1042,60 @@ impl<P: Providers> Engine<P> {
                 let _ = self.notices.send(Notice::Stopped);
                 break;
             }
-            self.retry_takes();
-            let visit = self.visit();
-            self.apply(visit);
-            let mut quit = None;
-            while let Ok((call, reply)) = self.calls.try_recv() {
-                if matches!(call, Call::Quit) {
-                    quit = Some(reply);
+            #[cfg(feature = "kat")]
+            hooks::note_chunk();
+            while let Ok(envelope) = self.calls.try_recv() {
+                pending.push_back(envelope);
+            }
+            if job.as_ref().is_some_and(Job::is_finished)
+                && let Some(done) = job.take()
+            {
+                self.finish_job(done.await);
+            }
+            // work that takes the hub's lock on the loop waits for the job
+            if job.is_none() {
+                self.retry_takes();
+                if let Some(reply) = self.loop_calls(&mut pending) {
+                    let visit = self.visit();
+                    self.apply(visit);
+                    let _ = self.driver.shutdown(&mut self.sched);
+                    self.driver.release_unused();
+                    let _ = reply.send(Ok(Answer::Closed));
                     break;
                 }
-                let _ = reply.send(self.answer(call));
+                job = Some(self.start_job(&mut pending));
             }
-            let visit = self.visit();
-            self.apply(visit);
-            if let Some(reply) = quit {
-                let _ = self.driver.shutdown(&mut self.sched);
-                self.driver.release_unused();
-                let _ = reply.send(Ok(Answer::Closed));
-                break;
-            }
-            if self.calls.is_closed() {
+            if self.calls.is_closed() && pending.is_empty() {
+                if let Some(running) = job.take() {
+                    self.finish_job(running.await);
+                }
                 let _ = self.driver.shutdown(&mut self.sched);
                 self.driver.release_unused();
                 break;
             }
         }
+    }
+}
+
+/// Test hooks (feature `kat`): what the runtime tests of the testkit and of this crate observe or hold.
+#[cfg(feature = "kat")]
+pub mod hooks {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Milliseconds the next `Core::handle` of a call is held (taken by it; 0: none).
+    pub static HOLD_HANDLE_MS: AtomicU64 = AtomicU64::new(0);
+    /// The chunks the loop has run.
+    pub static CHUNKS: AtomicU64 = AtomicU64::new(0);
+
+    pub(super) fn hold_handle() {
+        let ms = HOLD_HANDLE_MS.swap(0, Ordering::SeqCst);
+        if ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
+    }
+
+    pub(super) fn note_chunk() {
+        CHUNKS.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -872,6 +1149,7 @@ fn engine<P: Providers>(
         notices,
         consuming,
         known: BTreeSet::new(),
+        direct,
         takes: Vec::new(),
     };
     {
@@ -1076,6 +1354,77 @@ mod tests {
         for (request, want) in &all {
             assert_eq!(admitted(request), *want, "{request:?}");
         }
+    }
+
+    /// M7-C2 (B; CLAUDE.md §1.4): `Call::Export` reads the rows on the loop and derives the key and writes the file off it —
+    /// while the write is held on a barrier (the `kat` hook of `Snapshot::write`) a `Call::Core(Request::Contacts)` is
+    /// answered; then the export completes: the file exists, `0600`.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn export_does_not_stall_the_loop() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::{Arc, Barrier};
+
+        let dir = secmp_store::kat::TempDir::new("rt-export")?;
+        let profile = dir.path().join("profile");
+        std::fs::create_dir_all(&profile)?;
+        create_profile(&profile, b"correct horse", None)?;
+        let target = dir.path().join("backup.smpb");
+        let barrier = Arc::new(Barrier::new(2));
+        *secmp_store::backup::WRITE_BARRIER
+            .lock()
+            .map_err(|_| "barrier")? = Some(Arc::clone(&barrier));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&runtime, async {
+            let cfg = RuntimeConfig {
+                direct: true,
+                name: "rt-export".to_owned(),
+            };
+            let (client, serve) = start(&profile, b"correct horse", cfg)?;
+            let serving = tokio::task::spawn_local(serve.run());
+            let caller = client.caller();
+            let path = target.clone();
+            let export = tokio::task::spawn_local(async move {
+                caller
+                    .call(Call::Export {
+                        path,
+                        passphrase: Zeroizing::new(b"backup horse".to_vec()),
+                        confirm: true,
+                        force: true,
+                    })
+                    .await
+            });
+            // the export is queued first
+            tokio::task::yield_now().await;
+            let contacts = client.call(Call::Core(Request::Contacts)).await;
+            assert!(
+                matches!(contacts, Ok(Answer::Core(_))),
+                "answered meanwhile"
+            );
+            assert!(!export.is_finished(), "the write is still held");
+            assert!(!target.exists());
+            // release the write
+            tokio::task::spawn_blocking(move || barrier.wait()).await?;
+            let done = export.await?;
+            assert!(matches!(done, Ok(Answer::Core(Response::Done))));
+            assert!(target.exists());
+            let closed = client.call(Call::Quit).await;
+            assert!(matches!(closed, Ok(Answer::Closed)));
+            serving.await?;
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&target)?.permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        Ok(())
     }
 
     /// M7-C1b (C1-4): the outcomes of a take; a spare still being created is retried however often it was asked.

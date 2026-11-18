@@ -20,7 +20,8 @@ use crate::persist::{SharedStore, StorePersist};
 use crate::profile::Profile;
 use crate::relay_view;
 pub use crate::runtime;
-use crate::scheduler::params::{Mode, Params};
+pub use crate::scheduler::params::Mode;
+use crate::scheduler::params::Params;
 use crate::scheduler::types::{QueueId, RelayId};
 use crate::sessions::actor::{Conversations, EntropySource, Refusal, SessionEvent};
 use crate::sessions::{self, StoreConversation};
@@ -193,6 +194,22 @@ pub enum Event {
     ContactAdded(ContactId),
     /// An invitation the user accepted was refused (spec §5.5; the class is shown, never logged).
     InviteFailed(InviteReject),
+    /// A real message was relayed (`OK_SEND` of its last cell, M7-C2).
+    Relayed {
+        /// The recipient.
+        contact: ContactId,
+        /// The message.
+        msg_id: [u8; 16],
+    },
+    /// A `Receipt{delivered}` for a message was committed (M7-C2).
+    Delivered {
+        /// The recipient.
+        contact: ContactId,
+        /// The message.
+        msg_id: [u8; 16],
+    },
+    /// The `KeyChange` towards the contact was relayed (the `OK_SEND` that settles it, M7-C2).
+    KeyChangeSent(ContactId),
 }
 
 impl core::fmt::Debug for Event {
@@ -214,6 +231,9 @@ impl core::fmt::Debug for Event {
             Self::SuccessionPending(_) => "SuccessionPending",
             Self::ContactAdded(_) => "ContactAdded",
             Self::InviteFailed(_) => "InviteFailed",
+            Self::Relayed { .. } => "Relayed",
+            Self::Delivered { .. } => "Delivered",
+            Self::KeyChangeSent(_) => "KeyChangeSent",
         })
     }
 }
@@ -766,7 +786,31 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 msg_id: *msg_id,
             },
             SessionEvent::SuccessionPending => Event::SuccessionPending(contact),
+            SessionEvent::Relayed(msg_id) => Event::Relayed {
+                contact,
+                msg_id: *msg_id,
+            },
+            SessionEvent::Delivered(msg_id) => Event::Delivered {
+                contact,
+                msg_id: *msg_id,
+            },
+            SessionEvent::KeyChangeSent => Event::KeyChangeSent(contact),
         })
+    }
+
+    /// The first half of an export (milliseconds, under the store's lock): the confirmation, the cloud-folder refusal and
+    /// the rows. The host runs [`secmp_store::backup::Snapshot::write`] elsewhere (M7-C2; CLAUDE.md §1.4).
+    ///
+    /// # Errors
+    /// As [`Request::Export`].
+    pub(crate) fn export_snapshot(
+        &self,
+        confirm: bool,
+        force: bool,
+        path: &std::path::Path,
+    ) -> Result<secmp_store::backup::Snapshot, Error> {
+        let store = self.store.lock().map_err(|_| Error::Unavailable)?;
+        Ok(secmp_store::backup::snapshot(&store, confirm, force, path)?)
     }
 
     /// Answer one request; the events it raised follow in [`Core::take_events`].

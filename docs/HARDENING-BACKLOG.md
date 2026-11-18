@@ -37,5 +37,8 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-31 | no limit on concurrent `Call::Export` through the API, each Argon2id at 256 MiB; the CLI is sequential | review C-2 (C2-4) | Open |
 | HB-32 | an export write can finish after `Closed` or `Stopped`; a `run_until` failure abandons the running hub job | review C-2 (C2-5) | Open |
 | HB-33 | `import` with a wrong passphrase, a corrupt file or a wrong version fails closed but leaves an empty profile in `<newdir>`; a retry answers `unavailable` | review C-2 (C2-6) | Open |
+| HB-34 | Backlog items still waiting at `Quit`, at the end of stdin or at a `run_until` failure are dropped without a notice; a restart rebuilds from the store. | review C-2f (C2f-2) | Open |
+| HB-35 | No engine-level test holds the hub lock across chunk boundaries while a `Remove`/`TakeSpare`, a waiting take and a mode-changing `SetSettings` are pending (C2-8 acceptance, §1.4); it needs `kat` injection of the private `Pending` items and a lock-holder hook in the engine. The unit tests SE-193…SE-195 cover the logic. | review C-2f | Open |
+| HB-36 | Windows, workspace nextest: `cli_it`'s `E2eRelay` rebuilds `target/<profile>/secmp-relay` with `direct-tls` only, while a concurrent `secmp-relay` test may run that file in place (`CARGO_BIN_EXE`). Not observed yet; fix by a copy as in Q288. | M7-C2g (Windows analysis) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

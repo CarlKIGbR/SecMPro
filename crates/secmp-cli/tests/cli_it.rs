@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //! TEST-SPEC-M7 (j) CL-01, CL-02, CL-03, CL-10, CL-11, CL-13: the `secmp-cli` binary as a process, `--direct` everywhere.
 //! The rows that need a relay run the real `secmp-relay` binary behind its direct TLS listener on 127.0.0.1

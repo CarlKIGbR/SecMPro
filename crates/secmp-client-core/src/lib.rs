@@ -9,7 +9,8 @@
 //! `secmp-sys-desktop`, `secmp-sys-mem`; an async runtime, added with an ADR.
 //!
 //! **Status.** M6 Phase A: [`clock`], [`timing`] and the sans-IO constant-rate [`scheduler`] with its `ControlOps`,
-//! `QueuePool` and `outbox` (in-memory behind traits). Contacts, sessions, invitations and the `Api` are M7.
+//! `QueuePool` and `outbox` (in-memory behind traits). Contacts, sessions, invitations and the `Api` are M7; since Phase C the
+//! [`runtime`] (re-exported as `api::runtime`) connects the hub, the tokio driver and the transport providers for a host.
 #![forbid(unsafe_code)]
 
 #[cfg(not(kani))]

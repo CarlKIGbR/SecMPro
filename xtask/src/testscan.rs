@@ -478,6 +478,40 @@ fn kat_argon2_params_only_with_kat() -> Result<()> {
     Ok(())
 }
 
+/// TEST-SPEC-M7 CL-12 (RT-2, R7-4, OPEN-M7-B-15; M7-C1): the shipped binaries — `secmp-cli` (since Phase C it links the
+/// client core, the store and Arti), `secmp-relay` and `secmp-ui` — are built without the test features: `cargo tree -e
+/// normal,features --target all` of each package alone (the normal edges are what a release build links; the features
+/// list is the feature set of that build) names no `kat` and no `harness` feature anywhere in the closure.
+#[cfg(test)]
+#[test]
+fn release_targets_have_no_kat() -> Result<()> {
+    for package in ["secmp-cli", "secmp-relay", "secmp-ui"] {
+        let tree = Cmd::cargo()
+            .args([
+                "tree",
+                "--locked",
+                "-e",
+                "normal,features",
+                "--target",
+                "all",
+                "-p",
+                package,
+            ])
+            .read()?;
+        assert!(
+            tree.lines().next().is_some_and(|l| l.starts_with(package)),
+            "{package}: the tree is of the package: {tree}"
+        );
+        for feature in ["kat", "harness"] {
+            assert!(
+                !tree.contains(&format!("feature \"{feature}\"")),
+                "{package} has the `{feature}` feature in a release build: {tree}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The names of the store and of its client-side implementations (`secmp-client-core/src/{persist,outbox}.rs`), as
 /// [`scheduler_sees_only_traits`] looks for them.
 #[cfg(test)]

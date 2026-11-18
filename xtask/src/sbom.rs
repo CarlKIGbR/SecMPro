@@ -100,6 +100,23 @@ pub(crate) fn embedded_findings(
     out
 }
 
+/// The arguments of `cargo audit` before the binary's path: warnings denied, JSON, and `--ignore <id>` for every
+/// `expect::AUDIT_IGNORES` entry (the same ids as the `audit` step), then `bin`. Since M7 Phase C `secmp-cli` links
+/// `secmp-client-core`, so `humantime` (RUSTSEC-2026-0542, ADR-051 Am. 10) is in the cli binary and would turn the scan red
+/// (OPEN-M7-B-14 A, pulled forward from M8).
+pub(crate) fn audit_bin_args() -> Vec<String> {
+    let mut args: Vec<String> = ["audit", "--deny", "warnings", "--json"]
+        .iter()
+        .map(|a| (*a).to_owned())
+        .collect();
+    for (id, _) in expect::AUDIT_IGNORES {
+        args.push("--ignore".to_owned());
+        args.push((*id).to_owned());
+    }
+    args.push("bin".to_owned());
+    args
+}
+
 pub(crate) fn run(root: &Path) -> Result<String> {
     tools::require(tools::CYCLONEDX)?;
     tools::require(tools::AUDITABLE)?;
@@ -161,7 +178,7 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .join("release")
             .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
         let audit = Cmd::cargo()
-            .args(["audit", "--deny", "warnings", "--json", "bin"])
+            .args(audit_bin_args())
             .arg(exe.to_string_lossy())
             .capture()?;
         if !audit.success {
@@ -192,6 +209,26 @@ pub(crate) fn run(root: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OPEN-M7-B-14 A (M7-C1): `cargo audit bin` is told to ignore exactly the ids of `expect::AUDIT_IGNORES`, each after its
+    /// own `--ignore`, and before `bin` (they are options of `cargo audit`, not of its subcommand).
+    #[test]
+    fn audit_bin_ignores_the_audit_ignores() {
+        let args = audit_bin_args();
+        assert_eq!(args.last().map(String::as_str), Some("bin"));
+        let ignored: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w.first().map(String::as_str) == Some("--ignore"))
+            .filter_map(|w| w.get(1).map(String::as_str))
+            .collect();
+        let want: Vec<&str> = expect::AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ignored, want);
+        assert!(ignored.contains(&"RUSTSEC-2026-0542"));
+        assert_eq!(
+            args.iter().take(4).map(String::as_str).collect::<Vec<_>>(),
+            ["audit", "--deny", "warnings", "--json"]
+        );
+    }
 
     /// OPEN-M6-C1-3: a binary of the nested plain `cargo build --release -p secmp-relay` carries no audit data; `cargo audit
     /// bin` recovered 4 packages from it (container, 2026-10-22), said so on stderr and exited 0. Both signs are findings.

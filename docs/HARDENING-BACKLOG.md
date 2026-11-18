@@ -49,5 +49,8 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-43 | `secmp-relay ref` has no refusal tests for a 56-character lower-case onion with a wrong checksum or version byte, a bad `--direct` host or port, or a non-DER certificate. | M7-C2b review (C2b-4) | Open |
 | HB-44 | FO-01a/FO-02 run without Tor: `<profile>/tor` is never populated in the virtual run, so its contents are not scanned; a scan after a real Arti bootstrap needs network (E2-07, owner). | M7-C4 (Q292) | Open |
 | HB-45 | FO-01a's message-key canaries are `KDF_CK(ck)` of the chain keys read before each slot (mostly the keys then used), not a record of the last 16 sealing keys; an exact ring needs a kat accessor in the session actor. | M7-C4 (Q292) | Open |
+| HB-46 | `TokioClock` derives Unix time from the monotonic clock (`unix_origin` read once in `runtime::start` + elapsed seconds, `clock.rs`); across a suspend the client's Unix time lags real time by the suspend until the next `open` (handshake times, expiries). Accepted for the alpha; re-anchor on resume in hardening. | M7 Phase C plan R7 (M7-C5) | Open |
+| HB-47 | E2-10 (`ks_cli`) sees the CLI host at a TCP proxy (TLS not opened): AI-07's 4 352 B-unit and frames-per-departure checks are not repeated for it; box run only, no dispatch job (owner). | M7-C5 (Q293) | Open |
+| HB-48 | A non-point onion key is refused only at a Tor connect (`tor::target`): `secmp-relay ref --onion`, `runtime::read_relay_ref` and an accepted invitation take it, and direct mode never checks it. | M7-C5 (Q293) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

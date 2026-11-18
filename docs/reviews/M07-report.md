@@ -2274,3 +2274,112 @@ Change (test code only, one function): `built = Instant::now()` first; `started`
 Gates: fmt OK; clippy `-p secmp-testkit --all-targets --features kat,harness` OK; `step --strict policy` PASS; source scans 14/14 (`m6_driver::`/`m6_scan`) and the six C-4 scan tests 6/6; no `SystemTime::now` in `m7_e2e.rs`; smoke PASS in 156.7 s (`relay and cli built` at 0.6 s, `both open` at 33.1 s).
 
 **ci-fast (head `31fa525`).** PASS: workspace nextest 1640/1640, harness 327/327 (harness step 1850 s), `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c4b-ci-fast.txt`.
+
+## C-5 (BRIEF M7-C5; modell=claude-sonnet-5-5)
+
+Commits: K1 `4d48819` `fix(transport)` (`tor/mod.rs` +79/−4, `tests/tor/main.rs` +5/−5, `m6_tor.rs` +2, fuzz target +8/−2); K1b `fbf566e` `test(e2e)` (`m7_e2e.rs` +33/−5); K2 `f176553` `test(e2e)` (`ks_cli.rs` new, 645 lines (the brief said ≈ 300; rustfmt and the doc comment on every item made it longer), `e2e.rs` +27, `Cargo.toml` +5); K3 `b9644b5` evidence (`docs/reviews/M07-evidence/e2e-10-f176553.txt`); K4 docs (this section, Q293, HB-46…HB-48, `docs/07` status line); K5 evidence (`c5-ci-fast.txt`).
+
+**Rows → tests.**
+
+| Row | Test or evidence |
+|---|---|
+| C-T1 (OPEN-M7-22 A) | `tor::tests::onion_key_must_be_a_point` (T-01/T-02 unchanged and green) |
+| E2-10 | example `crates/secmp-testkit/examples/ks_cli.rs`; evidence `docs/reviews/M07-evidence/e2e-10-f176553.txt` |
+
+**Product change (the only one).** `tor::target` (`crates/secmp-transport/src/tor/mod.rs`, +10 lines of code and doc): before `onion_host`, the first 32 bytes of the onion must import through `secmp_crypto::Ed25519VerifyingKey::from_bytes` (spec §3.5: canonical, on the curve, not of small order), else `Error::Invalid`; `TorProvider::connect` returns that before `backend.connect`. The `# Errors` line of `target` names both refusals; the doc of `onion_host` points at `target` instead of the old "fix in M7" note. The test counts connects with an in-memory backend: T-01's real address passes; 32 × 0x42 (not a point), 32 × 0xff (not canonical) and 32 × 0x00 (small order) are `Invalid` in `target` and in `connect`, with the backend called 0 times; the good address then connects once.
+
+**Fixtures and fuzz target.** `tests/tor/main.rs`: TOR-02 0x42 → 0x09, TOR-03 0x43 → 0x0a, TOR-09 {0x42, 0x43, 0x44} → {0x09, 0x0a, 0x0b}, TOR-05 half 0x45 → 0x0c (large-order points; TOR-08 uses `onion_host` only and is unchanged). `m6_tor::relay()` sets MemRelay's onion to 32 × 0x33 (a point). FZ-03's `relayref_onion_to_hsid` asserts `tor::target(..).is_ok()` iff the first 32 bytes import as an Ed25519 public key, then goes on with the unchanged asserts; corpus, `fuzz/Cargo.toml` and pins unchanged. Fuzz run: `cargo fuzz run … relayref_onion_to_hsid … -max_total_time=60 -max_len=36`: 1 941 239 runs in 61 s, no crash; `git status --porcelain fuzz` shows only the target file (K1).
+
+**C-3 review carry-over (test-only, `m7_e2e.rs`; N = 40, deadlines and assertions unchanged or stronger).**
+- C3-2: after FO-01's last scan a canary file holding alice's first text is planted in `<root>/fo-control` and the same `scan_dir` call must hit it (`needle == 0 && raw`). The test passed, so the control hit.
+- C3-1: `rotation_with_overlap` sends 5 more messages (`rotation-20`…`24`) after `RoutesChanged`, so on the new route, each required once; the loop waits for 25. Not "fewer than 20 seen at `RoutesChanged`": that depends on the link offsets U[0, 180 s] and could flake. Wall time 975.9 s (was 843.6 s, +132 s).
+- Item 5: `Side` carries `started`; `note` lines `kill point {i}: draining {n}`, `kill point {i}: reopened`, `alice drained`, `bob drained`. nextest does not show the stderr of passing tests, so the pre-run log does not contain them.
+- Pre-run `target/fable/report/c5-e2e.txt`, 6/6 in 1468.9 s: `cli_uses_no_wall_clock_for_schedule` 0.01 s, `smoke_invite_and_message_both_ways` 183.6 s, `two_profiles_invite_by_uri_sas_match` 262.3 s, `key_change_blocks_until_reverified` 345.8 s, `rotation_with_overlap` 975.9 s, `five_hundred_both_ways_with_restarts` 1468.9 s.
+
+**E2-10 (`ks_cli`).** Two release `secmp-cli open --direct` processes on one `secmp-relay` (direct TLS), each through its own recording TCP proxy (`E2eRelay::{direct_port, ref_path_via}`: same relay and SPKI pin at `127.0.0.1:<proxy port>`; TLS ends at the relay). 240 s settle after the invitation (> the 180 s link offset of §10.6 (1)), 1800 s idle with no stdin line, 1800 s active: per side 90 sends (60 steady, 3 bursts of 10; sizes 16 + 3r B from `EntropyPool::new("m7-e2e-10", 0)`), `status`, `contacts list`, `contacts sas` and three Argon2id `export`s (the R3 load). Time only as `Instant` elapsed since one `t0`. The KS method is `secmp_testkit::ks::{cut_at, gaps, two_sample}` on one read = one unit; the units are not opened (HB-47).
+
+Evidence text, in full (`docs/reviews/M07-evidence/e2e-10-f176553.txt`, box run 2026-11-18T14:17:19Z–15:44:12Z, 5213 s, exit status 0):
+
+```text
+ks-cli: idle 1800 s, active 1800 s, settle 240 s, 2 secmp-cli processes (Balanced, direct mode, spec §10.2), P = 10 s, each through its own recording TCP proxy (TLS end to end; one read is one unit); a departure is reads less than 100 ms apart; the trace is cut on departure boundaries at the end of the active phase
+link 2 (client 0): D = 0.055866, p = 0.936293, n_idle = 179, n_active = 179, median gap idle 10000 ms, active 10000 ms
+link 1002 (client 1): D = 0.044693, p = 0.992895, n_idle = 179, n_active = 179, median gap idle 10000 ms, active 10000 ms
+connection 2 (client 0): first 424578 ms, last 4014578 ms, 360 departures, 3149280 bytes
+connection 3 (client 0): first 2384554 ms, last 2384578 ms, 1 departures, 8763 bytes
+connection 4 (client 0): first 3285740 ms, last 3285761 ms, 1 departures, 8763 bytes
+connection 1002 (client 1): first 415527 ms, last 4005527 ms, 360 departures, 3149280 bytes
+connection 1003 (client 1): first 3042266 ms, last 3042280 ms, 1 departures, 8763 bytes
+client 0: sends 90, queued 90, received from the peer 90, calls 69, answered 69, errors [], exit Some(0)
+client 1: sends 90, queued 90, received from the peer 90, calls 69, answered 69, errors [], exit Some(0)
+reads analysed: 916, sha256 987e9589517bd0d8f9d21942a681b29571c9c97305d6b5e6cdd22aa9329dca03
+criterion (p >= 0.01 on exactly one link per client, no torn link: at most 3 departures on every other connection, every call answered and every message received, exits 0): MET
+```
+
+One link per client (the connection with 360 departures, one every 10 s over the 3 590 s from the idle start to the cut), p = 0.94 and 0.99; the other connections are one-departure control connections (8 763 B each; two of client 0, one of client 1; not identified further, the proxy sees no TLS content, HB-47); no torn link. Smoke (`ks_cli … smoke 60 60`): rc 3 (not judged), 523 s wall, one `link` line per client (p = 0.9996, n = 5/5), both `client` lines `queued == sends` (2), `answered == calls` (4), `received` 2, `errors []`, `exit Some(0)`. The first smoke attempt aborted in `E2eRelay::start` (a relative out-dir: the relay is started with its own directory as the working directory, so its relative binary path did not resolve); the example now makes the out-dir absolute (`std::path::absolute`); one fix, one re-run, as the brief allows.
+
+**Q293, HB-46…HB-48** added (`OPEN-M7-decided.md`, `HARDENING-BACKLOG.md`); `docs/07-milestones.md` status line updated. TEST-SPEC-M7 is not edited.
+
+**Scan gates before ci-fast.** `cargo fmt --all --check` OK; `cargo clippy --workspace --all-targets --all-features -- -D warnings` OK; `cargo xtask step --strict policy` PASS (490 SPDX files, 163 lint-allows all sanctioned, no build scripts); `cargo nextest run -p xtask` 330/330 (= XTASK_BASE); the 8 harness scan tests (`driver_has_no_wall_clock`, `scheduler_core_has_no_tokio`, `scheduler_reads_no_ui_state`, `tick_path_reads_no_outbox`, `outbox_is_the_store_boundary`, `cli_uses_no_wall_clock_for_schedule`, `m6_tor::*`) 8/8; `cargo nextest run -p secmp-transport --all-features` 53/53 (`tor::tests::` 6/6, the tor test binary 7/7); `cargo xtask step --strict fuzz-check` PASS; fuzz run as above; `Instant::now`/`SystemTime::now` in `secmp-client-core/src` and `secmp-transport/src` only in doc comments outside `clock.rs`; no seed/`SystemTime`/`set_var`/`mem::forget` token in `ks_cli.rs`, `e2e.rs`, `m7_e2e.rs`.
+
+**Deviations.** None from the spec. From the brief: the length of `ks_cli.rs` (above); the out-dir is made absolute (above).
+
+## Phase C close (M7-C5)
+
+**(1) Phase C rows.**
+
+| Row | Unit | Test or evidence | Status |
+|---|---|---|---|
+| CL-01 | C-1 | `cli_it::profile_new_and_open` | evidenced |
+| CL-02 | C-1 | `cli_it::invite_create_prints_uri` | evidenced |
+| CL-03 | C-1 | `cli_it::invite_accept_uri` | evidenced |
+| CL-04 | C-2 | `cli_it::contacts_list_and_verify` | evidenced |
+| CL-05 | C-2 | `cli_it::send_and_tail` | evidenced |
+| CL-06 | C-2 | `cli_it::status_shape` | evidenced |
+| CL-07 | C-2 | `cli_it::export_import` | evidenced |
+| CL-08 | C-2 | `cli_it::identity_rotate` | evidenced |
+| CL-09 | C-2 | `cli_it::jsonl_schema` | evidenced |
+| CL-10 | C-1 | `cli_it::usage_errors` | evidenced |
+| CL-11 | C-1 | `cli_it::passphrase_input_rules` | evidenced |
+| CL-12 | C-1 | `xtask::testscan::release_targets_have_no_kat` | evidenced |
+| CL-13 | C-1 | `cli_it::single_writer_lock` | evidenced |
+| CL-14 | C-2 (C-2f) | `cli_it::stdin_commands_are_total` (fixed seed `CL14_SEED`) | evidenced |
+| G7-21 | C-1 | `xtask::expect::tests::cli_dependency_row` | evidenced |
+| OPEN-M7-B-14 | C-1 | C-1 commit `2839fa9` (per §C-1) | evidenced |
+| D-B55 (g) | C-2 | `daemon::repeats` | evidenced |
+| D4′ pool bridge | C-1 | `hub::tests::pool_material_persisted_before_queue_new`, `harness::m7_pool::adopted_spares_fetched_at_pool_period_no_queue_new`, `harness::m7_pool::invitation_takes_named_spare_refill_delayed` | evidenced |
+| E2-01 | C-3 | `m7_e2e::two_profiles_invite_by_uri_sas_match` | evidenced |
+| E2-08 | C-3 | same test (`--direct`: TLS group, version and ALPN refused otherwise on both ends) | evidenced |
+| E2-02 | C-3 | `m7_e2e::five_hundred_both_ways_with_restarts`, 40 each way (Q291) | evidenced |
+| E2-02v | C-4 | `m7_e2e_virt::five_hundred_single_cell_virtual`, 500 each way | evidenced |
+| E2-03 | C-3, C-4 | `m7_e2e::rotation_with_overlap` (C-5: +5 sends after `RoutesChanged`), `m7_e2e_virt::rotation_with_overlap_virtual` | evidenced |
+| E2-04 | C-3 | `m7_e2e::key_change_blocks_until_reverified` | evidenced |
+| E2-05 | C-4 | `m7_e2e_virt::offline_24h_receives_every_real_message` | evidenced |
+| E2-09/FO-01 | C-3 (C-5) | the scans inside `m7_e2e::five_hundred_both_ways_with_restarts`, plus the planted-canary control (C3-2) | evidenced |
+| FO-01a | C-4 | `m7_forensic::store_dir_has_no_plaintext` (HB-44, HB-45 open) | evidenced |
+| FO-02 | C-4 | `m7_forensic::store_dir_has_no_plaintext` (the same run, empty `HOME`/`TMPDIR`/`XDG_*`) | evidenced |
+| E2-11 | C-3 | `m7_e2e::cli_uses_no_wall_clock_for_schedule` and the `at_ms` check inside E2-02 | evidenced |
+| C-T1 | C-5 | `tor::tests::onion_key_must_be_a_point` | evidenced |
+| E2-10 | C-5 | `ks_cli`, `e2e-10-f176553.txt` (MET) | evidenced |
+| E2-07 | — | TEST-SPEC: `m7_e2e::e2e_over_tor_nightly` | OWNER-PENDING (owner relay and the dispatch job, D13) |
+| G7-11 | — | TEST-SPEC: `xtask::sbom::tests::sbom_embedded_names_match_lock` | OWNER-PENDING (the `miniz_oxide` vet record; `supply-chain/config.toml` is still an exemption) |
+| G7-20 | — | TEST-SPEC: `xtask::gates::tests::optional_jobs_are_not_required` | OWNER-PENDING (the ruleset, then `REQUIRED_JOBS` += `harness`) |
+| FZ-03 + G7-15c | — | TEST-SPEC: fuzz `cli_command_line` | OWNER-PENDING (the owner's OK on `.github/workflows/fuzz-nightly.yml:12`) |
+| G7-17 | — | TEST-SPEC: `xtask::wintest::tests::win_test_runs_store_suites` | OWNER-OPERATED |
+| G7-19 | — | TEST-SPEC: `xtask::docs::adr_018_status` | ALREADY SATISFIED (M7-DOCS1b) |
+| C-T2 | — | TEST-SPEC: `tls::tests::direct_socket_keepalive_timings` | NOT BUILT, cond. |
+| SE-13a | — | TEST-SPEC: `sessions::tests::resend_after_receipt_timeout` | NOT BUILT, cond. |
+| C-T3 | — | TEST-SPEC: `m7_two_clients::two_clients_uses_core_handshake` | BACKLOG (HB-17) |
+| CT-03 | — | TEST-SPEC: `examples/unlock-timing` | BACKLOG (HB-18) |
+| E2-06 | — | TEST-SPEC: `m7_e2e::relay_restart_mid_run` | BACKLOG (HB-19) |
+
+E2-02: 40 messages each way over the CLI (Q291); 500 in E2-02v.
+
+**(2) M7 acceptance (`docs/07`) against the evidence.**
+- "E2E green in CI": no CI run of the C-3…C-5 heads exists; the `harness` job is not required (G7-20, owner-pending). ci-fast was green on the heads of C-2b, C-3, C-4 and C-4b.
+- "nightly ⚙ over Tor": E2-07, owner-pending (relay host, dispatch job).
+- "500 messages with restarts" over the CLI: 40 each way (Q291); 500 each way in virtual time (E2-02v).
+- Forensic: FO-01 (with the planted-canary control, C3-2) and FO-01a (HB-44 and HB-45 open).
+- Wrong passphrase: CT-01, CT-02 (TEST-SPEC rows of earlier units, not Phase C); CT-03 → HB-18.
+- No key reuse: PC-05, E2-02v (message-key digests 2105 total, 2105 distinct).
+- `tail`: the `open` event stream (OPEN-M7-12 A).
+- No OWNER-PENDING row is "done".

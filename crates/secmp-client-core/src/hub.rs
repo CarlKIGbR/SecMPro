@@ -277,6 +277,19 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.core.seed_timing_kat(seed);
     }
 
+    /// SHA-256 of the message key of every cell the conversation with `contact` sealed in this process life, in sealing
+    /// order (feature `kat`; TEST-SPEC-M7 E2-02v, the PC-05 digest check: digests, never keys). Empty for an unknown contact.
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn message_key_digests_kat(&self, contact: i64) -> Vec<[u8; 32]> {
+        self.core
+            .index
+            .get(&contact)
+            .and_then(|at| self.core.convs.get(*at))
+            .map(|c| c.message_key_digests_kat().to_vec())
+            .unwrap_or_default()
+    }
+
     /// Whether the conversation that sends on `queue` has something real waiting for a slot (the cost models of the test
     /// drivers; the scheduler never asks).
     pub fn pending_real(&mut self, queue: QueueId) -> bool {

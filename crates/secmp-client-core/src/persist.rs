@@ -48,9 +48,18 @@ pub struct StorePersist {
     entries: Vec<(i64, EntryKey)>,
     next_ord: i64,
     counts: WriteCounts,
-    /// The routes each receive commit of this session wrote, oldest first, since the hub last took them: the stored body
-    /// holds only the last one (Q242).
-    routes: Vec<Zeroizing<Vec<u8>>>,
+    /// The routes each receive commit of this session journaled, oldest first, since the hub last took them (Q242), and
+    /// the journal rows read at open (RJ, Q280).
+    routes: Vec<Journaled>,
+}
+
+/// RJ (EXT2d-2, Q280): a route a receive commit made durable as a journal row (CONTROL tag 6) and the hub has not applied
+/// yet: its routes body (a `RouteUpdateBody` of one `RelayQueue` route) and its row.
+pub struct Journaled {
+    /// The row's `ord`; `None`: no row (a route handed to the hub without a journal, tests only).
+    pub ord: Option<i64>,
+    /// The routes body (holds a send seed: zeroized).
+    pub body: Zeroizing<Vec<u8>>,
 }
 
 /// The key `hk ‖ n` of a skipped entry (spec §7.1): `hk` is a header key, so the key is a secret (CLAUDE.md §1.6) —
@@ -108,15 +117,26 @@ impl StorePersist {
         })
     }
 
-    /// The routes the receive commits of this session wrote since the last call, in commit order (Q242).
-    pub fn take_routes(&mut self) -> Vec<Zeroizing<Vec<u8>>> {
+    /// The routes the receive commits of this session journaled since the last call, in commit order (Q242), after the
+    /// journal rows read at open (RJ).
+    pub fn take_routes(&mut self) -> Vec<Journaled> {
         core::mem::take(&mut self.routes)
     }
 
-    /// Put routes taken by [`Self::take_routes`] and not registered back, ahead of any committed since (EXT2d-1).
-    pub fn restore_routes(&mut self, mut routes: Vec<Zeroizing<Vec<u8>>>) {
+    /// Put routes taken by [`Self::take_routes`] and not applied back, ahead of any committed since (EXT2d-1); their
+    /// journal rows stay (RJ).
+    pub fn restore_routes(&mut self, mut routes: Vec<Journaled>) {
         routes.append(&mut self.routes);
         self.routes = routes;
+    }
+
+    /// RJ (Q280): the journal row at `ord` read at open (rows in `ord` order = commit order): the hub's next pump applies
+    /// it after the ones read before it.
+    pub fn journal_read(&mut self, ord: i64, body: Zeroizing<Vec<u8>>) {
+        self.routes.push(Journaled {
+            ord: Some(ord),
+            body,
+        });
     }
 
     /// The durable state of the session, in its parts (`None` before its first commit).
@@ -218,8 +238,15 @@ impl Persist for StorePersist {
                 ord = ord.checked_add(1).ok_or(PersistError)?;
             }
         }
+        // RJ (Q280): the route the hub will apply, journaled with the state that consumed the cell (persist-before-ack)
+        let journal = match parts.routes {
+            Some(routes) => {
+                crate::sessions::actor::journal_row(routes).map_err(|_| PersistError)?
+            }
+            None => None,
+        };
         let session = self.session;
-        {
+        let journaled = {
             let mut s = self.store.lock().map_err(|_| PersistError)?;
             s.txn(|tx| {
                 secmp_store::sessions::put_fixed(tx, session, &parts.ratchet.fixed)?;
@@ -234,13 +261,24 @@ impl Persist for StorePersist {
                         .ok_or(secmp_store::Error::Unavailable)?;
                     secmp_store::sessions::insert_skipped(tx, session, *o, entry)?;
                 }
-                write_parts(tx, session, parts)
+                write_parts(tx, session, parts)?;
+                journal
+                    .as_ref()
+                    .map(|row| {
+                        secmp_store::sessions::insert_pending_control(tx, session, row)
+                            .map(|ord| (ord, row))
+                    })
+                    .transpose()
             })
-            .map_err(|_| PersistError)?;
-        }
-        // committed: the hub registers each in this order (Q242)
-        if let Some(routes) = parts.routes {
-            self.routes.push(Zeroizing::new(routes.to_vec()));
+            .map_err(|_| PersistError)?
+        };
+        // committed: the hub applies each in this order (Q242, RJ)
+        // (nothing fails after the commit: a journal row is its tag and the body)
+        if let Some((ord, row)) = journaled {
+            self.routes.push(Journaled {
+                ord: Some(ord),
+                body: Zeroizing::new(row.get(1..).unwrap_or(&[]).to_vec()),
+            });
         }
         self.entries.retain(|(o, _)| !deleted.contains(o));
         // the keys of the inserted entries move out of `new_keys` (no copy of a key is made)
@@ -287,8 +325,9 @@ impl Persist for StorePersist {
 }
 
 /// The parts of a commit besides the ratchet state (one transaction with it, persist-before-ack): the reassembly state,
-/// the trust and the block through the guarded writer, the new identity of a key change, the receipts, the routes, the
-/// handshake cells and the delivered messages.
+/// the trust and the block through the guarded writer, the new identity of a key change, the receipts, the handshake
+/// cells and the delivered messages. The routes are journaled by the caller in the same transaction (RJ): the contact's
+/// stored routes are the hub's, the route it applied.
 fn write_parts(
     tx: &mut secmp_store::Tx<'_>,
     session: i64,
@@ -313,10 +352,6 @@ fn write_parts(
     // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
     for id in parts.receipted {
         secmp_store::outbox::set_delivered(tx, session, id)?;
-    }
-    // the routes of a `RouteUpdate` (SE-01); the session's id is its contact's
-    if let Some(routes) = parts.routes {
-        secmp_store::contacts::put_contact_routes(tx, session, routes)?;
     }
     if parts.clear_handshake {
         secmp_store::sessions::delete_handshake(tx, session)?;
@@ -1159,8 +1194,9 @@ mod tests {
         Ok(())
     }
 
-    /// SE-82 (Q242): a receive commit whose transaction fails records no route for the hub — here its routes name no
-    /// contact row, so `put_contact_routes` refuses and the whole transaction rolls back (the push sits after it).
+    /// SE-82 (Q242; re-dictated by RJ, Q280): a receive commit that fails records no route for the hub — here its routes
+    /// are no `RouteUpdateBody`, so no journal row can be made and nothing is committed (the push sits after the
+    /// transaction).
     #[test]
     #[cfg(feature = "kat")]
     fn failed_commit_records_no_route() -> R {
@@ -1185,7 +1221,7 @@ mod tests {
                 clear_handshake: false,
             },
         );
-        assert!(committed.is_err(), "no contact row: the transaction fails");
+        assert!(committed.is_err(), "no journal row: the commit fails");
         assert!(
             pa.take_routes().is_empty(),
             "Q242: a failed commit records no route"

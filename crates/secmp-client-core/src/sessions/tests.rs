@@ -333,8 +333,9 @@ fn initiator_only_dummies_until_first_reply() -> R {
     })
 }
 
-/// SE-01 (§9.8 `docs/03:648`): a `RouteUpdate` with a route of kind 0x01 and one of the unknown kind 0x7E leaves the
-/// contact the 0x01 route only, persisted (sealed) with the receive commit.
+/// SE-01 (§9.8 `docs/03:648`; re-dictated by RJ, Q280): a `RouteUpdate` with a route of kind 0x01 and one of the unknown
+/// kind 0x7E leaves the contact the 0x01 route only, journaled (sealed, CONTROL tag 6) with the receive commit; the
+/// contact's stored routes are the hub's (the route it applied) and stay as the accept wrote them.
 #[cfg(feature = "kat")]
 #[test]
 fn route_update_applied() -> R {
@@ -363,17 +364,41 @@ fn route_update_applied() -> R {
                 blob: secmp_crypto::Zeroizing::new(vec![9; 20]),
             },
         ]);
+        let before = {
+            let store = w.guest.profile.store();
+            let s = store.lock().map_err(|_| "lock")?;
+            s.contact_routes(1)?.map(|r| r.to_vec())
+        };
         let cell = next(&mut w.h, 0)?;
         deliver(&mut w.g, &cell)?;
         let events = w.g.take_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(events.first(), Some(SessionEvent::Routes(r)) if r.len() == 1));
-        let stored = {
+        let (stored, rows) = {
             let store = w.guest.profile.store();
             let s = store.lock().map_err(|_| "lock")?;
-            s.contact_routes(1)?.ok_or("routes")?.to_vec()
+            (
+                s.contact_routes(1)?.map(|r| r.to_vec()),
+                s.pending_controls(1)?,
+            )
         };
-        assert_eq!(stored, [&[1_u8][..], &want[..]].concat());
+        assert_eq!(stored, before, "RJ: the stored routes are the hub's");
+        let journal: Vec<Vec<u8>> = rows
+            .iter()
+            .filter(|(_, r)| r.first() == Some(&6))
+            .map(|(_, r)| r.to_vec())
+            .collect();
+        assert_eq!(
+            journal,
+            [[&[6_u8, 1][..], &want[..]].concat()],
+            "RJ: one journal row"
+        );
+        let taken = w.g.persist_mut().take_routes();
+        assert_eq!(
+            taken.iter().map(|j| j.body.to_vec()).collect::<Vec<_>>(),
+            [[&[1_u8][..], &want[..]].concat()],
+            "the hub takes the journaled route"
+        );
         Ok(())
     })
 }
@@ -1201,7 +1226,8 @@ fn pending_control_codec_is_strict() -> R {
 
 /// B-4c killers (`set_verified`, `send_period_ms`; Q205, Q210 d): a refused verification is `Frozen` when the stored trust
 /// is `Frozen` — also when the conversation in memory does not know it — and `Unavailable` for any other failed write;
-/// the send period is the one of the contact's route.
+/// the send period is the one of the contact's stored route (re-dictated by RJ, Q280: the journaled route written there
+/// as the hub applies it).
 #[cfg(feature = "kat")]
 #[test]
 fn set_verified_maps_the_store_refusal() -> R {
@@ -1210,7 +1236,14 @@ fn set_verified_maps_the_store_refusal() -> R {
     big(|| {
         let mut w = established("b4c-k-sv", 85)?;
         let guest_store = w.guest.profile.store();
-        // the host's reply moved the guest to `route(1)`, 20 s
+        // the host's reply moved the guest to `route(1)`, 20 s: journaled by the receive commit and written to the stored
+        // routes as the hub applies it (RJ, Q280)
+        let journaled = w.g.persist_mut().take_routes();
+        let body = &journaled.first().ok_or("the journaled route")?.body;
+        guest_store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| secmp_store::contacts::put_contact_routes(tx, 1, body))?;
         assert_eq!(send_period_ms(&guest_store, ContactId(1))?, Some(20_000));
         guest_store
             .lock()
@@ -3695,7 +3728,7 @@ fn marker_codec_is_strict() {
 /// SE-166 (Q272, M7 FZ; Q251, Q255): `control_row_of`, the class `open_conversation` gives every CONTROL row, is the class
 /// of the decoder of the row's tag with that decoder's payload — a marker (tag 4) with its `ord` and `sid`, an overlap
 /// (tag 5) with its route, a content (tags 1–3) — and an error for every row that decoder refuses and for every other tag
-/// (0, 6, 255, the empty row). Runs without `kat`.
+/// (0, 255, the empty row; tag 6 is a journal row since RJ, SE-186, and `[6; 68]` is refused as one). Runs without `kat`.
 #[test]
 fn control_row_of_classifies_like_the_open() -> Result<(), &'static str> {
     use crate::sessions::actor::{
@@ -3755,6 +3788,165 @@ fn control_row_of_classifies_like_the_open() -> Result<(), &'static str> {
     ];
     for (case, row) in refused {
         assert!(control_row_of(row).is_err(), "{case}");
+    }
+    Ok(())
+}
+
+/// SE-188 (RJ, Q280; CLAUDE.md §1.7; cross-review RJ-3): the journal row is written inside the receive transaction — a
+/// failure at any statement of that transaction (k = 1, 2, … until the commit succeeds) commits nothing: the cell is not
+/// acknowledged, no journal row, no route for the hub; the successful receive is ONE committed transaction holding the
+/// journal row (a journal written in a transaction of its own would make two).
+#[cfg(feature = "kat")]
+#[test]
+fn receive_transaction_holds_the_journal_row() -> R {
+    big(|| {
+        let mut w = world("se188", 19)?;
+        w.h.queue_route_update(vec![route(4)?]);
+        let cell = next(&mut w.h, 0)?;
+        let store = w.guest.profile.store();
+        let journal = |store: &SharedStore| -> Result<usize, E> {
+            let rows = store.lock().map_err(|_| "lock")?.pending_controls(1)?;
+            Ok(rows.iter().filter(|(_, r)| r.first() == Some(&6)).count())
+        };
+        let mut failed = 0_u32;
+        for k in 1..=64_u32 {
+            secmp_store::kat::fail_at(secmp_store::kat::FailAt(k));
+            let before = secmp_store::kat::store_txn_commits();
+            if w.g.deliver_direct(&cell).is_ok() {
+                let commits = secmp_store::kat::store_txn_commits().saturating_sub(before);
+                assert_eq!(commits, 1, "one transaction, the journal row in it");
+                assert_eq!(journal(&store)?, 1, "the journal row");
+                assert_eq!(
+                    w.g.persist_mut().take_routes().len(),
+                    1,
+                    "the route for the hub"
+                );
+                assert!(
+                    failed >= 2,
+                    "the transaction has its statements: {failed} failed"
+                );
+                return Ok(());
+            }
+            failed = failed.saturating_add(1);
+            assert_eq!(journal(&store)?, 0, "k = {k}: no journal row");
+            assert!(
+                w.g.persist_mut().take_routes().is_empty(),
+                "k = {k}: no route"
+            );
+        }
+        Err("the receive never committed".into())
+    })
+}
+
+/// SE-186 (RJ, Q280; CLAUDE.md §1.8): the journal row is `6 ‖ RouteUpdateBody` of exactly the first `RelayQueue` route of
+/// the received routes — 157 bytes without a direct endpoint, at most 446 with one — and decodes strictly: it round-trips
+/// and `control_row_of` gives it as a journal entry with that body; routes without a `RelayQueue` route make no row; a
+/// row of no route, of two, of an unknown kind only, with a trailing or a missing byte, or whose body is no
+/// `RouteUpdateBody` is refused, as is every row of another layout under tag 6 (`[6; 68]`).
+#[cfg(feature = "kat")]
+#[test]
+fn journal_codec_is_strict() -> R {
+    use crate::sessions::actor::{ControlRow, control_row_of, journal_of, journal_row};
+    use secmp_proto::Encode as _;
+    use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
+    use secmp_proto::wire::inv::{Direct, Host};
+
+    let unknown = || RouteDescriptor::Unknown {
+        kind: 0x7E,
+        blob: secmp_crypto::Zeroizing::new(vec![9; 20]),
+    };
+    let one = RouteUpdateBody {
+        routes: vec![route(4)?],
+    }
+    .encode()?;
+    // the first RelayQueue route only, behind an unknown one and before another RelayQueue route
+    let received = RouteUpdateBody {
+        routes: vec![unknown(), route(4)?, route(5)?],
+    }
+    .encode()?;
+    let row = journal_row(&received)
+        .map_err(|_| "journal_row")?
+        .ok_or("a row")?;
+    assert_eq!(
+        row.as_slice(),
+        [&[6_u8][..], &one[..]].concat(),
+        "6 ‖ body of one route"
+    );
+    assert_eq!(row.len(), 157, "no direct endpoint: 157 bytes");
+    assert_eq!(
+        journal_of(&row)
+            .map_err(|_| "journal_of")?
+            .map(|b| b.to_vec()),
+        Some(one.to_vec()),
+        "round trip"
+    );
+    assert!(
+        matches!(control_row_of(&row), Ok(ControlRow::Journal(b)) if b.as_slice() == one.as_slice()),
+        "the class at an open"
+    );
+    // the largest row: a direct endpoint with a host of HOST_MAX bytes
+    let mut relay = relay_ref();
+    relay.direct = Some(Direct {
+        host: Host::from_bytes(&[b'a'; 253]).map_err(|_| "host")?,
+        port: core::num::NonZeroU16::new(443).ok_or("port")?,
+        spki_sha256: [7; 32],
+    });
+    let largest = RouteUpdateBody {
+        routes: vec![RouteDescriptor::RelayQueue(RelayQueue {
+            relay,
+            sid: [6; 16],
+            send_seed: secmp_crypto::SecretBytes::from_slice(&[6; 32])?,
+            period_s: Period::S80,
+        })],
+    }
+    .encode()?;
+    let big_row = journal_row(&largest)
+        .map_err(|_| "journal_row")?
+        .ok_or("a row")?;
+    assert_eq!(big_row.len(), 446, "the bound");
+    assert!(
+        journal_of(&big_row).is_ok_and(|b| b.is_some()),
+        "the largest row decodes"
+    );
+    // nothing to journal
+    let none = RouteUpdateBody {
+        routes: vec![unknown()],
+    }
+    .encode()?;
+    assert!(
+        matches!(journal_row(&none), Ok(None)),
+        "no RelayQueue route: no row"
+    );
+    assert!(journal_row(b"routes").is_err(), "no body: an error");
+    // refused rows under tag 6; rows of other tags are no journal rows
+    let two = [
+        &[6_u8][..],
+        &RouteUpdateBody {
+            routes: vec![route(4)?, route(5)?],
+        }
+        .encode()?[..],
+    ]
+    .concat();
+    let unknown_only = [&[6_u8][..], &none[..]].concat();
+    let mut trailing = row.to_vec();
+    trailing.push(0);
+    let mut short = row.to_vec();
+    short.pop();
+    let refused: [(&str, &[u8]); 7] = [
+        ("two routes", &two),
+        ("an unknown kind only", &unknown_only),
+        ("a trailing byte", &trailing),
+        ("a missing byte", &short),
+        ("count 0", &[6, 0]),
+        ("the tag alone", &[6]),
+        ("[6; 68]", &[6; 68]),
+    ];
+    for (case, bad) in refused {
+        assert!(journal_of(bad).is_err(), "{case}");
+        assert!(control_row_of(bad).is_err(), "{case}: the open fails");
+    }
+    for other in [&[1_u8, 0][..], &[5; 68], &[4; 25], &[]] {
+        assert!(matches!(journal_of(other), Ok(None)), "not tag 6");
     }
     Ok(())
 }

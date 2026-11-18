@@ -572,7 +572,8 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   each = 4256.
 /// - `client_control_rows` (FZ-05): mode 1 + the largest CONTROL row of one route (the list rule above; rows of up to
 ///   255 routes also decode, HB-9) — tag 1 + a `RouteUpdateBody` of one route of an unknown kind with a 65535-byte blob
-///   (count 1 + 65539) — = 65542 (a marker row is 25, an overlap row 68, a `KeyChange` row 5391 bytes).
+///   (count 1 + 65539) — = 65542 (a marker row is 25, an overlap row 68, a journal row 157..=446 (RJ), a `KeyChange` row
+///   5391 bytes).
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("backup_import", 65_777),
     ("caead_open", 12_618),
@@ -2502,9 +2503,9 @@ mod tests {
     }
 
     /// TEST-SPEC-M7 G7-23 (FZ-05; OPEN-M7-B-29 (2), D-B94): the CONTROL-row target is a listed, tracked-only target with
-    /// its bound, its `[[bin]]` and at least one seed of each tag (1, 2, 3, 4, 5) and of the structured mode, each within
-    /// the bound; it calls `control_row_of` (the class an open gives a row, Q272), the three decoders and their encoders of
-    /// `secmp_client_core::sessions::actor`.
+    /// its bound, its `[[bin]]` and at least one seed of each tag (1, 2, 3, 4, 5, 6 — RJ, Q280) and of the structured
+    /// mode, each within the bound; it calls `control_row_of` (the class an open gives a row, Q272), the four decoders and
+    /// their encoders of `secmp_client_core::sessions::actor`.
     #[test]
     fn fuzz_target_control_rows() -> crate::util::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -2533,6 +2534,8 @@ mod tests {
             "marker_row(",
             ".row()",
             ".encode()",
+            "journal_of(",
+            "journal_row(",
         ] {
             assert!(source.contains(name), "{target} calls {name}");
         }
@@ -2555,7 +2558,7 @@ mod tests {
                 _ => {}
             }
         }
-        for want in [None, Some(1), Some(2), Some(3), Some(4), Some(5)] {
+        for want in [None, Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)] {
             assert!(seen.contains(&want), "{target}: no seed of {want:?}");
         }
         Ok(())

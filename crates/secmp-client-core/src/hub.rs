@@ -33,7 +33,7 @@ use crate::scheduler::types::{
     CellSource, CellToken, ControlKind, Delivered, PreparedCell, QueueId, RelayId, SendFailure,
     SourceError,
 };
-use crate::sessions::actor::EntropySource;
+use crate::sessions::actor::{EntropySource, OverlapRoute};
 use crate::sessions::rotation::{OVERLAP_MS, QueueSet};
 
 /// The first id of the send queues the hub numbers itself; pool and invitation queues are below it.
@@ -69,6 +69,15 @@ pub const FLOOR_TERM_CAP_MS: u64 = 25 * 3_600_000;
 /// that follows `docs/03` sends at most 4 within the longest overlap (Q269); 6 leaves a margin of 2. It bounds the
 /// contact's send queues to 7 and its overlap rows to 6, so a hostile contact adds at most 7 to the n of every floor.
 pub const MAX_SEND_OVERLAPS: usize = 6;
+
+/// RJ (Q280): where a route [`Hub::follow`] applies comes from.
+#[derive(Clone, Copy)]
+enum Origin {
+    /// The contact's stored routes, at its registration (an open, an accept): nothing is written.
+    Stored,
+    /// A received route with its journal row (`None`: none, the tests' direct registrations).
+    Received(Option<i64>),
+}
 
 /// B17c (Q264): an old send queue in overlap. Its end is `max(drawn end, from + blur + min(FLOOR_CELLS · I, cap))`, I the
 /// longest interval between two cells of the queue in the current mode with the send queues on its link now
@@ -364,7 +373,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             }
         }
         if let Some(bytes) = routes {
-            self.register_route(contact, at, &bytes)?;
+            // the route the hub applied last (RJ: the receive commit journals, it does not write here)
+            self.follow(contact, at, &bytes, Origin::Stored)?;
         }
         self.resume_overlaps(contact, at)
     }
@@ -438,20 +448,27 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// queue was registered from is a re-sent `RouteUpdate` and registers nothing (Q222); so is a route to a physical
     /// queue (relay, `sid`) that is registered already, current or in send overlap — a stale `RouteUpdate` (A → B → A),
     /// which must not give that queue a second sender (spec §10.2, Q236); so is a route to a new queue while the contact
-    /// holds [`MAX_SEND_OVERLAPS`] old send queues in overlap (Q268). `false`: the switch's draw failed and nothing changed
-    /// (EXT2d-1), the route waits for the next pump.
-    fn register_route(
+    /// holds [`MAX_SEND_OVERLAPS`] old send queues in overlap (Q268). `false`: the switch's draw failed (EXT2d-1) or its
+    /// store transaction failed (RJ) and nothing changed, the route waits for the next pump.
+    ///
+    /// RJ (EXT2d-2, Q280): a received route (`Origin::Received`) is applied in ONE store transaction before anything
+    /// changes in memory — the old queue's overlap row (Q252) at a switch, the route the contact sends to now as its
+    /// stored routes, and the delete of its journal row — so a crash leaves either the state before the route (its
+    /// journal row is applied again by the next pump) or the state after it, and the `AddSend` exists only after the
+    /// overlap row is durable (CLAUDE.md §1.7). A registration from the stored routes (`Origin::Stored`) writes no route.
+    fn follow(
         &mut self,
         contact: ContactId,
         at: usize,
         bytes: &[u8],
+        origin: Origin,
     ) -> Result<bool, Error> {
         let body = RouteUpdateBody::decode(bytes)?;
         let Some((descriptor, route)) = body.routes.iter().find_map(|r| match r {
             RouteDescriptor::RelayQueue(q) => Some((r, q)),
             RouteDescriptor::Unknown { .. } => None,
         }) else {
-            return Ok(true);
+            return Ok(self.settle_route(contact, false, origin).is_ok());
         };
         let encoded = secmp_proto::Encode::encode(descriptor)?;
         if self
@@ -459,19 +476,20 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             .get(&contact.0)
             .is_some_and(|stored| bool::from(stored.as_slice().ct_eq(encoded.as_slice())))
         {
-            return Ok(true);
+            // the stored routes hold it already (RJ: every applied route writes them)
+            return Ok(self.settle_route(contact, false, origin).is_ok());
         }
         let target = (self.config.relay, route.sid);
         if self.send_targets.values().any(|t| *t == target) {
             // the stored routes follow the live registration, so a restart registers the current queue (Q236, D-B71)
-            return self.store_current_route(contact).map(|()| true);
+            return Ok(self.settle_route(contact, true, origin).is_ok());
         }
         // CAP (Q268): a switch would put one more old queue into overlap — at the cap the route is not registered, before
         // any registration, draw, seal or row write; the contact keeps its queue and the stored routes follow it (as Q236)
         if self.send_ids.contains_key(&contact.0)
             && self.overlaps_held(contact) >= MAX_SEND_OVERLAPS
         {
-            return self.store_current_route(contact).map(|()| true);
+            return Ok(self.settle_route(contact, true, origin).is_ok());
         }
         // EXT2d-1: the old queue's end is drawn before anything changes; without randomness no switch (no schedule is made
         // without it, as `sessions/rotation.rs`): nothing registered, drawn, sealed or written
@@ -483,20 +501,34 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         } else {
             None
         };
-        let queue = self.alloc_send();
         let period_ms = u64::from(route.period_s.seconds()).saturating_mul(1_000);
+        let seed = SecretBytes::from_slice(route.send_seed.expose_secret())?;
+        // Q252: the old queue's overlap — its route, its end and the `KeyChange` copies the switch leaves there (Q254)
+        let kept = match (self.send_ids.get(&contact.0).copied(), overlap) {
+            (Some(old), Some(overlap)) => self.overlap_of_switch(contact, at, old, overlap)?,
+            _ => None,
+        };
+        // RJ (Q280): the overlap row, the route sent to from now on and the journal row's delete, in one transaction
+        let row = kept.as_ref().map(|(_, r)| r.row());
+        let Ok(written) =
+            self.write_switch(contact, row.as_deref().map(Vec::as_slice), &encoded, origin)
+        else {
+            return Ok(false);
+        };
+        // durable: from here on nothing fails
+        let queue = self.alloc_send();
         self.actions.push(Action::AddSend {
             queue,
             relay: self.config.relay,
             sid: route.sid,
-            seed: SecretBytes::from_slice(route.send_seed.expose_secret())?,
+            seed,
             period_ms,
         });
         self.registered.insert(queue);
         self.send_targets.insert(queue, target);
         self.send_periods.insert(queue, period_ms);
         let previous = self.send_ids.insert(contact.0, queue);
-        let previous_route = self.send_routes.insert(contact.0, encoded);
+        self.send_routes.insert(contact.0, encoded);
         if let Some(conversation) = self.core.convs.get_mut(at) {
             // `T_RS` follows the queue it is sent to (SE-13b, Q210 d)
             conversation.set_receipt_timeout_ms(crate::sessions::actor::receipt_timeout_ms(
@@ -524,33 +556,152 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                     blur: overlap.saturating_sub(OVERLAP_MS.0),
                 }),
             });
-            // Q252: the overlap is durable — its route and its end — so a restart sends to `old` again until then (Q253)
-            let end = self.core.now_ms().saturating_add(overlap);
-            if let (Some(bytes), Some(conversation)) = (previous_route, self.core.convs.get_mut(at))
-                && let RouteDescriptor::RelayQueue(r) =
-                    &<RouteDescriptor as secmp_proto::Decode>::decode(&bytes)?
-            {
-                let seed: SecretBytes<32> = SecretBytes::from_slice(r.send_seed.expose_secret())?;
-                conversation.keep_overlap(old, r.sid, seed, r.period_s, end);
-            }
+        }
+        // Q252: the overlap is durable — its route and its end — so a restart sends to `old` again until then (Q253)
+        if let (Some((old, route)), Some(ord)) = (kept, written)
+            && let Some(conversation) = self.core.convs.get_mut(at)
+        {
+            conversation.overlap_written(old, route, ord);
         }
         Ok(true)
     }
 
-    /// Write the route `contact`'s send queue was registered from back to its stored routes, so that a restart registers
-    /// the queue it sends to live (Q236, D-B71, Q242); a contact without a send registration keeps its stored routes.
-    fn store_current_route(&mut self, contact: ContactId) -> Result<(), Error> {
-        if let Some(current) = self.send_routes.get(&contact.0) {
-            let routes = secmp_proto::Encode::encode(&RouteUpdateBody {
-                routes: vec![<RouteDescriptor as secmp_proto::Decode>::decode(current)?],
-            })?;
-            self.core
-                .store
-                .lock()
-                .map_err(|_| Error::Unavailable)?
-                .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &routes))?;
+    /// RJ (Q280): the one store transaction of a registration — the old queue's overlap row `row` (its `ord` is returned),
+    /// for a received route (`origin`) the route `encoded` (a `RouteDescriptor`) as the contact's stored routes and the
+    /// delete of its journal row. Nothing to write (a first route from the stored routes): `Ok(None)`, no transaction.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the transaction fails: nothing is written.
+    fn write_switch(
+        &self,
+        contact: ContactId,
+        row: Option<&[u8]>,
+        encoded: &[u8],
+        origin: Origin,
+    ) -> Result<Option<i64>, Error> {
+        let (current, journal) = match origin {
+            Origin::Received(journal) => (
+                Some(secmp_proto::Encode::encode(&RouteUpdateBody {
+                    routes: vec![<RouteDescriptor as secmp_proto::Decode>::decode(encoded)?],
+                })?),
+                journal,
+            ),
+            Origin::Stored => (None, None),
+        };
+        if row.is_none() && current.is_none() {
+            return Ok(None);
         }
+        Ok(self
+            .core
+            .store
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .txn(|tx| {
+                let ord = row
+                    .map(|r| secmp_store::sessions::insert_pending_control(tx, contact.0, r))
+                    .transpose()?;
+                if let Some(routes) = &current {
+                    secmp_store::contacts::put_contact_routes(tx, contact.0, routes)?;
+                }
+                if let Some(j) = journal {
+                    secmp_store::sessions::delete_pending_control(tx, contact.0, j)?;
+                }
+                Ok(ord)
+            })?)
+    }
+
+    /// Q252, Q254 (RJ: before the switch): the overlap row of `contact`'s current send queue `old` when the hub switches
+    /// away from it now with the drawn overlap `overlap` — the route it was registered from, the end (Unix ms) and the
+    /// `KeyChange` copies that may be there after the switch; `None` if the contact has no conversation or its route is
+    /// of no known kind (then no row, as before RJ).
+    fn overlap_of_switch(
+        &self,
+        contact: ContactId,
+        at: usize,
+        old: QueueId,
+        overlap: u64,
+    ) -> Result<Option<(QueueId, OverlapRoute)>, Error> {
+        let (Some(bytes), Some(conversation)) =
+            (self.send_routes.get(&contact.0), self.core.convs.get(at))
+        else {
+            return Ok(None);
+        };
+        let RouteDescriptor::RelayQueue(r) =
+            &<RouteDescriptor as secmp_proto::Decode>::decode(bytes)?
+        else {
+            return Ok(None);
+        };
+        let (newest, unknown) = conversation.copies_at_switch(old);
+        Ok(Some((
+            old,
+            OverlapRoute {
+                sid: r.sid,
+                seed: SecretBytes::from_slice(r.send_seed.expose_secret())?,
+                period: r.period_s,
+                until_ms: self.core.now_ms().saturating_add(overlap),
+                newest,
+                unknown,
+            },
+        )))
+    }
+
+    /// A route registered as the receive path hands it to the hub, without a journal row (tests).
+    #[cfg(test)]
+    fn register_route(
+        &mut self,
+        contact: ContactId,
+        at: usize,
+        bytes: &[u8],
+    ) -> Result<bool, Error> {
+        self.follow(contact, at, bytes, Origin::Received(None))
+    }
+
+    /// RJ (Q280): a received route that registers nothing is applied — with `write`, the route `contact`'s send queue was
+    /// registered from is written back to its stored routes, so that a restart registers the queue it sends to live
+    /// (Q236, D-B71, Q242; a contact without a send registration keeps its stored routes), and the route's journal row is
+    /// deleted, in one transaction. A route from the stored routes (`Origin::Stored`) writes nothing.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be written: nothing changed, the route stays for the next pump.
+    fn settle_route(
+        &mut self,
+        contact: ContactId,
+        write: bool,
+        origin: Origin,
+    ) -> Result<(), Error> {
+        let Origin::Received(journal) = origin else {
+            return Ok(());
+        };
+        let current = match self.send_routes.get(&contact.0) {
+            Some(current) if write => Some(secmp_proto::Encode::encode(&RouteUpdateBody {
+                routes: vec![<RouteDescriptor as secmp_proto::Decode>::decode(current)?],
+            })?),
+            _ => None,
+        };
+        if current.is_none() && journal.is_none() {
+            return Ok(());
+        }
+        self.core
+            .store
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .txn(|tx| {
+                if let Some(routes) = &current {
+                    secmp_store::contacts::put_contact_routes(tx, contact.0, routes)?;
+                }
+                if let Some(j) = journal {
+                    secmp_store::sessions::delete_pending_control(tx, contact.0, j)?;
+                }
+                Ok(())
+            })?;
         Ok(())
+    }
+
+    /// Write the route `contact`'s send queue was registered from back to its stored routes (Q236, D-B71, Q242), as the
+    /// pump's skip does, without a journal row (tests).
+    #[cfg(test)]
+    fn store_current_route(&mut self, contact: ContactId) -> Result<(), Error> {
+        self.settle_route(contact, true, Origin::Received(None))
     }
 
     /// CAP (Q268): how many old send queues `contact` holds in send overlap now.
@@ -719,8 +870,8 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// rotation retired (Q164, Q208).
     ///
     /// # Errors
-    /// [`Error::Unavailable`] if the store cannot be read or written, or a switch has no randomness (EXT2d-1: its route
-    /// and the contact's later ones are taken again, in order, by the next pump).
+    /// [`Error::Unavailable`] if the store cannot be read or written, or a switch has no randomness (EXT2d-1); the route
+    /// and the contact's later ones, with their journal rows, are taken again, in order, by the next pump (RJ).
     pub fn pump(&mut self) -> Result<(), Error> {
         self.core.pump()?;
         for done in core::mem::take(&mut self.core.rotated) {
@@ -747,19 +898,20 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             }
             let contact = ContactId(id);
             let mut routes = routes.into_iter();
-            while let Some(bytes) = routes.next() {
-                if !self.register_route(contact, at, &bytes)? {
-                    // EXT2d-1: this route and the later ones go back ahead of any committed since; the store keeps what
-                    // the receive commit wrote, as a crash before this pump leaves it (X-1, Q278)
-                    let rest = core::iter::once(bytes).chain(routes).collect();
+            while let Some(entry) = routes.next() {
+                // RJ (Q280): each route is applied with its journal row in one transaction, so the store ends on the route
+                // the contact sends to, whatever the order of the updates was (Q242, D-B71)
+                let applied = self.follow(contact, at, &entry.body, Origin::Received(entry.ord));
+                if !matches!(applied, Ok(true)) {
+                    // EXT2d-1, RJ: this route and the later ones go back ahead of any committed since, their journal rows
+                    // stay — the store is what a crash before this pump leaves (X-1, Q278)
+                    let rest = core::iter::once(entry).chain(routes).collect();
                     if let Some(conversation) = self.core.convs.get_mut(at) {
                         conversation.persist_mut().restore_routes(rest);
                     }
-                    return Err(Error::Unavailable);
+                    return Err(applied.err().unwrap_or(Error::Unavailable));
                 }
             }
-            // the store ends on the route the contact sends to, whatever the order of the updates was (Q242, D-B71)
-            self.store_current_route(contact)?;
         }
         Ok(())
     }
@@ -2276,8 +2428,9 @@ mod tests {
     /// SE-95 (Q248, Q249; D-B73): through the hub, the first `KeyChange` cell on B (`sid` 4) is sealed after its marker
     /// names B. A restart (the profile opened again from its files) registered on B again reads the marker back on the
     /// queue it names: the re-read copy leaving its window releases the `KeyChange` and its markers. When the peer's
-    /// `RouteUpdate` C (`sid` 7) was committed before the restart (no pump), the restart registers C and B's copy is held
-    /// for good: C's window releases nothing, both markers stay.
+    /// `RouteUpdate` C (`sid` 7) was committed before the restart (no pump), the restart still registers B — the route
+    /// the hub applied; C waits in its journal row for the next pump (RJ, Q280; was: C registered and B's copy held for
+    /// good, D-B87) — and B's window releases the `KeyChange` as in the first case.
     #[test]
     #[cfg(feature = "kat")]
     fn restart_reads_the_marker_of_the_sent_queue() -> R {
@@ -2340,11 +2493,8 @@ mod tests {
             }
             assert_eq!(
                 out,
-                [
-                    ([4_u8; 16], false, vec![]),
-                    ([7; 16], true, vec![[4; 16], [7; 16]])
-                ],
-                "Q249: same queue released by its window; moved: held by B's marker"
+                [([4_u8; 16], false, vec![]), ([4; 16], false, vec![])],
+                "Q249: same queue released by its window; moved (RJ): B again, released the same way"
             );
             Ok(())
         })
@@ -3852,8 +4002,8 @@ mod tests {
         })
     }
 
-    /// CAP: the `RouteUpdate`s the receive commits of `contact` stored since the last pump, registered as the pump does
-    /// but without its closing write of the current route (so the refusal's own write is what the store shows).
+    /// CAP: the `RouteUpdate`s the receive commits of `contact` journaled since the last pump, applied as the pump does
+    /// (RJ: each with its journal row; a refusal writes the current route back).
     #[cfg(feature = "kat")]
     fn register_taken(hub: &mut Hub<ManualClock, Fixed>, contact: ContactId) -> R {
         let at = *hub.core.index.get(&contact.0).ok_or("index")?;
@@ -3864,8 +4014,8 @@ mod tests {
             .ok_or("conversation")?
             .persist_mut()
             .take_routes();
-        for bytes in &routes {
-            hub.register_route(contact, at, bytes)?;
+        for entry in &routes {
+            hub.follow(contact, at, &entry.body, Origin::Received(entry.ord))?;
         }
         Ok(())
     }
@@ -4378,8 +4528,9 @@ mod tests {
     /// SE-164 (Q268, Q242, D-B107; verifier R1): the cap reached inside one pump — of two new routes the first registers
     /// and the second meets the cap, and the store ends on the first (the queue sent to); a refused route and then a
     /// stale one (B, in overlap: the Q236 skip) in one pump register nothing and keep the store; a crash after the
-    /// receive commit of a refused route (no pump): the restart registers that stored route as the current queue and the
-    /// six old queues again — the queue sent to before has no row and is not registered, the send queues stay seven.
+    /// receive commit of a refused route (no pump): the restart registers the queue sent to and the six old queues again
+    /// (seven send queues), and its first pump refuses the journaled route as the pump before the crash would have (RJ,
+    /// Q280; was D-B107: the refused route current and the queue sent to lost).
     #[test]
     #[cfg(feature = "kat")]
     fn cap_inside_one_pump_and_a_crash_after_a_refusal() -> R {
@@ -4428,8 +4579,8 @@ mod tests {
             send_route(&mut sc, r4, ms(64))?;
             assert_eq!(
                 stored_sid(&sc.invitee, contact)?,
-                Some([r4; 16]),
-                "the receive commit stored the route the cap will refuse"
+                Some([r1; 16]),
+                "RJ: the receive commit journals the route the cap will refuse, the stored route stays"
             );
             drop(sc);
             let guest = guest.reopen()?;
@@ -4437,12 +4588,12 @@ mod tests {
             let added = sids(&mut again);
             assert_eq!(
                 added.first(),
-                Some(&[r4; 16]),
-                "D-B107: the stored route is current"
+                Some(&[r1; 16]),
+                "RJ (was D-B107): the queue sent to is current again"
             );
             assert!(
-                !added.contains(&[r1; 16]),
-                "the queue sent to before has no row"
+                !added.contains(&[r4; 16]),
+                "the refused route is not registered"
             );
             assert_eq!(
                 added.len(),
@@ -4450,6 +4601,19 @@ mod tests {
                 "seven again"
             );
             assert_eq!(again.retiring_sends.len(), MAX_SEND_OVERLAPS);
+            // the journaled route meets the cap at the next pump: refused, its row gone, the store stays
+            again.pump()?;
+            assert_eq!(
+                sids(&mut again),
+                Vec::<Id>::new(),
+                "refused after the restart"
+            );
+            assert_eq!(stored_sid(&again, contact)?, Some([r1; 16]));
+            assert_eq!(
+                journal_rows(&again, contact)?,
+                0,
+                "the journal row is applied"
+            );
             Ok(())
         })
     }
@@ -5512,7 +5676,12 @@ mod tests {
             .persist_mut()
             .take_routes();
         assert_eq!(taken.len(), 1, "B: the route taken from the hub");
-        b.store_current_route(t.first)?;
+        // RJ: the write-back with the journal row's delete, as the pump's refusal does it
+        b.settle_route(
+            t.first,
+            true,
+            Origin::Received(taken.first().and_then(|j| j.ord)),
+        )?;
         b.pump()?;
         let at2 = *a.core.index.get(&t.second.0).ok_or("second")?;
         a.register_route(t.second, at2, &route_body(t.next, Period::S10)?)?;
@@ -5633,7 +5802,11 @@ mod tests {
             .persist_mut()
             .take_routes();
         assert_eq!(taken.len(), 1, "B: the second route taken from the hub");
-        b.store_current_route(t.first)?;
+        b.settle_route(
+            t.first,
+            true,
+            Origin::Received(taken.first().and_then(|j| j.ord)),
+        )?;
         b.pump()?;
         let acts = spelled(&a.take_actions());
         assert!(acts.is_empty(), "SE-178 second refusal: no action");
@@ -5855,9 +6028,10 @@ mod tests {
         })
     }
 
-    /// SE-179 (EXT2d-1, ADR-060 Amendment (RNG); X-1, Q278): a switch whose overlap draw fails changes nothing — `pump`
-    /// fails, no action, no overlap row, no id, the hub still sends to B, and the stored routes stay byte for byte as the
-    /// receive commit wrote them (C); a restart after the refusal (the profile opened again from its files) registers C.
+    /// SE-179 (EXT2d-1, ADR-060 Amendment (RNG); X-1, Q278; re-dictated by RJ, Q280): a switch whose overlap draw fails
+    /// changes nothing — `pump` fails, no action, no overlap row, no id, the hub still sends to B, the stored routes stay
+    /// byte for byte (B: the receive commit journals C) and C's journal row stays; a restart after the refusal (the profile
+    /// opened again from its files) registers B and its first pump switches to C.
     #[test]
     #[cfg(feature = "kat")]
     fn failed_overlap_draw_changes_nothing() -> R {
@@ -5877,9 +6051,10 @@ mod tests {
                 stored_routes(&sc.invitee, contact)?.ok_or("no row after the commit")?;
             assert_eq!(
                 stored_sid(&sc.invitee, contact)?,
-                Some([7; 16]),
-                "the receive commit stored C"
+                Some([4; 16]),
+                "RJ: the receive commit journals C, the stored route stays B"
             );
+            assert_eq!(journal_rows(&sc.invitee, contact)?, 1, "C's journal row");
             assert!(matches!(sc.invitee.pump(), Err(Error::Unavailable)));
             assert!(sc.invitee.take_actions().is_empty(), "no action");
             let hub = &sc.invitee;
@@ -5887,21 +6062,31 @@ mod tests {
             let kept = stored_routes(hub, contact)?.ok_or("no row after the refusal")?;
             assert!(
                 bool::from(kept.as_slice().ct_eq(committed.as_slice())),
-                "the store keeps what the receive commit wrote (C), byte for byte"
+                "the store keeps the stored route (B), byte for byte"
             );
+            assert_eq!(journal_rows(hub, contact)?, 1, "C's journal row stays");
             assert_eq!(hub.send_targets, targets, "the send targets");
             assert_eq!(hub.send_ids, ids, "B is sent to");
             assert_eq!(hub.next_send, next, "no id consumed");
             assert_eq!(hub.retiring_sends.len(), retiring, "no overlap");
-            // a crash after the refusal: the profile opened again from its files registers C first (no draw at open)
+            // a crash after the refusal: the profile opened again from its files registers B first (no draw at open), and
+            // its first pump follows C from the journal (RJ)
             drop(sc);
             let guest = guest.reopen()?;
             let mut again = hub_over(&guest, "guest", 900)?;
             assert_eq!(
                 sids(&mut again).first(),
-                Some(&[7_u8; 16]),
-                "a restart after the refusal registers C"
+                Some(&[4_u8; 16]),
+                "a restart after the refusal registers B"
             );
+            again.pump()?;
+            assert_eq!(
+                sids(&mut again),
+                [[7_u8; 16]],
+                "the next pump switches to C"
+            );
+            assert_eq!(stored_sid(&again, contact)?, Some([7; 16]));
+            assert_eq!(journal_rows(&again, contact)?, 0);
             Ok(())
         })
     }
@@ -5964,6 +6149,415 @@ mod tests {
                 ends.push(off);
             }
             assert_ne!(ends.first(), ends.get(1), "two seeds, two ends");
+            Ok(())
+        })
+    }
+
+    /// RJ (Q280): the `sid`s of the journal rows (tag 6) of `contact`'s session, in `ord` order.
+    #[cfg(feature = "kat")]
+    fn journal_sids(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<Vec<Id>, crate::testutil::E> {
+        let rows = hub
+            .profile_store()
+            .lock()
+            .map_err(|_| "lock")?
+            .pending_controls(contact.0)?;
+        let mut out = Vec::new();
+        for (_, row) in &rows {
+            if let Some(body) = crate::sessions::actor::journal_of(row).map_err(|_| "journal")?
+                && let Some(RouteDescriptor::RelayQueue(q)) =
+                    RouteUpdateBody::decode(&body)?.routes.first()
+            {
+                out.push(q.sid);
+            }
+        }
+        Ok(out)
+    }
+
+    /// RJ: how many journal rows `contact`'s session holds.
+    #[cfg(feature = "kat")]
+    fn journal_rows(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<usize, crate::testutil::E> {
+        Ok(journal_sids(hub, contact)?.len())
+    }
+
+    /// RJ: a contact's sending — the current `sid`, the `sid`s of its old queues in send overlap and of its overlap rows
+    /// (each sorted), the stored route's `sid` and the number of its journal rows.
+    #[cfg(feature = "kat")]
+    type Sending = (Option<Id>, Vec<Id>, Vec<Id>, Option<Id>, usize);
+
+    /// RJ: [`Sending`] of `contact`.
+    #[cfg(feature = "kat")]
+    fn sending(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+    ) -> Result<Sending, crate::testutil::E> {
+        let sid_of = |q: &QueueId| hub.send_targets.get(q).map(|(_, s)| *s);
+        let current = hub.send_ids.get(&contact.0).and_then(sid_of);
+        let mut old: Vec<Id> = hub
+            .retiring_sends
+            .iter()
+            .filter(|r| r.contact == contact.0)
+            .filter_map(|r| sid_of(&r.queue))
+            .collect();
+        old.sort_unstable();
+        let mut rows: Vec<Id> = overlaps_of(hub, contact)?.iter().map(|r| r.0).collect();
+        rows.sort_unstable();
+        Ok((
+            current,
+            old,
+            rows,
+            stored_sid(hub, contact)?,
+            journal_rows(hub, contact)?,
+        ))
+    }
+
+    /// `v` with `sids`, sorted.
+    #[cfg(feature = "kat")]
+    fn with(mut v: Vec<Id>, sids: &[u8]) -> Vec<Id> {
+        v.extend(sids.iter().map(|s| [*s; 16]));
+        v.sort_unstable();
+        v
+    }
+
+    /// The end (Unix ms) of the overlap row of `sid` (one of `n`).
+    #[cfg(feature = "kat")]
+    fn row_end(
+        hub: &Hub<ManualClock, Fixed>,
+        contact: ContactId,
+        n: u8,
+    ) -> Result<Option<u64>, crate::testutil::E> {
+        Ok(overlaps_of(hub, contact)?
+            .into_iter()
+            .find(|r| r.0 == [n; 16])
+            .map(|r| r.2))
+    }
+
+    /// SE-181 (RJ, Q280; EXT2d-2, D-B87): a route C (`sid` 7) committed and the process stopped before the pump: its
+    /// journal row holds C and the stored route is still B; the restart registers B and the old queues again, and its first
+    /// pump switches to C as the pump before the crash would have — B in overlap with a row whose end is a fresh draw of
+    /// `U[1 h, 24 h]`, the store on C, no journal row left; B's row and the store on C are durable before the `AddSend` of
+    /// C is taken (persist-before-send).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn journal_applies_a_route_committed_before_a_crash() -> R {
+        big(|| {
+            let (mut sc, guest, contact) = on_b("se181", 701)?;
+            let (_, old, rows, _, _) = sending(&sc.invitee, contact)?;
+            send_route(&mut sc, 7, ms(40))?;
+            assert_eq!(
+                journal_sids(&sc.invitee, contact)?,
+                [[7_u8; 16]],
+                "C journaled"
+            );
+            assert_eq!(
+                stored_sid(&sc.invitee, contact)?,
+                Some([4; 16]),
+                "the stored route stays B"
+            );
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            assert_eq!(
+                sids(&mut again).first(),
+                Some(&[4_u8; 16]),
+                "B is current at the open"
+            );
+            again.pump()?;
+            assert_eq!(
+                sending(&again, contact)?,
+                (
+                    Some([7; 16]),
+                    with(old, &[4]),
+                    with(rows, &[4]),
+                    Some([7; 16]),
+                    0
+                ),
+                "durable before the AddSend is taken: the state of the pump without the crash"
+            );
+            assert_eq!(sids(&mut again), [[7_u8; 16]], "C registered once");
+            let now = again.core.now_ms();
+            let end = row_end(&again, contact, 4)?.ok_or("B's row")?;
+            assert!(
+                (OVERLAP_MS.0..=OVERLAP_MS.1).contains(&end.saturating_sub(now)),
+                "B's end is a fresh draw"
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-182 (RJ, Q280; CLAUDE.md §1.7): the switch's store transaction fails — nothing is registered, no `AddSend`, no
+    /// overlap row, the stored route and the journal row stay, no queue id is spent; the route put back as the pump does is
+    /// applied exactly by the next pump (C current, B in overlap with its row, the store on C, the journal row gone).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn failed_switch_write_sends_nothing_and_keeps_the_journal() -> R {
+        big(|| {
+            let (mut sc, _guest, contact) = on_b("se182", 711)?;
+            send_route(&mut sc, 7, ms(40))?;
+            let hub = &mut sc.invitee;
+            let before = sending(hub, contact)?;
+            let (targets, ids, next) = (
+                hub.send_targets.clone(),
+                hub.send_ids.clone(),
+                hub.next_send,
+            );
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let taken = hub
+                .core
+                .convs
+                .get_mut(at)
+                .ok_or("conversation")?
+                .persist_mut()
+                .take_routes();
+            let entry = taken.into_iter().next().ok_or("the route")?;
+            secmp_store::kat::fail_at(secmp_store::kat::FailAt(1));
+            let applied = hub.follow(contact, at, &entry.body, Origin::Received(entry.ord))?;
+            assert!(!applied, "refused");
+            assert!(
+                hub.take_actions().is_empty(),
+                "no AddSend without its overlap row"
+            );
+            assert_eq!(sending(hub, contact)?, before, "nothing written");
+            assert_eq!(hub.send_targets, targets, "the send targets");
+            assert_eq!(hub.send_ids, ids, "B is sent to");
+            assert_eq!(hub.next_send, next, "no id spent");
+            hub.core
+                .convs
+                .get_mut(at)
+                .ok_or("conversation")?
+                .persist_mut()
+                .restore_routes(vec![entry]);
+            hub.pump()?;
+            assert_eq!(sids(hub), [[7_u8; 16]], "the retry registers C");
+            let (_, old, rows, _, _) = before;
+            assert_eq!(
+                sending(hub, contact)?,
+                (
+                    Some([7; 16]),
+                    with(old, &[4]),
+                    with(rows, &[4]),
+                    Some([7; 16]),
+                    0
+                )
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-183 (RJ, Q280; EXT2d-2): a crash after the switch's transaction — before the `AddSend` was taken, after it, and
+    /// after a cell on C — restarts in the state of the completed pump: C current, B and the older queues in overlap with
+    /// their stored ends (B's the end drawn at the switch), the store on C, no journal row; the next pump applies nothing.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn crash_after_the_switch_keeps_its_overlap() -> R {
+        big(|| {
+            for (label, seed, point) in [
+                ("se183a", 721_u64, 0_u8),
+                ("se183b", 723, 1),
+                ("se183c", 727, 2),
+            ] {
+                let (mut sc, guest, contact) = on_b(label, seed)?;
+                send_route(&mut sc, 7, ms(40))?;
+                sc.invitee.pump()?;
+                let after = sending(&sc.invitee, contact)?;
+                let end = row_end(&sc.invitee, contact, 4)?.ok_or("B's row")?;
+                if point >= 1 {
+                    let added = add_sends(&mut sc.invitee);
+                    let c = queue_of(&added, 7).ok_or("C")?;
+                    if point == 2 {
+                        let p = sc
+                            .invitee
+                            .prepare_cell(c, ms(50))
+                            .map_err(|_| "prepare")?
+                            .ok_or("cell")?;
+                        sc.invitee.relayed(c, p.token, 1);
+                    }
+                }
+                drop(sc);
+                let guest = guest.reopen()?;
+                let mut again = hub_over(&guest, "guest", 900)?;
+                let added = sids(&mut again);
+                assert_eq!(added.first(), Some(&[7_u8; 16]), "{label}: C current");
+                assert!(added.contains(&[4; 16]), "{label}: B again");
+                assert_eq!(
+                    sending(&again, contact)?,
+                    after,
+                    "{label}: the completed pump"
+                );
+                assert_eq!(
+                    row_end(&again, contact, 4)?,
+                    Some(end),
+                    "{label}: B's drawn end"
+                );
+                again.pump()?;
+                assert_eq!(
+                    sids(&mut again),
+                    Vec::<Id>::new(),
+                    "{label}: nothing to apply"
+                );
+                assert_eq!(sending(&again, contact)?, after, "{label}: unchanged");
+            }
+            Ok(())
+        })
+    }
+
+    /// SE-184 (RJ, Q280; Q242): two routes of one pump, C1 (`sid` 7) switched and C2 (`sid` 5) refused for want of
+    /// randomness, then a crash: the store holds C1 and B's row, C2 is still journaled; the restart registers C1 (with B and
+    /// the older queues) and its first pump switches to C2 — C1 in overlap with its row, the store on C2, no journal row:
+    /// the state of a pump that applied both.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn crash_between_two_routes_of_one_pump() -> R {
+        big(|| {
+            let (mut sc, guest, contact) = on_b("se184", 731)?;
+            let (_, old, rows, _, _) = sending(&sc.invitee, contact)?;
+            send_route(&mut sc, 7, ms(40))?;
+            send_route(&mut sc, 5, ms(41))?;
+            assert_eq!(
+                journal_sids(&sc.invitee, contact)?,
+                [[7_u8; 16], [5; 16]],
+                "both journaled, in order"
+            );
+            let hub = &mut sc.invitee;
+            let at = *hub.core.index.get(&contact.0).ok_or("index")?;
+            let mut taken = hub
+                .core
+                .convs
+                .get_mut(at)
+                .ok_or("conversation")?
+                .persist_mut()
+                .take_routes()
+                .into_iter();
+            let c1 = taken.next().ok_or("C1")?;
+            assert!(
+                hub.follow(contact, at, &c1.body, Origin::Received(c1.ord))?,
+                "C1 switched"
+            );
+            hub.rng = TimingRng::failing();
+            let c2 = taken.next().ok_or("C2")?;
+            assert!(
+                !hub.follow(contact, at, &c2.body, Origin::Received(c2.ord))?,
+                "C2 refused"
+            );
+            assert_eq!(stored_sid(hub, contact)?, Some([7; 16]), "the store on C1");
+            assert_eq!(
+                journal_sids(hub, contact)?,
+                [[5_u8; 16]],
+                "C2 still journaled"
+            );
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            assert_eq!(
+                sids(&mut again).first(),
+                Some(&[7_u8; 16]),
+                "C1 current at the open"
+            );
+            again.pump()?;
+            assert_eq!(sids(&mut again), [[5_u8; 16]], "C2 registered");
+            assert_eq!(
+                sending(&again, contact)?,
+                (
+                    Some([5; 16]),
+                    with(old, &[4, 7]),
+                    with(rows, &[4, 7]),
+                    Some([5; 16]),
+                    0
+                )
+            );
+            Ok(())
+        })
+    }
+
+    /// SE-185 (RJ, Q280; Q242, D-B71, D-B75): a newer route X (`sid` 7) and then the stale A (`sid` 9, in overlap)
+    /// committed, and the process stopped before the pump — or after a pump that refused X for want of randomness: the
+    /// journal holds X then A and the stored route is B; the restart registers B, and its first pump registers X once and A
+    /// nothing — the stale last route hides nothing, the store ends on X, B in overlap with its row.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn newer_route_is_not_hidden_by_a_stale_last_one_across_a_crash() -> R {
+        big(|| {
+            for (label, seed, refused) in [("se185a", 741_u64, false), ("se185b", 743, true)] {
+                let (mut sc, guest, contact) = on_b(label, seed)?;
+                let (_, old, rows, _, _) = sending(&sc.invitee, contact)?;
+                send_route(&mut sc, 7, ms(40))?;
+                send_route(&mut sc, 9, ms(41))?;
+                if refused {
+                    sc.invitee.rng = TimingRng::failing();
+                    assert!(
+                        matches!(sc.invitee.pump(), Err(Error::Unavailable)),
+                        "{label}: X refused"
+                    );
+                }
+                assert_eq!(
+                    journal_sids(&sc.invitee, contact)?,
+                    [[7_u8; 16], [9; 16]],
+                    "{label}: X, then A"
+                );
+                assert_eq!(
+                    stored_sid(&sc.invitee, contact)?,
+                    Some([4; 16]),
+                    "{label}: B stored"
+                );
+                drop(sc);
+                let guest = guest.reopen()?;
+                let mut again = hub_over(&guest, "guest", 900)?;
+                assert_eq!(
+                    sids(&mut again).first(),
+                    Some(&[4_u8; 16]),
+                    "{label}: B current at the open"
+                );
+                again.pump()?;
+                assert_eq!(sids(&mut again), [[7_u8; 16]], "{label}: X once, A nothing");
+                assert_eq!(
+                    sending(&again, contact)?,
+                    (
+                        Some([7; 16]),
+                        with(old, &[4]),
+                        with(rows, &[4]),
+                        Some([7; 16]),
+                        0
+                    ),
+                    "{label}"
+                );
+            }
+            Ok(())
+        })
+    }
+
+    /// SE-187 (RJ, Q280): a store written before RJ — the receive commit wrote the received route C into the stored routes
+    /// and journaled nothing — opens as before: the restart registers C and the old queues of its rows (B has none), no
+    /// journal row is read, a pump applies nothing. No schema change: the journal lives in the CONTROL part.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn store_without_a_journal_opens_as_before() -> R {
+        big(|| {
+            let (sc, guest, contact) = on_b("se187", 751)?;
+            let body = route_body(7, Period::S80)?;
+            guest
+                .profile
+                .store()
+                .lock()
+                .map_err(|_| "lock")?
+                .txn(|tx| secmp_store::contacts::put_contact_routes(tx, contact.0, &body))?;
+            drop(sc);
+            let guest = guest.reopen()?;
+            let mut again = hub_over(&guest, "guest", 900)?;
+            let added = sids(&mut again);
+            assert_eq!(
+                added.first(),
+                Some(&[7_u8; 16]),
+                "the stored route is current, as before RJ"
+            );
+            assert!(!added.contains(&[4; 16]), "B has no row, as before RJ");
+            assert_eq!(journal_rows(&again, contact)?, 0, "no journal row");
+            again.pump()?;
+            assert_eq!(sids(&mut again), Vec::<Id>::new(), "nothing to apply");
             Ok(())
         })
     }

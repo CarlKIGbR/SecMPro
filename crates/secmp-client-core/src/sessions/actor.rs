@@ -333,8 +333,62 @@ pub fn overlap_of(row: &[u8]) -> Result<Option<OverlapRoute>, SourceError> {
     }))
 }
 
+/// The row tag of a route journal entry (RJ, EXT2d-2).
+const JOURNAL_TAG: u8 = 6;
+
+/// RJ (EXT2d-2; ADR-060 amendment (RJ)): the journal row of the routes `routes` (a `RouteUpdateBody` encoding) that a
+/// receive commit makes durable: `6 ‖ RouteUpdateBody` of exactly the first `RelayQueue` route — the only route the hub
+/// follows (`Hub::register_route`). 157..=446 bytes: a `RelayRef` of 101 bytes, or 137 + a host of 1..=253 with `direct`
+/// (spec §5.3, D.5). `None`: no `RelayQueue` route, nothing to journal.
+///
+/// # Errors
+/// [`SourceError`] if `routes` does not decode or the route does not encode.
+pub fn journal_row(routes: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, SourceError> {
+    use secmp_proto::Decode as _;
+    let body = RouteUpdateBody::decode(routes).map_err(|_| SourceError)?;
+    let Some(first) = body
+        .routes
+        .into_iter()
+        .find(|r| matches!(r, RouteDescriptor::RelayQueue(_)))
+    else {
+        return Ok(None);
+    };
+    let one = RouteUpdateBody {
+        routes: vec![first],
+    }
+    .encode()
+    .map_err(|_| SourceError)?;
+    let mut row = Zeroizing::new(Vec::with_capacity(one.len().saturating_add(1)));
+    row.push(JOURNAL_TAG);
+    row.extend_from_slice(&one);
+    Ok(Some(row))
+}
+
+/// RJ: the routes body of a journal row (a `RouteUpdateBody` of one `RelayQueue` route, what `Hub::register_route`
+/// takes); `Ok(None)` for a row of another tag. Strict: the body decodes, holds exactly one route, of kind `RelayQueue`,
+/// and re-encodes to the same bytes (canonical).
+///
+/// # Errors
+/// [`SourceError`] for a journal row that does not decode.
+pub fn journal_of(row: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, SourceError> {
+    use secmp_proto::Decode as _;
+    let Some((&JOURNAL_TAG, body)) = row.split_first() else {
+        return Ok(None);
+    };
+    let decoded = RouteUpdateBody::decode(body).map_err(|_| SourceError)?;
+    if !matches!(decoded.routes.as_slice(), [RouteDescriptor::RelayQueue(_)]) {
+        return Err(SourceError);
+    }
+    let again = decoded.encode().map_err(|_| SourceError)?;
+    // the body holds a send seed: compared in constant time (CLAUDE.md §1.6)
+    if !bool::from(secmp_crypto::ConstantTimeEq::ct_eq(again.as_slice(), body)) {
+        return Err(SourceError);
+    }
+    Ok(Some(again))
+}
+
 /// Q251, Q255 (M7 FZ, Q272): what a row of a session's CONTROL part is at an open — a `KeyChange`'s marker (tag 4), an old
-/// send queue's overlap (tag 5) or a control content (tags 1–3).
+/// send queue's overlap (tag 5), a route journal entry (tag 6, RJ) or a control content (tags 1–3).
 pub enum ControlRow {
     /// The marker of the `KeyChange` at `key_change` on the physical send queue `sid` ([`marker_of`]).
     Marker {
@@ -345,12 +399,14 @@ pub enum ControlRow {
     },
     /// An old send queue's overlap ([`overlap_of`]).
     Overlap(OverlapRoute),
+    /// RJ: a route a receive commit made durable and the hub has not applied yet ([`journal_of`]: its routes body).
+    Journal(Zeroizing<Vec<u8>>),
     /// A control content ([`PendingControl::decode`]).
     Pending(PendingControl),
 }
 
-/// Q251, Q255 (M7 FZ, Q272): the class of a CONTROL row as an open reads it — a marker, else an overlap, else a content;
-/// the three decoders accept disjoint tags. Strict like each of them.
+/// Q251, Q255 (M7 FZ, Q272): the class of a CONTROL row as an open reads it — a marker, else an overlap, else a journal
+/// entry (RJ), else a content; the four decoders accept disjoint tags. Strict like each of them.
 ///
 /// # Errors
 /// [`SourceError`] for a row that none of them decodes, or that the one for its tag refuses.
@@ -360,6 +416,9 @@ pub fn control_row_of(row: &[u8]) -> Result<ControlRow, SourceError> {
     }
     if let Some(route) = overlap_of(row)? {
         return Ok(ControlRow::Overlap(route));
+    }
+    if let Some(body) = journal_of(row)? {
+        return Ok(ControlRow::Journal(body));
     }
     PendingControl::decode(row).map(ControlRow::Pending)
 }
@@ -869,6 +928,49 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             unwritten: true,
         });
         self.write_overlaps();
+    }
+
+    /// RJ (Q254, Q280): the copies the overlap row of the current send queue `old` names when the host switches away from
+    /// it now — [`Conversation::copies_on`] after [`Conversation::switch_send_queue`] would mark the `KeyChange` cells
+    /// among `old`'s last `QUEUE_CAPACITY` cells stranded (Q241), computed before the switch so that the row is durable
+    /// before anything changes (CLAUDE.md §1.7).
+    #[must_use]
+    pub fn copies_at_switch(&self, old: QueueId) -> (u64, bool) {
+        let (mut newest, unknown) = self.copies_on(old);
+        if self.send_queue == Some(old) {
+            for (cell_id, sent) in self.by_cell.range(self.switch_floor()..) {
+                if let Owner::Control(c) = sent.owner
+                    && self
+                        .controls
+                        .get(&c.id)
+                        .is_some_and(|e| is_key_change(&e.row))
+                {
+                    newest = newest.max(*cell_id);
+                }
+            }
+        }
+        (newest, unknown)
+    }
+
+    /// RJ (Q280): the host switched away from the send queue `old` and wrote its overlap row at `ord` itself, in one store
+    /// transaction with the new current route and the journal entry's delete, before the switch: the overlap is kept as
+    /// written (no retry, no second row).
+    pub fn overlap_written(&mut self, old: QueueId, route: OverlapRoute, ord: i64) {
+        self.overlaps.push(Overlap {
+            route,
+            queue: Some(old),
+            ord: Some(ord),
+            unwritten: false,
+        });
+    }
+
+    /// The first cell id of the current send queue whose cell may still wait there after a switch: the newest minus
+    /// `QUEUE_CAPACITY − 1` (Q241, Q238).
+    fn switch_floor(&self) -> u64 {
+        let newest = self.by_cell.keys().next_back().copied().unwrap_or(0);
+        newest.saturating_sub(
+            u64::try_from(secmp_proto::link::QUEUE_CAPACITY.saturating_sub(1)).unwrap_or(0),
+        )
     }
 
     /// Q254: the newest id on `queue` that a `KeyChange` copy may have (its stranded marks), and whether a copy of unknown
@@ -1506,10 +1608,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         {
             self.overlap_send.push(old);
         }
-        let newest = self.by_cell.keys().next_back().copied().unwrap_or(0);
-        let floor = newest.saturating_sub(
-            u64::try_from(secmp_proto::link::QUEUE_CAPACITY.saturating_sub(1)).unwrap_or(0),
-        );
+        let floor = self.switch_floor();
         let ids: BTreeSet<MsgId> = self
             .by_cell
             .range(floor..)

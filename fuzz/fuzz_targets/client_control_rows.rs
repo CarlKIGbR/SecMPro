@@ -2,8 +2,9 @@
 //! FZ-05 `client_control_rows` (M7 FZ; OPEN-M7-B-29 (2), D-B94; CLAUDE.md §1.8, §2.4): the decoders of the rows of a
 //! session's CONTROL part, which `open_conversation` reads back from the store and classifies with `control_row_of`
 //! (`sessions/mod.rs`, a row that does not decode fails the open, Q251, Q255) — `marker_of` (tag 4, Q248), `overlap_of`
-//! (tag 5, Q252) and `PendingControl::decode` (tags 1–3), with their encoders `marker_row`, `OverlapRoute::row` and
-//! `PendingControl::encode`. No store, no crypto: the functions see the row's bytes only.
+//! (tag 5, Q252), `journal_of` (tag 6, RJ, Q280) and `PendingControl::decode` (tags 1–3), with their encoders
+//! `marker_row`, `OverlapRoute::row`, `journal_row` and `PendingControl::encode`. No store, no crypto: the functions see
+//! the row's bytes only.
 //!
 //! Input: `mode u8 ‖ rest`.
 //! - Even mode: `rest` is a CONTROL row.
@@ -12,9 +13,11 @@
 //!   is checked as a row before and after the edit (set, xor, drop the last byte, append a byte).
 //!
 //! Every row: no panic; the tag dispatch — `marker_of` is none exactly for a row not of tag 4 (the empty row included),
-//! `overlap_of` exactly for a row not of tag 5, `PendingControl::decode` refuses every tag but 1, 2, 3 — so at most one
-//! decoder accepts; the field rules restated from the bytes (a marker is 25 bytes with a non-negative `ord`; an overlap
-//! is 68 bytes with a period of `PERIODS` = {10, 20, 40, 80} and a flag 0 or 1; a `Control` row is `2 ‖ code 1|2 ‖ 0 0`);
+//! `overlap_of` exactly for a row not of tag 5, `journal_of` exactly for a row not of tag 6, `PendingControl::decode`
+//! refuses every tag but 1, 2, 3 — so at most one decoder accepts; the field rules restated from the bytes (a marker is
+//! 25 bytes with a non-negative `ord`; an overlap is 68 bytes with a period of `PERIODS` = {10, 20, 40, 80} and a flag 0
+//! or 1; a journal row is `6 ‖ RouteUpdateBody` of exactly one `RelayQueue` route, 157..=446 bytes; a `Control` row is
+//! `2 ‖ code 1|2 ‖ 0 0`);
 //! whatever a decoder accepts re-encodes to exactly the row (canonical) and names the fields at their offsets
 //! (big-endian); and the class `control_row_of` gives the row — the function `open_conversation` classifies every row
 //! with (marker, overlap, content, or a failed open), with the payload of the row's decoder — is the one these rules give
@@ -23,7 +26,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use secmp_client_core::sessions::actor::{
-    ControlRow, OverlapRoute, PendingControl, control_row_of, marker_of, marker_row, overlap_of,
+    ControlRow, OverlapRoute, PendingControl, control_row_of, journal_of, journal_row, marker_of,
+    marker_row, overlap_of,
 };
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::wire::Period;
@@ -35,6 +39,7 @@ use secmp_proto::{Decode as _, Encode as _};
 enum Class {
     Marker,
     Overlap,
+    Journal,
     Content,
     /// The open fails (`Error::Unavailable`).
     Fails,
@@ -56,6 +61,14 @@ fn open_class(row: &[u8]) -> Class {
             assert_eq!(route.row().as_slice(), row, "the overlap of the row");
             Class::Overlap
         }
+        Ok(ControlRow::Journal(body)) => {
+            assert_eq!(
+                journal_of(row).map(|b| b.map(|b| b.to_vec())),
+                Ok(Some(body.to_vec())),
+                "the journal entry of the row"
+            );
+            Class::Journal
+        }
         Ok(ControlRow::Pending(content)) => {
             let again = content.encode().expect("an accepted content encodes");
             assert_eq!(again.as_slice(), row, "the content of the row");
@@ -65,10 +78,15 @@ fn open_class(row: &[u8]) -> Class {
     }
 }
 
-/// The independent oracle: the three leaf decoders in the reverse order.
+/// The independent oracle: the four leaf decoders in the reverse order.
 fn reverse_class(row: &[u8]) -> Class {
     if PendingControl::decode(row).is_ok() {
         return Class::Content;
+    }
+    match journal_of(row) {
+        Err(_) => return Class::Fails,
+        Ok(Some(_)) => return Class::Journal,
+        Ok(None) => {}
     }
     match overlap_of(row) {
         Err(_) => return Class::Fails,
@@ -90,6 +108,7 @@ fn check_row(row: &[u8]) {
     let tag = row.first().copied();
     let marker = marker_of(row);
     let overlap = overlap_of(row);
+    let journal = journal_of(row);
     let content = PendingControl::decode(row);
     // the tag dispatch
     assert_eq!(
@@ -101,6 +120,11 @@ fn check_row(row: &[u8]) {
         matches!(overlap, Ok(None)),
         tag != Some(5),
         "overlap_of: none exactly off tag 5"
+    );
+    assert_eq!(
+        matches!(journal, Ok(None)),
+        tag != Some(6),
+        "journal_of: none exactly off tag 6"
     );
     if !matches!(tag, Some(1..=3)) {
         assert!(
@@ -125,6 +149,25 @@ fn check_row(row: &[u8]) {
         overlap_ok,
         "overlap field rules"
     );
+    // a journal row: `6 ‖ RouteUpdateBody` of exactly one `RelayQueue` route, re-encoding to itself, by the wire decoders
+    let journal_ok = tag == Some(6)
+        && row.get(1..).is_some_and(|body| {
+            RouteUpdateBody::decode(body).is_ok_and(|b| {
+                matches!(b.routes.as_slice(), [RouteDescriptor::RelayQueue(_)])
+                    && b.encode().is_ok_and(|e| e.as_slice() == body)
+            })
+        });
+    assert_eq!(
+        matches!(journal, Ok(Some(_))),
+        journal_ok,
+        "journal field rules"
+    );
+    if journal_ok {
+        assert!(
+            (157..=446).contains(&row.len()),
+            "a journal row is 157..=446 bytes"
+        );
+    }
     if tag == Some(2) {
         let control_ok = row.len() == 4
             && matches!(row.get(1), Some(1 | 2))
@@ -139,6 +182,7 @@ fn check_row(row: &[u8]) {
     let accepted = [
         matches!(marker, Ok(Some(_))),
         matches!(overlap, Ok(Some(_))),
+        matches!(journal, Ok(Some(_))),
         content.is_ok(),
     ];
     assert!(
@@ -168,6 +212,18 @@ fn check_row(row: &[u8]) {
         assert_eq!(Some(r.newest), be_u64(row, 59), "newest, big-endian");
         assert_eq!(Some(u8::from(r.unknown)), row.get(67).copied(), "flag");
     }
+    if let Ok(Some(body)) = &journal {
+        assert_eq!(
+            [&[6][..], body.as_slice()].concat(),
+            row,
+            "a journal row is 6 ‖ its body"
+        );
+        assert_eq!(
+            journal_row(body).expect("a journal body is a routes body").as_deref().map(Vec::as_slice),
+            Some(row),
+            "a journal row re-encodes to itself"
+        );
+    }
     if let Ok(c) = &content {
         let again = c.encode().expect("an accepted content encodes");
         assert_eq!(again.as_slice(), row, "a content re-encodes to its row");
@@ -177,6 +233,7 @@ fn check_row(row: &[u8]) {
     let want = match tag {
         Some(4) if marker_ok => Class::Marker,
         Some(5) if overlap_ok => Class::Overlap,
+        Some(6) if journal_ok => Class::Journal,
         Some(1..=3) if content.is_ok() => Class::Content,
         _ => Class::Fails,
     };
@@ -344,7 +401,14 @@ fn structured(rest: &[u8]) {
         ),
         _ => panic!("a RouteUpdate decodes as one"),
     }
-    for row in [m.as_slice(), o.as_slice(), c.as_slice(), r.as_slice()] {
+    // RJ: routes without a `RelayQueue` route make no journal row; the same body under tag 6 is refused
+    assert!(
+        matches!(journal_row(&body), Ok(None)),
+        "no RelayQueue route: no journal row"
+    );
+    let j = [&[6][..], &body].concat();
+    assert!(journal_of(&j).is_err(), "a journal row of an unknown kind only");
+    for row in [m.as_slice(), o.as_slice(), c.as_slice(), r.as_slice(), j.as_slice()] {
         check_row(row);
         check_row(&edit(row, op, at, value));
     }

@@ -410,6 +410,8 @@ pub fn open_conversation<S: EntropySource>(
                 conversation.restore_marker(ord, key_change, sid);
             }
             ControlRow::Overlap(route) => conversation.restore_overlap(ord, route),
+            // RJ (Q280): a route committed and not yet applied by the hub — its next pump applies it, in `ord` order
+            ControlRow::Journal(body) => conversation.persist_mut().journal_read(ord, body),
             ControlRow::Pending(content) => conversation
                 .queue_pending(ord, content)
                 .map_err(|_| Error::Unavailable)?,

@@ -264,6 +264,11 @@ pub trait StoreHub: Source {
     fn link_put(&mut self, n: u32) -> Option<LinkMaterial>;
     /// The seeds `(recipient, sender)` of `queue`.
     fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)>;
+    /// The seeds `(recipient, sender)` of a spare queue the scheduler's pool is about to create (the pool bridge of the hub,
+    /// D4′): made durable by the hub before they are returned. `None` for a hub without the bridge.
+    fn pool_material(&mut self, _queue: QueueId) -> Option<(SecretBytes<32>, SecretBytes<32>)> {
+        None
+    }
     /// The consuming `LINK_GET` of `n` returned `blob`.
     ///
     /// # Errors
@@ -309,6 +314,10 @@ impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
 
     fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
         Hub::queue_material(self, queue)
+    }
+
+    fn pool_material(&mut self, queue: QueueId) -> Option<(SecretBytes<32>, SecretBytes<32>)> {
+        Hub::pool_material(self, queue)
     }
 
     fn link_consumed(&mut self, n: u32, blob: Option<Vec<u8>>) -> Result<(), String> {
@@ -859,6 +868,32 @@ impl VirtualDriver {
                 .sched
                 .schedule_control(t, spec.kind, spec.relay, spec.related, spec.when)
                 .map(|_| ()),
+            Action::TakeSpare { queue, period_ms } => {
+                let relay = c.relay;
+                let source: &mut dyn Source = match c.hub.as_mut() {
+                    Some(hub) => &mut **hub,
+                    None => &mut c.convs,
+                };
+                let taken = c.sched.take_pool_queue_id(
+                    t,
+                    relay,
+                    queue,
+                    period_ms,
+                    &mut Gate::new(source, &mut c.gate),
+                );
+                match taken {
+                    Ok((Some(_), outs)) => {
+                        self.apply(i, t, outs);
+                        Ok(())
+                    }
+                    Ok((None, _)) => {
+                        c.hub_errors
+                            .push(format!("TakeSpare {}: not a spare", queue.0));
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
             Action::Remove { queue } => {
                 let source: &mut dyn Source = match c.hub.as_mut() {
                     Some(hub) => &mut **hub,
@@ -1425,7 +1460,15 @@ impl VirtualDriver {
             ControlKind::QueueNew(queue) | ControlKind::QueueDel(queue) => {
                 // the driver's own copy of the material (Q211/Q214: the hub hands it out typed, an absent sender seed as
                 // `None`, kept as `None`; only a `QUEUE_DEL` can use such an entry)
-                if let Some((recv, send)) = hub.queue_material(queue) {
+                let material = hub.queue_material(queue).or_else(|| {
+                    // a spare the scheduler's pool creates: its seeds are made durable first (D4′)
+                    if matches!(kind, ControlKind::QueueNew(_)) {
+                        hub.pool_material(queue).map(|(r, s)| (r, Some(s)))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((recv, send)) = material {
                     let send = send.map(|s| *s.expose_secret());
                     client
                         .material

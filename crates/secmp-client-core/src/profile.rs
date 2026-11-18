@@ -15,16 +15,18 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use secmp_proto::link::ids::AccessKey;
 use secmp_proto::prekeys::{
     IDENTITY_SECTION_LEN, IdentityKeys, OpkSecrets, SPK_ROTATION_S, SpkGeneration,
 };
 use secmp_proto::tr::Entropy;
 use secmp_proto::wire::Id;
+use secmp_proto::wire::inv::RelayRef;
 use secmp_store::Store;
 use secmp_store::profile::{
     INVITATION_OPEN, INVITATION_RETIRING, KIND_OPK, KIND_SPK, delete_invitation, delete_prekey,
     insert_prekey, max_prekey_id, meta_u32, put_identity, put_invitation_record,
-    put_invitation_retained, put_meta_u32, set_invitation_status,
+    put_invitation_retained, put_meta_u32, put_relay, set_invitation_status,
 };
 use secmp_store::sessions::insert_pending_control;
 use secmp_store::wrap::{self, Unlocked};
@@ -131,6 +133,22 @@ impl Profile {
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
         })
+    }
+
+    /// Record a relay of the user (M7-C1): its `RelayRef` and access key in the next free relay row (id 1 for the first), one
+    /// store transaction. The row's pool starts empty.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the reference does not encode or the store cannot be read or written.
+    pub fn add_relay(&self, relay: &RelayRef, access: &AccessKey) -> Result<RelayId, Error> {
+        let encoded = secmp_proto::Encode::encode(relay)?;
+        let mut store = self.store.lock().map_err(|_| Error::Unavailable)?;
+        let mut id = 1_u32;
+        while store.relay_ref(i64::from(id))?.is_some() {
+            id = id.checked_add(1).ok_or(Error::Unavailable)?;
+        }
+        store.txn(|tx| put_relay(tx, i64::from(id), &encoded, Some(access.expose_secret())))?;
+        Ok(RelayId(id))
     }
 
     /// Open the existing profile in `dir` that `unlocked` unlocked.
@@ -499,6 +517,29 @@ mod tests {
 
     #[cfg(feature = "kat")]
     type R = Result<(), E>;
+
+    /// M7-C1 (A4): `add_relay` writes the relay row in one transaction under the first free id — 1, then 2 — with the
+    /// reference as given and the access key sealed; the pool of the new row is empty.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn add_relay_takes_the_next_id() -> R {
+        let mut entropy = FixedEntropy::new(&stream(12, 1 << 20));
+        let fx = Fixture::new("pr-add-relay", &mut entropy)?;
+        let relay = crate::testutil::relay_ref();
+        let access = secmp_crypto::SecretBytes::<32>::from_slice(&[9; 32])?;
+        assert_eq!(fx.profile.add_relay(&relay, &access)?, RelayId(1));
+        assert_eq!(fx.profile.add_relay(&relay, &access)?, RelayId(2));
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        assert_eq!(s.relay_ref(1)?, Some(relay.encode()?.to_vec()));
+        assert_eq!(
+            s.relay_access_key(2)?.map(|k| k.to_vec()),
+            Some(vec![9; 32])
+        );
+        assert!(s.relay_ref(3)?.is_none());
+        assert!(s.relay_pool(1)?.is_none());
+        Ok(())
+    }
 
     /// PR-01 (§6.1 `docs/03:267-275`, §6.2): `Profile::create` with the entropy of the frozen vector `fp-0001` — the
     /// identity is `IK_sig` = Ed25519 ‖ ML-DSA-65 and `IK_dh` X25519 (2017-byte `IKSPublic`), its fingerprint is the §6.2

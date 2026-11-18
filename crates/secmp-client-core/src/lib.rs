@@ -32,6 +32,8 @@ pub mod profile;
 #[cfg(not(kani))]
 pub mod relay_view;
 pub mod retention;
+#[cfg(not(kani))]
+pub mod runtime;
 pub mod scheduler;
 #[cfg(not(kani))]
 pub mod sessions;

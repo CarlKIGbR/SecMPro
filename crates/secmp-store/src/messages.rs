@@ -53,6 +53,18 @@ pub struct NewMessage<'a> {
     pub payload: &'a [u8],
 }
 
+/// A message of the history as [`Store::message`] reads it (the payload is the user's text: zeroized, no `Debug`).
+pub struct StoredMessage {
+    /// In or out.
+    pub direction: Direction,
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// When (milliseconds of the store's clock).
+    pub ts_ms: u64,
+    /// The payload.
+    pub payload: Zeroizing<Vec<u8>>,
+}
+
 /// A held view-once message.
 struct Held {
     msg_id: [u8; 16],
@@ -130,6 +142,38 @@ impl Store {
             )?
             .unwrap_or(0)
             > 0)
+    }
+
+    /// The message `msg_id` of `contact_id` as the history holds it (a view-once is never there).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails or the row does not fit the types.
+    pub fn message(&self, contact_id: i64, msg_id: &[u8; 16]) -> Result<Option<StoredMessage>> {
+        let row = self.query_row(
+            "SELECT direction, kind, ts_ms, payload FROM messages WHERE contact_id = ?1 AND msg_id = ?2",
+            params![contact_id, msg_id.as_slice()],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    Zeroizing::new(r.get::<_, Vec<u8>>(3)?),
+                ))
+            },
+        )?;
+        let Some((direction, kind, ts, payload)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(StoredMessage {
+            direction: if direction == 0 {
+                Direction::In
+            } else {
+                Direction::Out
+            },
+            kind: u8::try_from(kind).map_err(|_| Error::Unavailable)?,
+            ts_ms: u64::try_from(ts).map_err(|_| Error::Unavailable)?,
+            payload,
+        }))
     }
 
     /// Delete every message whose `expire_after` has run out at `now_ms` (§7.6); returns how many.
@@ -384,6 +428,32 @@ mod tests {
         assert!(store.has_message(7, &id)?);
         assert_eq!(store.expire_messages(61_000)?, 1);
         assert!(!store.has_message(7, &id)?);
+        Ok(())
+    }
+
+    /// M7-C1 (A3): `Store::message` reads one message back — direction, kind, time and payload — and `None` for another
+    /// contact's id or an unknown one.
+    #[test]
+    fn message_reads_one_row() -> R {
+        let dir = TempDir::new("message-read")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let id = [0x2a_u8; 16];
+        store.insert_message(&NewMessage {
+            contact_id: 3,
+            msg_id: id,
+            direction: Direction::Out,
+            kind: 1,
+            ts_ms: 1_234,
+            expire_after: 0,
+            payload: b"ping",
+        })?;
+        let got = store.message(3, &id)?.ok_or("the message")?;
+        assert_eq!(
+            (got.direction, got.kind, got.ts_ms, got.payload.as_slice()),
+            (Direction::Out, 1, 1_234, b"ping".as_slice())
+        );
+        assert!(store.message(4, &id)?.is_none());
+        assert!(store.message(3, &[0; 16])?.is_none());
         Ok(())
     }
 

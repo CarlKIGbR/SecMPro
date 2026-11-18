@@ -1409,6 +1409,7 @@ fn no_identifiers_reach_transport_types() -> Result<()> {
     /// `driver::…` is the async transport the tokio driver runs).
     const PLUMBING: &[&str] = &[
         "AsyncConnectOutcome",
+        "AsyncQueueTransport",
         "AsyncRelayQueueTransport",
         "AsyncSession",
         "Channel",
@@ -1416,11 +1417,14 @@ fn no_identifiers_reach_transport_types() -> Result<()> {
         "EitherStream",
         "Error",
         "Isolation",
+        "LinkGetMode",
         "Outcome",
         "Prepared",
         "ProviderStream",
         "QueueRef",
         "StreamProvider",
+        "TlsProvider",
+        "arti",
         "channel",
         "counters",
         "driver",
@@ -1428,9 +1432,12 @@ fn no_identifiers_reach_transport_types() -> Result<()> {
         "evicted_is_plausible",
         "seal_calls",
         "sign_calls",
+        "tls",
+        "tor",
     ];
     const IMPORTERS: &[&str] = &[
         "crates/secmp-client-core/src/kani_proofs.rs",
+        "crates/secmp-client-core/src/runtime.rs",
         "crates/secmp-client-core/src/scheduler/core/mod.rs",
         "crates/secmp-client-core/src/scheduler/run.rs",
     ];

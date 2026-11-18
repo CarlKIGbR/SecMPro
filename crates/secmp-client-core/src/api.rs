@@ -14,10 +14,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::clock::Clock;
 use crate::contacts::Contacts;
+pub use crate::contacts::{Contact, ContactState};
 use crate::outbox::StoreOutbox;
 use crate::persist::{SharedStore, StorePersist};
 use crate::profile::Profile;
 use crate::relay_view;
+pub use crate::runtime;
 use crate::scheduler::params::{Mode, Params};
 use crate::scheduler::types::{QueueId, RelayId};
 use crate::sessions::actor::{Conversations, EntropySource, Refusal, SessionEvent};
@@ -80,6 +82,8 @@ pub enum Error {
     Unsupported,
     /// An invitation was refused.
     Invitation(InviteReject),
+    /// The transport could not be started (Tor): nothing connects, and nothing else is tried (CLAUDE.md §1.5).
+    Transport,
 }
 
 impl fmt::Display for Error {
@@ -96,6 +100,7 @@ impl fmt::Display for Error {
             Self::CloudFolder => f.write_str("the path is inside a cloud-synchronised folder"),
             Self::Unsupported => f.write_str("not supported"),
             Self::Invitation(r) => r.fmt(f),
+            Self::Transport => f.write_str("the transport could not be started"),
         }
     }
 }
@@ -184,6 +189,10 @@ pub enum Event {
     /// An identity succession towards the contact has been pending for 24 h, or two or more are pending (ADR-060 (6),
     /// Q246): the contact has not fetched the earlier `KeyChange` yet. Nothing is skipped or given up.
     SuccessionPending(ContactId),
+    /// An invitation the user accepted made a contact (the handshake is on its way; the contact is unverified).
+    ContactAdded(ContactId),
+    /// An invitation the user accepted was refused (spec §5.5; the class is shown, never logged).
+    InviteFailed(InviteReject),
 }
 
 impl core::fmt::Debug for Event {
@@ -203,6 +212,8 @@ impl core::fmt::Debug for Event {
             Self::NotConfirmed { .. } => "NotConfirmed",
             Self::ViewOnceLost(_) => "ViewOnceLost",
             Self::SuccessionPending(_) => "SuccessionPending",
+            Self::ContactAdded(_) => "ContactAdded",
+            Self::InviteFailed(_) => "InviteFailed",
         })
     }
 }
@@ -270,6 +281,13 @@ pub enum Request {
         /// `expire_after` in seconds (0: never).
         expire_after: u32,
     },
+    /// A message of the history by its id (M7-C1: the CLI prints a received message's text).
+    Message {
+        /// The contact.
+        contact: ContactId,
+        /// The message.
+        msg_id: MessageId,
+    },
     /// Show a received view-once.
     Reveal {
         /// The contact.
@@ -331,6 +349,17 @@ pub enum Response {
     Verified(bool),
     /// The id of the queued message.
     Sent(MessageId),
+    /// A message of the history.
+    Message {
+        /// Whether it was received (else sent).
+        incoming: bool,
+        /// `AppMessage.kind`.
+        kind: u8,
+        /// When (Unix milliseconds of the store's clock).
+        ts_ms: u64,
+        /// The payload.
+        payload: Zeroizing<Vec<u8>>,
+    },
     /// The payload of a view-once.
     Revealed(Zeroizing<Vec<u8>>),
     /// Whether the rotation started (else `Event::RotationDeferred`).
@@ -359,6 +388,7 @@ impl core::fmt::Debug for Request {
                 .debug_struct("Send")
                 .field("payload", &Len(payload.len()))
                 .finish_non_exhaustive(),
+            Self::Message { .. } => f.write_str("Message"),
             Self::Reveal { .. } => f.write_str("Reveal"),
             Self::Rotate { .. } => f.write_str("Rotate"),
             Self::RotateIdentity => f.write_str("RotateIdentity"),
@@ -386,6 +416,10 @@ impl core::fmt::Debug for Response {
                 .finish(),
             Self::Verified(_) => f.write_str("Verified"),
             Self::Sent(_) => f.write_str("Sent"),
+            Self::Message { payload, .. } => f
+                .debug_struct("Message")
+                .field("payload", &Len(payload.len()))
+                .finish_non_exhaustive(),
             Self::Revealed(payload) => f
                 .debug_tuple("Revealed")
                 .field(&Len(payload.len()))
@@ -413,7 +447,7 @@ pub struct Core<C: Clock, S: EntropySource> {
     pub(crate) profile: Profile,
     pub(crate) store: SharedStore,
     pub(crate) clock: C,
-    pub(crate) make_source: Box<dyn FnMut() -> S>,
+    pub(crate) make_source: Box<dyn FnMut() -> S + Send>,
     pub(crate) convs: Conversations<StoreOutbox, StorePersist, S>,
     pub(crate) index: BTreeMap<i64, usize>,
     pub(crate) events: Vec<Stamped>,
@@ -449,7 +483,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         dir: &std::path::Path,
         passphrase: &[u8],
         clock: C,
-        make_source: impl FnMut() -> S + 'static,
+        make_source: impl FnMut() -> S + Send + 'static,
     ) -> Result<Self, Error> {
         let unlocked = secmp_store::wrap::unlock(dir, passphrase)?;
         Self::with_profile(Profile::open_with(dir, &unlocked)?, clock, make_source)
@@ -465,7 +499,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         passphrase: &[u8],
         accept: secmp_store::wrap::Argon2Params,
         clock: C,
-        make_source: impl FnMut() -> S + 'static,
+        make_source: impl FnMut() -> S + Send + 'static,
     ) -> Result<Self, Error> {
         let unlocked = secmp_store::wrap::unlock_kat(dir, passphrase, accept)?;
         Self::with_profile(Profile::open_with(dir, &unlocked)?, clock, make_source)
@@ -484,7 +518,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         backup: &std::path::Path,
         backup_passphrase: &[u8],
         clock: C,
-        make_source: impl FnMut() -> S + 'static,
+        make_source: impl FnMut() -> S + Send + 'static,
     ) -> Result<Self, Error> {
         let unlocked = secmp_store::wrap::create(dir, passphrase)?;
         let mut store = secmp_store::Store::open_unlocked(dir, &unlocked)?;
@@ -505,7 +539,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         backup_passphrase: &[u8],
         accept: secmp_store::wrap::Argon2Params,
         clock: C,
-        make_source: impl FnMut() -> S + 'static,
+        make_source: impl FnMut() -> S + Send + 'static,
     ) -> Result<Self, Error> {
         let unlocked = secmp_store::wrap::create_kat(dir, passphrase, accept)?;
         let mut store = secmp_store::Store::open_unlocked(dir, &unlocked)?;
@@ -517,7 +551,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     fn after_restore(
         store: secmp_store::Store,
         clock: C,
-        mut make_source: impl FnMut() -> S + 'static,
+        mut make_source: impl FnMut() -> S + Send + 'static,
     ) -> Result<Self, Error> {
         let profile = Profile::from_store(Arc::new(std::sync::Mutex::new(store)));
         let mut source = make_source();
@@ -534,7 +568,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     pub fn with_profile(
         profile: Profile,
         clock: C,
-        make_source: impl FnMut() -> S + 'static,
+        make_source: impl FnMut() -> S + Send + 'static,
     ) -> Result<Self, Error> {
         let store = profile.store();
         let settings = Settings::load(&store)?;
@@ -662,6 +696,11 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         self.view = view;
     }
 
+    /// The ids of the contacts that have a session.
+    pub(crate) fn contact_ids(&self) -> impl Iterator<Item = i64> + '_ {
+        self.index.keys().copied()
+    }
+
     /// The control operations the requests asked for since the last call (the driver schedules them).
     pub fn take_ops(&mut self) -> Vec<crate::scheduler::control::OpSpec> {
         core::mem::take(&mut self.ops)
@@ -762,6 +801,20 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                     },
                     now,
                 )?)
+            }
+            Request::Message { contact, msg_id } => {
+                let found = self
+                    .store
+                    .lock()
+                    .map_err(|_| Error::Unavailable)?
+                    .message(contact.0, &msg_id)?
+                    .ok_or(Error::Unavailable)?;
+                Response::Message {
+                    incoming: found.direction == secmp_store::messages::Direction::In,
+                    kind: found.kind,
+                    ts_ms: found.ts_ms,
+                    payload: found.payload,
+                }
             }
             Request::Reveal { contact, msg_id } => {
                 let (now, store) = (self.now_ms(), Arc::clone(&self.store));
@@ -1013,6 +1066,15 @@ mod tests {
 
     use std::future::Future;
 
+    /// A1 (M7-C1): the hub of a shipped build moves between threads — the host runtime shares it behind a mutex with the
+    /// worker and the control runner.
+    #[test]
+    fn hub_is_send() {
+        const fn assert_send<T: Send>() {}
+        assert_send::<crate::hub::Hub<crate::clock::TokioClock, crate::sessions::actor::OsSource>>(
+        );
+    }
+
     #[cfg(feature = "kat")]
     use crate::scheduler::outbox::Outbox as _;
     #[cfg(feature = "kat")]
@@ -1125,6 +1187,35 @@ mod tests {
         Ok(())
     }
 
+    /// M7-C1 (A3): the sent text is in the history and readable by its id; an unknown id is refused.
+    #[cfg(feature = "kat")]
+    async fn message_by_id(api: &Api, contact: ContactId, id: MessageId) -> R {
+        let Response::Message {
+            incoming,
+            kind,
+            payload,
+            ..
+        } = api
+            .call(Request::Message {
+                contact,
+                msg_id: id,
+            })
+            .await?
+        else {
+            return Err("message".into());
+        };
+        assert_eq!(
+            (incoming, kind, payload.as_slice()),
+            (false, 1, &b"hello"[..])
+        );
+        let unknown = Request::Message {
+            contact,
+            msg_id: [0x56; 16],
+        };
+        assert!(matches!(api.call(unknown).await, Err(Error::Unavailable)));
+        Ok(())
+    }
+
     /// The requests of AP-01, one of each kind.
     #[cfg(feature = "kat")]
     async fn requests(api: &mut Api, store: &SharedStore) -> R {
@@ -1160,6 +1251,7 @@ mod tests {
             return Err("sent view-once".into());
         };
         assert_ne!(id, vo);
+        message_by_id(api, contact, id).await?;
         refused_outbox_insert(api, store, contact).await?;
         let unknown = Request::Reveal {
             contact,

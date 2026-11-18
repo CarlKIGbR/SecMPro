@@ -445,6 +445,47 @@ impl SparePool {
             .collect()
     }
 
+    /// The id the next spare drawn by [`SparePool::fill`] gets: above every id the pool has handed out (the pool's counter is
+    /// the one id space of the host's recv-queues).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn next_id(&self, relay: RelayId) -> Result<u32, Error> {
+        let store = self.lock()?;
+        Ok(PoolBlob::read(&store, relay)?.next)
+    }
+
+    /// Append the spare `queue` with seeds `recv_seed` and `send_seed` — one the scheduler's pool is about to create on the
+    /// relay (M7-C1, D4′) — and raise the counter above its id, in one store transaction. The queue is durable before the
+    /// `QUEUE_NEW` leaves (persist-before-send): on an error nothing is written and the caller must not create it.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written, the queue is in the pool already, or the pool is full.
+    pub fn append_created(
+        &self,
+        relay: RelayId,
+        queue: QueueId,
+        recv_seed: &SecretBytes<32>,
+        send_seed: &SecretBytes<32>,
+    ) -> Result<(), Error> {
+        let mut store = self.lock()?;
+        let mut pool = PoolBlob::read(&store, relay)?;
+        if pool.queues.iter().any(|q| q.queue == queue) {
+            return Err(Error::Unavailable);
+        }
+        pool.queues.push(PoolQueue {
+            queue,
+            recv_seed: SecretBytes::from_slice(recv_seed.expose_secret())?,
+            send_seed: SecretBytes::from_slice(send_seed.expose_secret())?,
+        });
+        pool.next = pool
+            .next
+            .max(queue.0.checked_add(1).ok_or(Error::Unavailable)?);
+        let blob = pool.encode()?;
+        store.txn(|tx| put_relay_pool(tx, i64::from(relay.0), Some(&blob)))?;
+        Ok(())
+    }
+
     /// The spare queues of `relay`.
     ///
     /// # Errors

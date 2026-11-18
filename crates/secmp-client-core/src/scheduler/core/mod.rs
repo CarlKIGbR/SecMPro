@@ -1760,6 +1760,34 @@ impl Scheduler {
         Ok(())
     }
 
+    /// A spare that already exists on the relay — one the host stored, at an open (M7-C1, D4′): it is registered as created
+    /// and fetched at `P_POOL`, counted in the pool, and the queue-id counter is raised above it. Nothing is created.
+    ///
+    /// # Errors
+    /// [`SchedError::DuplicateQueue`] if `queue` is registered; the add errors.
+    pub fn adopt_pool_queue(
+        &mut self,
+        now: u64,
+        relay: RelayId,
+        queue: QueueId,
+        cap: RecvCap,
+    ) -> Result<(), SchedError> {
+        if self.has_queue(queue) {
+            return Err(SchedError::DuplicateQueue);
+        }
+        let period = self.world.params.p_pool_ms;
+        self.add_recv_with_id(now, queue, relay, cap, period, true)?;
+        self.world.pool.adopt(relay, queue);
+        self.floor_queue_ids(queue.0.saturating_add(1));
+        Ok(())
+    }
+
+    /// Raise the queue-id counter to at least `next`: the ids the scheduler makes for its own pool creations stay above
+    /// every id the host stored (the hub's and the scheduler's ids share one space).
+    pub fn floor_queue_ids(&mut self, next: u32) {
+        self.world.next_queue = self.world.next_queue.max(next);
+    }
+
     /// Hand out a spare of `relay` for an invitation announced with `announced_ms`: its link is replaced by one at the
     /// announced period, and a replacement spare is queued (not now: a `QUEUE_NEW` is never needed at that moment).
     ///
@@ -1772,10 +1800,43 @@ impl Scheduler {
         announced_ms: u64,
         source: &mut S,
     ) -> Result<(Option<QueueId>, Vec<Output>), SchedError> {
+        self.take_spare(now, (relay, None), announced_ms, source)
+    }
+
+    /// [`Scheduler::take_pool_queue`] for the named spare `queue` (the one the host's store handed out, M7-C1, D4′);
+    /// `None` if it is not a spare of `relay` (yet).
+    ///
+    /// # Errors
+    /// As [`Scheduler::take_pool_queue`].
+    pub fn take_pool_queue_id<S: CellSource>(
+        &mut self,
+        now: u64,
+        relay: RelayId,
+        queue: QueueId,
+        announced_ms: u64,
+        source: &mut S,
+    ) -> Result<(Option<QueueId>, Vec<Output>), SchedError> {
+        self.take_spare(now, (relay, Some(queue)), announced_ms, source)
+    }
+
+    fn take_spare<S: CellSource>(
+        &mut self,
+        now: u64,
+        (relay, named): (RelayId, Option<QueueId>),
+        announced_ms: u64,
+        source: &mut S,
+    ) -> Result<(Option<QueueId>, Vec<Output>), SchedError> {
         if !self.world.params.period_valid(announced_ms) {
             return Err(SchedError::BadPeriod);
         }
-        let Some(queue) = self.world.pool.take(relay) else {
+        let (taken, at) = match named {
+            None => (self.world.pool.take(relay), 0),
+            Some(q) => {
+                let at = self.world.pool.position(relay, q).unwrap_or(0);
+                (self.world.pool.take_named(relay, q), at)
+            }
+        };
+        let Some(queue) = taken else {
             return Ok((None, Vec::new()));
         };
         if let Some(rq) = self.world.recv_mut(queue) {
@@ -1784,11 +1845,11 @@ impl Scheduler {
         let out = match self.set_queue_period(now, queue, announced_ms, source) {
             Ok(out) => out,
             Err(e) => {
-                // refused (e.g. the rate bound at the announced period): the spare stays the oldest one, unchanged
+                // refused (e.g. the rate bound at the announced period): the spare stays where it was, unchanged
                 if let Some(rq) = self.world.recv_mut(queue) {
                     rq.pool = true;
                 }
-                self.world.pool.untake(relay, queue);
+                self.world.pool.restore(relay, queue, at);
                 return Err(e);
             }
         };

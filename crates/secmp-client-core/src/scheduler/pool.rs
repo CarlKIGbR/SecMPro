@@ -73,6 +73,52 @@ impl QueuePool {
         Some(r.relay)
     }
 
+    /// A spare that already exists on the relay (a stored one, adopted at an open): counted as created. Returns whether it
+    /// was added (a queue already counted, as a spare or a creation under way, is not).
+    pub fn adopt(&mut self, relay: RelayId, queue: QueueId) -> bool {
+        self.manage(relay);
+        if self
+            .relays
+            .iter()
+            .any(|r| r.spares.contains(&queue) || r.pending.contains(&queue))
+        {
+            return false;
+        }
+        match self.relays.iter_mut().find(|r| r.relay == relay) {
+            Some(r) => {
+                r.spares.push(queue);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Hand out the spare `queue` of `relay`, if it is one.
+    pub fn take_named(&mut self, relay: RelayId, queue: QueueId) -> Option<QueueId> {
+        let r = self.relays.iter_mut().find(|r| r.relay == relay)?;
+        let at = r.spares.iter().position(|q| *q == queue)?;
+        Some(r.spares.remove(at))
+    }
+
+    /// Put `queue` back as a spare of `relay` at position `at` (a named hand-out that was refused).
+    pub fn restore(&mut self, relay: RelayId, queue: QueueId, at: usize) {
+        if let Some(r) = self.relays.iter_mut().find(|r| r.relay == relay) {
+            let at = at.min(r.spares.len());
+            r.spares.insert(at, queue);
+        }
+    }
+
+    /// The position of the spare `queue` of `relay`.
+    #[must_use]
+    pub fn position(&self, relay: RelayId, queue: QueueId) -> Option<usize> {
+        self.relays
+            .iter()
+            .find(|r| r.relay == relay)?
+            .spares
+            .iter()
+            .position(|q| *q == queue)
+    }
+
     /// Hand out the oldest spare of `relay`.
     pub fn take(&mut self, relay: RelayId) -> Option<QueueId> {
         let r = self.relays.iter_mut().find(|r| r.relay == relay)?;
@@ -80,13 +126,6 @@ impl QueuePool {
             None
         } else {
             Some(r.spares.remove(0))
-        }
-    }
-
-    /// Put `queue` back as the oldest spare of `relay` (a hand-out that was refused).
-    pub fn untake(&mut self, relay: RelayId, queue: QueueId) {
-        if let Some(r) = self.relays.iter_mut().find(|r| r.relay == relay) {
-            r.spares.insert(0, queue);
         }
     }
 

@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use secmp_crypto::{ConstantTimeEq as _, SecretBytes, Zeroizing};
 use secmp_proto::Decode as _;
+use secmp_proto::tr::Entropy as _;
 use secmp_proto::wire::cell::{Cell, RouteDescriptor, RouteUpdateBody};
 use secmp_proto::wire::inv::Profile as WireProfile;
 use secmp_proto::wire::{Id, Period};
@@ -139,6 +140,26 @@ pub enum Action {
     },
     /// A control operation on a one-shot link (spec §10.6 (2)).
     Control(OpSpec),
+    /// Hand the stored spare `queue` out to an invitation or a rotation (M7-C1, D4′): its link moves to `period_ms` and the
+    /// scheduler queues the replacement spare (`Scheduler::take_pool_queue_id`). Only in the pool bridge
+    /// ([`Hub::bridge_pool`]); otherwise the queue is registered with [`Action::AddRecv`].
+    TakeSpare {
+        /// The spare, by the id the pool stored it under.
+        queue: QueueId,
+        /// The announced period.
+        period_ms: u64,
+    },
+}
+
+/// What a host that connects the stored spare pool to the scheduler's pool starts from (M7-C1, D4′; [`Hub::bridge_pool`]).
+pub struct PoolStart {
+    /// The relay of the pool.
+    pub relay: RelayId,
+    /// The stored spares and their recipient seeds, oldest first: the host adopts each as created
+    /// (`Scheduler::adopt_pool_queue`).
+    pub spares: Vec<(QueueId, SecretBytes<32>)>,
+    /// The scheduler's queue-id counter must be at least this (`Scheduler::floor_queue_ids`).
+    pub floor: u32,
 }
 
 /// What the hub needs to know about its user.
@@ -184,6 +205,8 @@ pub struct Hub<C: Clock, S: EntropySource> {
     /// The earliest `expires` (Unix seconds) of an open invitation: [`Hub::tick`] runs `Invitations::maintain` from then on
     /// (IN-11, Q208); refreshed after every `maintain`, issue and [`Hub::new`].
     next_expiry: Option<u64>,
+    /// M7-C1, D4′: the stored spares are the scheduler pool's ([`Hub::bridge_pool`]): the spares not handed out yet.
+    bridge: Option<BTreeSet<QueueId>>,
 }
 
 impl<C: Clock, S: EntropySource> Hub<C, S> {
@@ -212,6 +235,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             actions: Vec::new(),
             rng: crate::timing::TimingRng::os(),
             next_expiry: None,
+            bridge: None,
         };
         // once after a restart (IN-11, Q208): the invitations that expired while the client was down are retired now; their
         // `QUEUE_DEL` waits for an empty `FETCH` (Q194) and is not re-armed from the stub below a second time
@@ -311,6 +335,17 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         period_ms: u64,
     ) {
         if !self.registered.insert(queue) {
+            return;
+        }
+        if self
+            .bridge
+            .as_mut()
+            .is_some_and(|spares| spares.remove(&queue))
+        {
+            // a stored spare the scheduler's pool holds: handed out at the announced period, not added (D4′)
+            self.recv_periods.insert(queue, period_ms);
+            self.sync_view();
+            self.actions.push(Action::TakeSpare { queue, period_ms });
             return;
         }
         if let Ok(seed) = SecretBytes::from_slice(seed.expose_secret()) {
@@ -1048,6 +1083,54 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         Ok(())
     }
 
+    /// How many spare queues the stored pool of the hub's relay holds (an invitation or an accept takes one).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn spares(&self) -> Result<usize, Error> {
+        crate::invitations::SparePool::new(self.core.profile.store()).len(self.config.relay)
+    }
+
+    /// Connect the stored spare pool to the scheduler's (M7-C1, D4′, `D4-ANALYSIS.md` §3): from now on a spare the hub hands
+    /// out is an [`Action::TakeSpare`], [`Hub::queue_material`] reads the spares, and [`Hub::pool_material`] makes the seeds
+    /// of the spares the scheduler creates. Returns the stored spares the host adopts and the id floor.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn bridge_pool(&mut self) -> Result<PoolStart, Error> {
+        let pool = crate::invitations::SparePool::new(self.core.profile.store());
+        let relay = self.config.relay;
+        let stored = pool.seeds(relay)?;
+        let floor = pool.next_id(relay)?;
+        self.bridge = Some(stored.iter().map(|(q, _, _)| *q).collect());
+        Ok(PoolStart {
+            relay,
+            spares: stored.into_iter().map(|(q, recv, _)| (q, recv)).collect(),
+            floor,
+        })
+    }
+
+    /// The seeds `(recipient, sender)` of the spare `queue` the scheduler's pool is about to create on the relay (D4′): drawn
+    /// here and appended to the stored pool in ONE store transaction before they are returned — no material if the commit
+    /// fails, so no `QUEUE_NEW` leaves for a queue the store does not hold (§1.7 by analogy). `None` outside the bridge, for
+    /// a queue the pool holds already, without randomness or if the commit fails.
+    pub fn pool_material(&mut self, queue: QueueId) -> Option<(SecretBytes<32>, SecretBytes<32>)> {
+        let spares = self.bridge.as_ref()?;
+        if spares.contains(&queue) {
+            return None;
+        }
+        let mut source = (self.core.make_source)();
+        let (recv, send) = {
+            let entropy = source.entropy();
+            (entropy.secret::<32>().ok()?, entropy.secret::<32>().ok()?)
+        };
+        crate::invitations::SparePool::new(self.core.profile.store())
+            .append_created(self.config.relay, queue, &recv, &send)
+            .ok()?;
+        self.bridge.as_mut()?.insert(queue);
+        Some((recv, send))
+    }
+
     /// The seeds `(recipient, sender)` of the queue `queue`, for a `QUEUE_NEW` or `QUEUE_DEL` the scheduler asks for: the
     /// stored entry's (Q199), also for an invitation queue — typed and zeroized; `None` for an entry without a sender seed
     /// (Q211).
@@ -1069,6 +1152,16 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             }
         }
         drop(s);
+        if self
+            .bridge
+            .as_ref()
+            .is_some_and(|spares| spares.contains(&queue))
+            && let Ok(stored) = crate::invitations::SparePool::new(self.core.profile.store())
+                .seeds(self.config.relay)
+            && let Some((_, recv, send)) = stored.iter().find(|(q, _, _)| *q == queue)
+        {
+            return typed(recv, Some(send));
+        }
         let ld_id = self.inv_queues.get(&queue)?;
         if let Ok(open) = self.invitations.queue_of(ld_id) {
             return typed(&open.recv_seed, Some(&open.send_seed));
@@ -1694,6 +1787,83 @@ mod tests {
             step_reply(&mut sc)?;
             step_message(&mut sc)?;
             step_retire(&mut sc)
+        })
+    }
+
+    /// M7-C1 (D4′, `D4-ANALYSIS.md` §3 (b)): the seeds of a spare the scheduler's pool creates are in `relays.pool` — the entry
+    /// and the id counter in one transaction — when `pool_material` returns them, i.e. before the `QUEUE_NEW` can leave; a
+    /// failed commit returns no material and writes nothing; a hub outside the bridge makes none; the spare is what an
+    /// invitation hands out (`TakeSpare` at the invitation's period, no `AddRecv`).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn pool_material_persisted_before_queue_new() -> R {
+        use crate::invitations::SparePool;
+
+        big(|| {
+            // the party's profile holds three spares (ids 1…3) made by `SparePool::fill`
+            let host = party("hub-pool-bridge", 76)?;
+            let mut hub = hub_over(&host, "host", 220)?;
+            let pool = SparePool::new(hub.profile_store());
+            assert_eq!(pool.len(RelayId(1))?, 3);
+            assert!(
+                hub.pool_material(QueueId(5)).is_none(),
+                "outside the bridge no seeds are made"
+            );
+            assert_eq!(pool.len(RelayId(1))?, 3);
+            let start = hub.bridge_pool()?;
+            assert_eq!(start.spares.len(), 3);
+            assert_eq!((start.relay, start.floor), (RelayId(1), 4));
+            assert_eq!(hub.spares()?, 3);
+            assert!(
+                hub.pool_material(QueueId(2)).is_none(),
+                "a spare of the pool gets no second set of seeds"
+            );
+
+            // the seeds are durable when they are returned, with the counter above the id
+            let (recv, send) = hub.pool_material(QueueId(5)).ok_or("material")?;
+            assert_eq!(pool.len(RelayId(1))?, 4);
+            assert_eq!(pool.next_id(RelayId(1))?, 6);
+            let stored = pool.seeds(RelayId(1))?;
+            let (queue, stored_recv, stored_send) = stored.last().ok_or("stored")?;
+            assert_eq!(*queue, QueueId(5));
+            assert_eq!(stored_recv.expose_secret(), recv.expose_secret());
+            assert_eq!(stored_send.expose_secret(), send.expose_secret());
+            assert_ne!(recv.expose_secret(), send.expose_secret());
+            // and `queue_material` reads the spare (a re-creation after `ERR_NOQUEUE` uses the stored seeds)
+            let (r, s) = hub.queue_material(QueueId(5)).ok_or("spare material")?;
+            assert_eq!(r.expose_secret(), recv.expose_secret());
+            assert_eq!(
+                s.ok_or("sender seed")?.expose_secret(),
+                send.expose_secret()
+            );
+
+            // a failed commit: no material, nothing written, the id is free for the next try
+            secmp_store::kat::fail_at(secmp_store::kat::FailAt(1));
+            assert!(hub.pool_material(QueueId(6)).is_none());
+            assert_eq!(pool.len(RelayId(1))?, 4);
+            assert_eq!(pool.next_id(RelayId(1))?, 6);
+            assert!(hub.queue_material(QueueId(6)).is_none());
+            assert!(hub.pool_material(QueueId(6)).is_some());
+            assert_eq!((pool.len(RelayId(1))?, hub.spares()?), (5, 5));
+
+            // an invitation hands the oldest spare out: a `TakeSpare` at its period, no `AddRecv` (the scheduler holds it)
+            hub.take_actions();
+            let issued = hub.invite(T0 + 5 * DAY)?;
+            let taken = hub
+                .invitation_queue(&issued.invitation.ld_id)
+                .ok_or("invitation queue")?;
+            assert_eq!(taken, QueueId(1));
+            let actions = hub.take_actions();
+            assert!(actions.iter().any(
+                |a| matches!(a, Action::TakeSpare { queue, period_ms } if *queue == taken && *period_ms == 10_000)
+            ));
+            assert!(
+                !actions
+                    .iter()
+                    .any(|a| matches!(a, Action::AddRecv { queue, .. } if *queue == taken))
+            );
+            assert_eq!(pool.len(RelayId(1))?, 4, "the spare left the stored pool");
+            Ok(())
         })
     }
 
@@ -5070,6 +5240,9 @@ mod tests {
                 ),
                 Action::Remove { queue } => format!("Remove {queue:?}"),
                 Action::Control(op) => format!("Control {op:?}"),
+                Action::TakeSpare { queue, period_ms } => {
+                    format!("TakeSpare {queue:?} {period_ms}")
+                }
             })
             .collect()
     }

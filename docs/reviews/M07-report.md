@@ -2262,3 +2262,5 @@ Pre-run: 9/10 (the 3 new E2 tests and the 6 SE-02/03 tests PASS; FO-01a red: its
 **Q292, HB-42…HB-45** added (`OPEN-M7-decided.md`, `HARDENING-BACKLOG.md`). TEST-SPEC-M7 is not edited.
 
 **Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK; `step --strict policy` PASS; `nextest -p xtask` 330/330; harness scan tests 6/6; `step --strict fuzz-check` PASS; `Instant::now`/`SystemTime::now` only in comments outside `clock.rs`; no seed/`SystemTime`/`Instant`/`set_var`/`mem::forget` token in `m7_e2e_virt.rs`, `m7_forensic.rs`, `driver.rs`; `-p secmp-client-core --features kat -E 'test(hub::)'` 73/73; `-p secmp-relay --features kat` 193/193.
+
+**ci-fast (head `c0f8e63`).** PASS: workspace nextest 1640/1640 (unchanged: no non-harness test added), harness 327/327 (323 + the 4 new; harness step 1880 s), relay-kat step 193/193, `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c4-ci-fast.txt`.

@@ -262,13 +262,52 @@ fn after_save(
     (previous != new).then_some(previous)
 }
 
-/// The revert of [`after_save`]; a refusal is not reported again.
+/// The revert of [`after_save`].
 fn apply_revert<S: CellSource>(
     sched: &mut Scheduler,
     (now, source): (u64, &mut S),
     previous: Mode,
 ) -> Result<Vec<Output>, crate::scheduler::core::SchedError> {
     sched.set_mode(now, previous, source)
+}
+
+/// Step 1 of a `SetSettings` from the scheduler's own mode (C2f-1): `None` while the backlog is not empty (a revert may be
+/// waiting: nothing is touched and the call stays where it is); else the mode the scheduler was in and the result of
+/// [`mode_step`] — `sched_mode` becomes `new` when the step worked.
+fn settings_step<S: CellSource>(
+    sched: &mut Scheduler,
+    sched_mode: &mut Mode,
+    backlog_empty: bool,
+    (now, source): (u64, &mut S),
+    new: Mode,
+) -> Option<(Mode, Result<Vec<Output>, Error>)> {
+    if !backlog_empty {
+        return None;
+    }
+    let previous = *sched_mode;
+    let result = mode_step(sched, (now, source), previous, new);
+    if result.is_ok() && previous != new {
+        *sched_mode = new;
+    }
+    Some((previous, result))
+}
+
+/// The revert of a failed save: `true` when the scheduler is back on `previous`; a refusal is a second `Notice::Refused` and
+/// `sched_mode` keeps the mode the scheduler is in. The caller submits the outputs of a revert that worked.
+fn revert_step<S: CellSource>(
+    sched: &mut Scheduler,
+    sched_mode: &mut Mode,
+    (now, source): (u64, &mut S),
+    previous: Mode,
+    notices: &mpsc::UnboundedSender<Notice>,
+) -> Result<Vec<Output>, ()> {
+    if let Ok(outs) = apply_revert(sched, (now, source), previous) {
+        *sched_mode = previous;
+        Ok(outs)
+    } else {
+        let _ = notices.send(Notice::Refused);
+        Err(())
+    }
 }
 
 /// What the loop could not do yet because the hub's lock was busy (the worker holds it for one transaction), and what has to
@@ -745,8 +784,8 @@ struct Engine<P: Providers> {
     takes: Vec<Take>,
     /// What waits for the hub's lock ([`Backlog`]).
     backlog: Backlog<Pending>,
-    /// The mode the stored settings hold (what the scheduler was last set to by a `SetSettings` that was saved).
-    settings_mode: Mode,
+    /// The mode last set on the scheduler (a mode step or a revert that worked); a `SetSettings` steps from it.
+    sched_mode: Mode,
     /// The mode change of the settings job in flight: (previous, new).
     inflight: Option<(Mode, Mode)>,
 }
@@ -1033,10 +1072,8 @@ impl<P: Providers> Engine<P> {
             self.known = done.known;
             if let Some(o) = done.settings {
                 let saved = o.saved.is_ok();
-                match after_save(saved, (o.previous, o.new), &self.notices) {
-                    Some(back) => self.backlog.push(Pending::Revert(back)),
-                    None if saved => self.settings_mode = o.new,
-                    None => {}
+                if let Some(back) = after_save(saved, (o.previous, o.new), &self.notices) {
+                    self.backlog.push(Pending::Revert(back));
                 }
             }
             self.apply(done.visit);
@@ -1084,10 +1121,15 @@ impl<P: Providers> Engine<P> {
             }
             Pending::Revert(previous) => {
                 if let Some(source) = hub
-                    && let Ok(outs) = apply_revert(&mut self.sched, (now, source), previous)
-                    && self.driver.submit(&mut self.sched, outs).is_ok()
+                    && let Ok(outs) = revert_step(
+                        &mut self.sched,
+                        &mut self.sched_mode,
+                        (now, source),
+                        previous,
+                        &self.notices,
+                    )
                 {
-                    self.settings_mode = previous;
+                    let _ = self.driver.submit(&mut self.sched, outs);
                 }
             }
         }
@@ -1203,22 +1245,29 @@ impl<P: Providers> Engine<P> {
                         .map_or(LoopCall::None, |(_, reply)| LoopCall::Quit(reply));
                 }
                 Some((Call::Core(Request::SetSettings(new)), _)) => {
-                    let (new, previous) = (*new, self.settings_mode);
-                    let outs = if previous == new.mode {
-                        Ok(Vec::new())
-                    } else {
-                        let hub = Arc::clone(&self.hub.0);
-                        let now = self.clock.mono_ms();
-                        match hub.try_lock() {
-                            Ok(mut guard) => {
-                                mode_step(&mut self.sched, (now, &mut *guard), previous, new.mode)
-                            }
-                            Err(TryLockError::WouldBlock) => return LoopCall::None,
-                            Err(TryLockError::Poisoned(_)) => {
-                                let _ = self.notices.send(Notice::Unavailable);
-                                Err(Error::Unavailable)
-                            }
+                    let new = *new;
+                    // behind a waiting revert (or any deferred work) the call waits, in order
+                    if !self.backlog.0.is_empty() {
+                        return LoopCall::None;
+                    }
+                    let hub = Arc::clone(&self.hub.0);
+                    let now = self.clock.mono_ms();
+                    let stepped = match hub.try_lock() {
+                        Ok(mut guard) => settings_step(
+                            &mut self.sched,
+                            &mut self.sched_mode,
+                            true,
+                            (now, &mut *guard),
+                            new.mode,
+                        ),
+                        Err(TryLockError::WouldBlock) => return LoopCall::None,
+                        Err(TryLockError::Poisoned(_)) => {
+                            let _ = self.notices.send(Notice::Unavailable);
+                            Some((self.sched_mode, Err(Error::Unavailable)))
                         }
+                    };
+                    let Some((previous, outs)) = stepped else {
+                        return LoopCall::None;
                     };
                     let Some((_, reply)) = pending.pop_front() else {
                         return LoopCall::None;
@@ -1343,7 +1392,6 @@ fn engine<P: Providers>(
         .and_then(|(_, a)| a.as_ref())
         .and_then(|a| SecretBytes::<32>::from_slice(a.expose_secret()).ok());
     let have_relay = directory.relays.contains_key(&relay.0);
-    let settings_mode = hub.core().settings.mode;
     let mode = match (hub.core().settings.mode, direct) {
         (Mode::Strict, true) => Mode::Balanced,
         (mode, _) => mode,
@@ -1378,7 +1426,7 @@ fn engine<P: Providers>(
         direct,
         takes: Vec::new(),
         backlog: Backlog(VecDeque::new()),
-        settings_mode,
+        sched_mode: mode,
         inflight: None,
     };
     {
@@ -1585,7 +1633,7 @@ mod tests {
         }
     }
 
-    /// M7-C2 (B; CLAUDE.md §1.4): `Call::Export` reads the rows on the loop and derives the key and writes the file off it —
+    /// M7-C2 (B; CLAUDE.md §1.4): `Call::Export` is a hub job: the snapshot under the hub lock the job holds, the key and the file on the blocking pool —
     /// while the write is held on a barrier (the `kat` hook of `Snapshot::write`) a `Call::Core(Request::Contacts)` is
     /// answered; then the export completes: the file exists, `0600`.
     #[cfg(feature = "kat")]
@@ -1811,13 +1859,137 @@ mod tests {
         Ok(())
     }
 
-    /// SE-193 (C2-8; C-2f): with the hub's lock held by another thread the loop-side drain returns at once and defers what
-    /// needs the hub — and everything behind it, in order; once the lock is free the deferred item is applied next, then the
-    /// rest.
+    /// SE-194 (C2f-1; C-2g): a revert the scheduler refuses leaves it in the new mode; the next request for the old mode steps
+    /// from the scheduler's own mode (a step is tried and refused), where stepping from the stored mode would have saved
+    /// without a step and left the wire in the other mode.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn refused_revert_then_same_request_steps_the_scheduler()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut sched = two_queues()?;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut sched_mode = Mode::Balanced;
+        let stepped = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            true,
+            (0, &mut NoCells),
+            Mode::Strict,
+        );
+        assert!(matches!(stepped, Some((Mode::Balanced, Ok(_)))));
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        assert_eq!(sched_mode, Mode::Strict);
+        assert_eq!(
+            after_save(false, (Mode::Balanced, Mode::Strict), &tx),
+            Some(Mode::Balanced)
+        );
+        assert!(matches!(rx.try_recv(), Ok(Notice::Refused)));
+        // three more recv-queues at 10 s: Strict takes them, Balanced would be 5 × 8 = 40 > 32
+        for n in 3..=5_u8 {
+            let cap = RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32])?)?;
+            sched.add_recv_queue(0, RelayId(1), cap, 10_000)?;
+        }
+        let reverted = revert_step(
+            &mut sched,
+            &mut sched_mode,
+            (0, &mut NoCells),
+            Mode::Balanced,
+            &tx,
+        );
+        assert!(reverted.is_err());
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        assert_eq!(sched_mode, Mode::Strict);
+        assert!(matches!(rx.try_recv(), Ok(Notice::Refused)), "a second one");
+        assert!(rx.try_recv().is_err(), "two in all");
+        // the same request again: a step is attempted and refused
+        let again = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            true,
+            (0, &mut NoCells),
+            Mode::Balanced,
+        );
+        assert!(matches!(
+            again,
+            Some((Mode::Strict, Err(Error::Unsupported)))
+        ));
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        // a save of Strict leaves store and scheduler on Strict, with no step
+        let same = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            true,
+            (0, &mut NoCells),
+            Mode::Strict,
+        );
+        assert!(matches!(same, Some((Mode::Strict, Ok(v))) if v.is_empty()));
+        Ok(())
+    }
+
+    /// SE-195 (C2f-1; C-2g): a `SetSettings` waits while a revert is pending (the call stays in line, nothing is touched);
+    /// after the revert it steps from the mode the scheduler is in.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn settings_wait_for_a_pending_revert() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sched = two_queues()?;
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut sched_mode = Mode::Balanced;
+        let first = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            true,
+            (0, &mut NoCells),
+            Mode::Strict,
+        );
+        assert!(matches!(first, Some((Mode::Balanced, Ok(_)))));
+        let mut backlog = Backlog(VecDeque::new());
+        if let Some(back) = after_save(false, (Mode::Balanced, Mode::Strict), &tx) {
+            backlog.push(Pending::Revert(back));
+        }
+        assert_eq!(backlog.0.len(), 1);
+        let held = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            backlog.0.is_empty(),
+            (0, &mut NoCells),
+            Mode::Strict,
+        );
+        assert!(held.is_none());
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        assert_eq!(sched_mode, Mode::Strict);
+        // the revert is applied
+        assert!(matches!(
+            backlog.0.pop_front(),
+            Some(Pending::Revert(Mode::Balanced))
+        ));
+        let reverted = revert_step(
+            &mut sched,
+            &mut sched_mode,
+            (0, &mut NoCells),
+            Mode::Balanced,
+            &tx,
+        );
+        assert!(reverted.is_ok());
+        assert_eq!(sched.effective_mode(), Mode::Balanced);
+        assert!(backlog.0.is_empty());
+        let next = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            backlog.0.is_empty(),
+            (0, &mut NoCells),
+            Mode::Strict,
+        );
+        assert!(matches!(next, Some((Mode::Balanced, Ok(_)))));
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        Ok(())
+    }
+
+    /// SE-193 (C2-8; C-2f; C-2g: no clock): the loop-side drain returns while another thread holds the hub's mutex (the
+    /// holder releases only after the drain's result is in) and defers what needs the hub — and everything behind it, in
+    /// order; once the lock is free the deferred item is applied next, then the rest.
     #[test]
     fn loop_side_hub_access_never_waits() {
         use std::sync::mpsc as std_mpsc;
-        use std::time::{Duration, Instant};
 
         let hub = Arc::new(Mutex::new(Vec::<&'static str>::new()));
         let mut backlog = Backlog(VecDeque::new());
@@ -1837,9 +2009,7 @@ mod tests {
         };
         assert!(held_rx.recv().is_ok());
         let mut applied = Vec::new();
-        let started = Instant::now();
         let first = backlog.drain(&hub, needs, |a, _| applied.push(a));
-        assert!(started.elapsed() < Duration::from_millis(10), "never waits");
         assert_eq!(first, Ok(()));
         assert_eq!(applied, ["add"], "the item behind the busy one waits too");
         assert_eq!(backlog.0.len(), 2);

@@ -503,41 +503,6 @@ fn two_clients_exchange_script_mem() {
 
 // ---- the rows with a relay on 127.0.0.1 (real time) -------------------------------------------------------------------
 
-/// The `secmp-relay` binary of this profile, built if it is not (`cargo build --locked --offline -p secmp-relay`; a test
-/// of another package has no `CARGO_BIN_EXE_` for it): the path cargo reports.
-fn relay_bin() -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let mut cmd = Command::new(env!("CARGO"));
-    cmd.args([
-        "build",
-        "--locked",
-        "--offline",
-        "-p",
-        "secmp-relay",
-        "--message-format",
-        "json",
-    ]);
-    if exe.components().any(|c| c.as_os_str() == "release") {
-        cmd.arg("--release");
-    }
-    let out = cmd.stderr(Stdio::inherit()).output().unwrap();
-    assert!(out.status.success(), "cargo build -p secmp-relay failed");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .filter(|v| {
-            word(v, "reason") == "compiler-artifact"
-                && v.get("target")
-                    .is_some_and(|t| word(t, "name") == "secmp-relay")
-        })
-        .find_map(|v| {
-            v.get("executable")
-                .and_then(serde_json::Value::as_str)
-                .map(PathBuf::from)
-        })
-        .expect("cargo reported no secmp-relay executable")
-}
-
 /// A running `secmp-relay` process serving plain TCP on loopback (the listener an onion service forwards to); killed
 /// when dropped.
 struct RelayProcess {
@@ -576,7 +541,8 @@ fn relay_config_parses_with_a_windows_style_dir() {
 /// its `listener_bound` line; the relay reference file for the clients.
 fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
     use std::io::BufRead as _;
-    let bin = relay_bin();
+    // one build line for the relay in the harness: a copy per test (Q288), never the shared `target` file in place
+    let bin = secmp_testkit::harness::e2e::relay_bin(&dir.join("bin"));
     let keys = dir.join(KEY_FILE);
     let keygen = Command::new(&bin)
         .arg("keygen")
@@ -959,7 +925,7 @@ fn two_clients_trace_unit_lengths_are_observed_not_assumed() {
 #[test]
 fn two_clients_loopback_tcp() {
     let dir = tmp("loopback");
-    let (_relay, reference) = start_relay(&dir);
+    let (relay, reference) = start_relay(&dir);
     std::thread::scope(|s| {
         let strict = s.spawn(|| loopback_run("loopback-strict", "loopback", "strict", &reference));
         let balanced =
@@ -967,6 +933,8 @@ fn two_clients_loopback_tcp() {
         strict.join().unwrap();
         balanced.join().unwrap();
     });
+    // on Windows the running copy would keep the directory
+    drop(relay);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

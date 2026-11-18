@@ -56,7 +56,7 @@ pub enum Command {
 pub struct Usage;
 
 /// The usage text (stderr).
-pub const USAGE: &str = "usage:\n  secmp-cli\n  secmp-cli profile new <dir> --passphrase-file <file> [--relay <file>]\n  secmp-cli open <dir> --passphrase-file <file> [--direct] [--name <name>]\n  secmp-cli contacts list <dir> --passphrase-file <file>\n  secmp-cli import <backup> <newdir> --passphrase-file <file> --backup-passphrase-file <file>\n  in a session: invite create | invite accept <uri> | contacts list | contacts sas <id> | contacts verify <id> <digits> | status | identity rotate | rotate <id> | send <id> <text> | export <path> --backup-passphrase-file <file> [--confirm] [--force] | quit\n  note: an accepted invitation is consumed at the relay before it is stored; quitting during `accepting` loses it\n";
+pub const USAGE: &str = "usage:\n  secmp-cli\n  secmp-cli profile new <dir> --passphrase-file <file> [--relay <file>]\n  secmp-cli open <dir> --passphrase-file <file> [--direct] [--name <name>]\n  secmp-cli contacts list <dir> --passphrase-file <file>\n  secmp-cli import <backup> <newdir> --passphrase-file <file> --backup-passphrase-file <file>\n  in a session: invite create | invite accept <uri> | contacts list | contacts sas <id> | contacts verify <id> <digits> | status | identity rotate | rotate <id> | send <id> <text> | export <path> --backup-passphrase-file <file> [--confirm] [--force] | quit\n  note: an accepted invitation is consumed at the relay before it is stored; quitting during `accepting` loses it\n  note: a failed import leaves an empty profile in <newdir>; remove that directory before retrying\n";
 
 /// Parse the arguments after the program name.
 ///

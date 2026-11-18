@@ -822,24 +822,141 @@ fn check_schema(tape: &[Json], uri: &str, access: &str) {
     }
 }
 
-/// CL-14: ten thousand random lines (seeded from `SECMP_PROPTEST_SEED` as the property tests are; lines that start with `quit`
-/// are dropped) into one `open`: nothing panics, and every line is answered by one JSON line — the lines that need the
-/// runtime are rare, the rest are usage errors.
+/// The seed of CL-14. The environment seed of the property tests is read by the one helper of `secmp-proto` only (R-93, X-07), and CI removes it
+/// for this crate anyway: the row runs on this fixed seed.
+const CL14_SEED: u64 = 0x5EC3_7000_C114;
+
+/// A source of the seeded pseudo-random numbers of CL-14 (xorshift64*).
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// A number below `n` (`n` > 0).
+    fn below(&mut self, n: u64) -> u64 {
+        self.next().checked_rem(n).unwrap()
+    }
+
+    /// A random `i64`: negative, zero, huge — any.
+    fn id(&mut self) -> i64 {
+        match self.below(8) {
+            0 => 0,
+            1 => -1,
+            2 => i64::MAX,
+            3 => i64::MIN,
+            4 => i64::try_from(self.below(10)).unwrap(),
+            _ => i64::from_ne_bytes(self.next().to_ne_bytes()),
+        }
+    }
+
+    /// A random character of the single-line text: not a line break, not a surrogate.
+    fn text_char(&mut self) -> char {
+        let c = u32::try_from(self.below(0x3000).saturating_add(0x20)).unwrap();
+        char::from_u32(c).unwrap_or('x')
+    }
+
+    /// Random text of at most `max` bytes (a character is never cut).
+    fn text(&mut self, max: usize) -> String {
+        let mut s = String::new();
+        while s.len() < max {
+            let c = self.text_char();
+            if s.len().saturating_add(c.len_utf8()) > max {
+                break;
+            }
+            s.push(c);
+        }
+        s
+    }
+
+    /// A word without white space or control characters (an arbitrary non-space argument).
+    fn word(&mut self, max: usize) -> String {
+        let n = self.below(u64::try_from(max).unwrap()).saturating_add(1);
+        (0..n)
+            .map(|_| self.text_char())
+            .filter(|c| !c.is_whitespace() && !c.is_control())
+            .collect()
+    }
+
+    /// `1..=12` random digit groups of `1..=8` digits, separated by spaces.
+    fn digit_groups(&mut self) -> String {
+        let groups = self.below(12).saturating_add(1);
+        (0..groups)
+            .map(|_| {
+                let n = self.below(8).saturating_add(1);
+                (0..n)
+                    .map(|_| char::from(b'0'.saturating_add(u8::try_from(self.below(10)).unwrap())))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// `invite accept` with `secmp://i/` and random URI characters, or an arbitrary non-space word.
+    fn invite_accept(&mut self) -> String {
+        if self.below(2) == 0 {
+            let n = self.below(401);
+            let uri: String = (0..n)
+                .map(|_| {
+                    let set = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+                    char::from(*set.get(usize::try_from(self.below(64)).unwrap()).unwrap())
+                })
+                .collect();
+            format!("invite accept secmp://i/{uri}")
+        } else {
+            format!("invite accept {}", self.word(60))
+        }
+    }
+
+    /// The text of a `send`: `1..=16 384` bytes, now and then more (16 385 and up).
+    fn send_text(&mut self) -> String {
+        let max = if self.below(20) == 0 {
+            16_385_usize.saturating_add(usize::try_from(self.below(3_000)).unwrap())
+        } else {
+            usize::try_from(self.below(16_384))
+                .unwrap()
+                .saturating_add(1)
+        };
+        let mut text = self.text(max);
+        if text.is_empty() {
+            text.push('x');
+        }
+        text
+    }
+
+    /// One of the ten verbs that reach the runtime, with random arguments. Index 8 is `export` without `--confirm` (answered
+    /// by `confirm_required` before any work); index 9 is `identity rotate`.
+    fn runtime_line(&mut self, verb: u64, passphrase_file: &Path) -> String {
+        match verb {
+            0 => "status".to_owned(),
+            1 => "contacts list".to_owned(),
+            2 => format!("contacts sas {}", self.id()),
+            3 => format!("contacts verify {} {}", self.id(), self.digit_groups()),
+            4 => format!("send {} {}", self.id(), self.send_text()),
+            5 => format!("rotate {}", self.id()),
+            6 => "invite create".to_owned(),
+            7 => self.invite_accept(),
+            8 => format!(
+                "export /tmp/secmp-cl14-{} --backup-passphrase-file {}",
+                self.word(12),
+                passphrase_file.display()
+            ),
+            _ => "identity rotate".to_owned(),
+        }
+    }
+}
+
+/// CL-14: ten thousand seeded lines (lines that start with `quit` are dropped) into one `open`: nothing panics, every line is
+/// answered by one JSON line, the process exits 0. Sixty of them reach the runtime — with random arguments over all ten verbs
+/// (`export` without `--confirm`: `confirm_required`, no Argon2; `identity rotate` at most six times) — the rest are
+/// mangled verbs and random text, so usage errors; one over-long line (`LINE_MAX` + 1 bytes) and one line that is not UTF-8
+/// are among them.
 #[test]
 fn stdin_commands_are_total() {
-    // the first eight reach the runtime (rarely); the others are only ever mangled (a tail that makes a usage error)
-    const VERBS: [&str; 10] = [
-        "status",
-        "contacts list",
-        "contacts sas 7",
-        "contacts verify 7 123 456",
-        "send 7 text",
-        "rotate 7",
-        "invite create",
-        "invite accept secmp://i/x",
-        "export x --backup-passphrase-file y",
-        "identity rotate",
-    ];
     const MANGLED: [&str; 8] = [
         "status",
         "contacts list",
@@ -850,52 +967,57 @@ fn stdin_commands_are_total() {
         "export x --backup-passphrase-file y",
         "identity rotate",
     ];
-    let seed = std::env::var("SECMP_PROPTEST_SEED")
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(0x5EC3_7000_C114);
-    let mut state = seed | 1;
-    let mut next = move || {
-        // xorshift64*
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    };
+    let mut rng = Rng(CL14_SEED | 1);
     let root = scratch("cl14");
     let (dir, pass) = new_profile(&root, "alice", None);
+    let backup_pass = root.join("backup.pass");
+    write_secret_file(&backup_pass, b"backup horse\n");
     let mut p = open(&dir, &pass, "alice");
     expect(&mut p, LONG, "opened");
-    let (mut sent, mut runtime_calls) = (0_u32, 0_u32);
+    let (mut sent, mut runtime_calls, mut rotations) = (0_u32, 0_u32, 0_u32);
+    let mut hits = [0_u32; 10];
     while sent < 10_000 {
-        let r = next();
+        // the two special lines, at fixed places
+        if sent == 1_234 {
+            let mut long = vec![b'a'; secmp_cli::args::LINE_MAX + 1];
+            long.push(b'\n');
+            p.send_bytes(&long);
+            sent = sent.saturating_add(1);
+            continue;
+        }
+        if sent == 5_678 {
+            p.send_bytes(b"\xff\xfe status\n");
+            sent = sent.saturating_add(1);
+            continue;
+        }
+        let r = rng.next();
         let line = match r % 100 {
-            // a verb of the grammar, rarely: it reaches the runtime (a call waits for a chunk of the loop)
+            // a verb that reaches the runtime, rarely (a call waits for a chunk of the loop)
             0 if runtime_calls < 60 => {
+                let mut verb = rng.below(10);
+                if verb == 9 && rotations >= 6 {
+                    verb = rng.below(9);
+                }
+                if verb == 9 {
+                    rotations = rotations.saturating_add(1);
+                }
                 runtime_calls = runtime_calls.saturating_add(1);
-                VERBS
-                    .get(usize::try_from((r >> 8) % 8).unwrap())
-                    .unwrap()
-                    .to_string()
+                if let Some(hit) = hits.get_mut(usize::try_from(verb).unwrap()) {
+                    *hit = hit.saturating_add(1);
+                }
+                rng.runtime_line(verb, &backup_pass)
             }
             // a verb with a mangled tail: a usage error
             1..=30 => {
-                let verb = MANGLED.get(usize::try_from((r >> 8) % 8).unwrap()).unwrap();
-                let cut = usize::try_from((r >> 16) % 6).unwrap().min(verb.len());
+                let verb = MANGLED.get(usize::try_from(rng.below(8)).unwrap()).unwrap();
+                let cut = usize::try_from(rng.below(6)).unwrap().min(verb.len());
                 let head = verb.get(..verb.len().saturating_sub(cut)).unwrap();
                 format!("{head} \u{e9}\u{1f642}\t\"\\")
             }
             // random text, ASCII and not
             _ => {
-                let n = (r >> 24) % 40;
-                (0..n)
-                    .map(|_| {
-                        let c = u32::try_from((next() >> 8) % 0x3000).unwrap();
-                        char::from_u32(c)
-                            .filter(|c| *c != '\n' && *c != '\r')
-                            .unwrap_or('x')
-                    })
-                    .collect()
+                let n = usize::try_from(rng.below(40)).unwrap();
+                rng.text(n)
             }
         };
         if line.starts_with("quit") {
@@ -918,4 +1040,6 @@ fn stdin_commands_are_total() {
     assert_eq!(answers, sent, "one JSON line per line");
     let status = p.wait_exit(SHORT).expect("the process ends");
     assert_eq!(status.code(), Some(0));
+    assert_eq!(runtime_calls, 60);
+    assert!(hits.iter().all(|h| *h > 0), "every verb was hit: {hits:?}");
 }

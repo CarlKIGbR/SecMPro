@@ -204,7 +204,7 @@ fn session_end(stopped: bool) -> (String, u8) {
 /// is one that is not UTF-8 — a usage error either way. `None` at the end of the input or on a read error.
 fn next_line(input: &mut impl BufRead) -> Option<Zeroizing<String>> {
     let cap = u64::try_from(LINE_MAX.saturating_add(2)).unwrap_or(u64::MAX);
-    let mut buf = Zeroizing::new(Vec::new());
+    let mut buf = Zeroizing::new(Vec::with_capacity(LINE_MAX.saturating_add(2)));
     let read = input.by_ref().take(cap).read_until(b'\n', &mut buf).ok()?;
     if read == 0 {
         return None;
@@ -217,7 +217,7 @@ fn next_line(input: &mut impl BufRead) -> Option<Zeroizing<String>> {
         // the rest of the line is read and dropped, a piece at a time
         let mut rest = ended;
         while !rest {
-            let mut piece = Zeroizing::new(Vec::new());
+            let mut piece = Zeroizing::new(Vec::with_capacity(LINE_MAX.saturating_add(2)));
             let n = input
                 .by_ref()
                 .take(cap)

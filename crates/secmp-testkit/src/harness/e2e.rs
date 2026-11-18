@@ -391,6 +391,16 @@ impl CliProc {
         stdin.flush().unwrap();
     }
 
+    /// Raw bytes to the process's stdin, as they are (a newline is the caller's): for lines that are not UTF-8.
+    ///
+    /// # Panics
+    /// If stdin is closed or the write fails: a test failure.
+    pub fn send_bytes(&mut self, bytes: &[u8]) {
+        let stdin = self.stdin.as_mut().expect("stdin is open");
+        stdin.write_all(bytes).unwrap();
+        stdin.flush().unwrap();
+    }
+
     /// Close stdin (end of input).
     pub fn close_stdin(&mut self) {
         self.stdin = None;

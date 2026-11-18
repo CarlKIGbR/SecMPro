@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::link::ids::AccessKey;
@@ -43,10 +43,11 @@ use crate::scheduler::run::{
     BlockingWorker, ControlEffect, ControlRunner, Directory, Driver, Only, OsHandshakes, Providers,
 };
 use crate::scheduler::types::{
-    CellSource, CellToken, ControlKind, Delivered, OpId, PreparedCell, QueueId, RelayId,
+    CellSource, CellToken, ControlKind, Delivered, OpId, Output, PreparedCell, QueueId, RelayId,
     SendFailure, SourceError, Transport,
 };
 use crate::sessions::actor::{EntropySource as _, OsSource};
+use crate::settings::Settings;
 use crate::timing::TimingRng;
 
 /// The step of the loop: how long the driver runs between two visits to the hub (spec §10.1 does not depend on it).
@@ -230,28 +231,102 @@ fn start_view<C: Clock, S: crate::sessions::actor::EntropySource>(
     core.view.direct = direct;
 }
 
-/// A `SetSettings` and what it means for the scheduler: the settings are stored, then a changed mode is set on the scheduler
-/// (direct implies Balanced); a refusal (the recv-queues do not fit the mode, spec §10.2) is the call's error and the settings
-/// are put back — the store and the scheduler never disagree. `store` stores and returns the previous settings, `restore` puts
-/// them back.
-fn switch_settings<S: CellSource>(
+/// Step 1 of a `SetSettings` (C2-2; spec §10.2): a changed mode is set on the scheduler first, before anything is stored. A
+/// refusal (the recv-queues do not fit the mode) is the call's error and nothing is stored, nothing changed.
+fn mode_step<S: CellSource>(
     sched: &mut Scheduler,
     (now, source): (u64, &mut S),
-    new: crate::settings::Settings,
-    store: impl FnOnce(crate::settings::Settings) -> Result<crate::settings::Settings, Error>,
-    restore: impl FnOnce(crate::settings::Settings),
-) -> Result<Vec<crate::scheduler::types::Output>, Error> {
-    let previous = store(new)?;
-    if previous.mode == new.mode {
+    previous: Mode,
+    new: Mode,
+) -> Result<Vec<Output>, Error> {
+    if previous == new {
         return Ok(Vec::new());
     }
-    sched.set_mode(now, new.mode, source).map_err(|_| {
-        restore(previous);
-        Error::Unsupported
-    })
+    sched
+        .set_mode(now, new, source)
+        .map_err(|_| Error::Unsupported)
 }
 
-type Envelope = (Call, oneshot::Sender<Result<Answer, Error>>);
+/// Step 3: the save of the settings (the hub job) failed: one `Notice::Refused`, and the mode to go back to (`None` if the
+/// mode was not changed or the save worked). The scheduler is never left in a mode the store does not hold unless the
+/// revert is refused — then the mode is a valid one and the next open reads the store's.
+fn after_save(
+    saved: bool,
+    (previous, new): (Mode, Mode),
+    notices: &mpsc::UnboundedSender<Notice>,
+) -> Option<Mode> {
+    if saved {
+        return None;
+    }
+    let _ = notices.send(Notice::Refused);
+    (previous != new).then_some(previous)
+}
+
+/// The revert of [`after_save`]; a refusal is not reported again.
+fn apply_revert<S: CellSource>(
+    sched: &mut Scheduler,
+    (now, source): (u64, &mut S),
+    previous: Mode,
+) -> Result<Vec<Output>, crate::scheduler::core::SchedError> {
+    sched.set_mode(now, previous, source)
+}
+
+/// What the loop could not do yet because the hub's lock was busy (the worker holds it for one transaction), and what has to
+/// wait behind it: kept in order, retried first at the next boundary (C2-8).
+enum Pending {
+    Action(Action),
+    Op(crate::scheduler::control::OpSpec),
+    Revert(Mode),
+}
+
+/// Whether applying `p` calls the cell source (the hub).
+const fn needs_hub(p: &Pending) -> bool {
+    matches!(
+        p,
+        Pending::Action(Action::Remove { .. } | Action::TakeSpare { .. }) | Pending::Revert(_)
+    )
+}
+
+/// The deferred work of the loop, in order. Nothing is applied behind an item that cannot be applied yet.
+struct Backlog<A>(VecDeque<A>);
+
+impl<A> Backlog<A> {
+    fn push(&mut self, a: A) {
+        self.0.push_back(a);
+    }
+
+    /// Apply the items in order: one that `needs_hub` is applied only if `hub` can be locked without waiting (`apply` gets the
+    /// guarded value), else this stops and the rest stays. A poisoned lock is `Err` (fail closed: the rest is dropped).
+    fn drain<M>(
+        &mut self,
+        hub: &Mutex<M>,
+        needs_hub: impl Fn(&A) -> bool,
+        mut apply: impl FnMut(A, Option<&mut M>),
+    ) -> Result<(), ()> {
+        while let Some(front) = self.0.front() {
+            if needs_hub(front) {
+                match hub.try_lock() {
+                    Ok(mut guard) => {
+                        if let Some(a) = self.0.pop_front() {
+                            apply(a, Some(&mut *guard));
+                        }
+                    }
+                    Err(TryLockError::WouldBlock) => return Ok(()),
+                    Err(TryLockError::Poisoned(_)) => {
+                        self.0.clear();
+                        return Err(());
+                    }
+                }
+            } else if let Some(a) = self.0.pop_front() {
+                apply(a, None);
+            }
+        }
+        Ok(())
+    }
+}
+
+type Reply = oneshot::Sender<Result<Answer, Error>>;
+type Envelope = (Call, Reply);
 
 /// A cheap handle that sends calls to the runtime's loop (several tasks of a host may each hold one).
 #[derive(Clone)]
@@ -668,6 +743,12 @@ struct Engine<P: Providers> {
     known: BTreeSet<i64>,
     direct: bool,
     takes: Vec<Take>,
+    /// What waits for the hub's lock ([`Backlog`]).
+    backlog: Backlog<Pending>,
+    /// The mode the stored settings hold (what the scheduler was last set to by a `SetSettings` that was saved).
+    settings_mode: Mode,
+    /// The mode change of the settings job in flight: (previous, new).
+    inflight: Option<(Mode, Mode)>,
 }
 
 /// What the hub and the core ask of the scheduler after a visit.
@@ -711,41 +792,132 @@ struct JobCtx {
     notices: mpsc::UnboundedSender<Notice>,
 }
 
-/// A hub job (B0): one visit, the calls in front of the queue that need only the hub, answered in order, and a second visit
-/// for what they raised. It runs on the blocking pool with the hub's lock held; the loop goes on with the schedule meanwhile
-/// and applies the result at a chunk boundary (CLAUDE.md §1.4).
+/// The settings change of a call whose mode step is done (C2-2): the job saves it.
+struct SettingsJob {
+    new: Settings,
+    previous: Mode,
+    reply: Reply,
+}
+
+/// What a hub job is given to do, in this order.
+struct JobWork {
+    settings: Option<SettingsJob>,
+    calls: Vec<Envelope>,
+}
+
+/// How a settings job ended: the loop reverts the mode if the save failed.
+struct SettingsOutcome {
+    saved: Result<(), Error>,
+    previous: Mode,
+    new: Mode,
+}
+
+/// What a finished hub job hands back to the loop.
+struct JobDone {
+    visit: Visit,
+    known: BTreeSet<i64>,
+    settings: Option<SettingsOutcome>,
+}
+
+/// A hub job (B0): one visit, the settings write and the calls in front of the queue that need only the hub, answered in
+/// order, and a second visit for what they raised. It runs on the blocking pool with the hub's lock held; the loop goes on with
+/// the schedule meanwhile and applies the result at a chunk boundary (CLAUDE.md §1.4).
 fn hub_job(
     hub: &Mutex<RtHub>,
     ctx: &JobCtx,
-    calls: Vec<Envelope>,
+    work: JobWork,
     known: &mut BTreeSet<i64>,
-) -> Visit {
+) -> (Visit, Option<SettingsOutcome>) {
+    let JobWork { settings, calls } = work;
     let Ok(mut hub) = hub.lock() else {
         let _ = ctx.notices.send(Notice::Unavailable);
         for (_, reply) in calls {
             let _ = reply.send(Err(Error::Unavailable));
         }
-        return Visit::default();
+        let outcome = settings.map(|s| {
+            let _ = s.reply.send(Err(Error::Unavailable));
+            SettingsOutcome {
+                saved: Err(Error::Unavailable),
+                previous: s.previous,
+                new: s.new.mode,
+            }
+        });
+        return (Visit::default(), outcome);
     };
     let mut visit = visit_hub(&mut hub, ctx.clock.mono_ms(), known, &ctx.notices);
+    let mut outcome = None;
+    if let Some(s) = settings {
+        // the store and the hub; `handle` sets the settings only after the save
+        let saved = hub
+            .core_mut()
+            .handle(Request::SetSettings(s.new))
+            .map(|_| ());
+        let _ = s.reply.send(match &saved {
+            Ok(()) => Ok(Answer::Core(Response::Done)),
+            Err(_) => Err(Error::Unavailable),
+        });
+        outcome = Some(SettingsOutcome {
+            saved,
+            previous: s.previous,
+            new: s.new.mode,
+        });
+    }
     if !calls.is_empty() {
         for (call, reply) in calls {
-            let _ = reply.send(answer_hub(&mut hub, ctx, call));
+            match call {
+                Call::Export {
+                    path,
+                    passphrase,
+                    confirm,
+                    force,
+                } => export_in_job(&hub, (path, passphrase, confirm, force), reply),
+                call => {
+                    let _ = reply.send(answer_hub(&mut hub, ctx, call));
+                }
+            }
         }
         let after = visit_hub(&mut hub, ctx.clock.mono_ms(), known, &ctx.notices);
         visit.actions.extend(after.actions);
         visit.ops.extend(after.ops);
     }
-    visit
+    (visit, outcome)
 }
 
-/// Whether a call is answered by a hub job; the others (`SetSettings`, `Export`, `Quit`) need the scheduler or the loop.
+/// An export (C2-1): the rows under the hub's lock, which the job holds; the key derivation and the file on the blocking pool,
+/// which sends the reply — the loop never runs any of it (CLAUDE.md §1.4).
+fn export_in_job(
+    hub: &RtHub,
+    (path, passphrase, confirm, force): (std::path::PathBuf, Zeroizing<Vec<u8>>, bool, bool),
+    reply: Reply,
+) {
+    #[cfg(feature = "kat")]
+    hooks::hold_handle();
+    match hub.core().export_snapshot(confirm, force, &path) {
+        Err(e) => {
+            let _ = reply.send(Err(e));
+        }
+        Ok(snapshot) => {
+            drop(tokio::task::spawn_blocking(move || {
+                let answer =
+                    match snapshot.write(&passphrase, secmp_store::wrap::Argon2Params::PROFILE) {
+                        Ok(()) => Ok(Answer::Core(Response::Done)),
+                        Err(e) => Err(Error::from(e)),
+                    };
+                let _ = reply.send(answer);
+            }));
+        }
+    }
+}
+
+/// Whether a call is answered by a hub job; the others (`SetSettings`: its mode step is the loop's; `Quit`) are the loop's.
 const fn is_hub_call(call: &Call) -> bool {
     match call {
-        Call::Core(Request::SetSettings(_)) | Call::Export { .. } | Call::Quit => false,
-        Call::Core(_) | Call::InviteCreate { .. } | Call::InviteAccept { .. } | Call::Status => {
-            true
-        }
+        Call::Core(Request::SetSettings(_)) | Call::Quit => false,
+        Call::Core(_)
+        | Call::Export { .. }
+        | Call::InviteCreate { .. }
+        | Call::InviteAccept { .. }
+        | Call::Status => true,
     }
 }
 
@@ -795,8 +967,18 @@ fn answer_hub(hub: &mut RtHub, ctx: &JobCtx, call: Call) -> Result<Answer, Error
     }
 }
 
+/// What the loop has to do itself with the front of the queue.
+enum LoopCall {
+    /// Nothing: the hub job takes the front.
+    None,
+    /// A `Quit`: the reply to send after the shutdown.
+    Quit(Reply),
+    /// A `SetSettings` whose mode step is done: the hub job saves it.
+    Settings(SettingsJob),
+}
+
 /// What the loop is waiting for: the hub job on the blocking pool.
-type Job = tokio::task::JoinHandle<(Visit, BTreeSet<i64>)>;
+type Job = tokio::task::JoinHandle<JobDone>;
 
 impl<P: Providers> Engine<P> {
     /// One visit to the hub on the loop (the start and the end, when no job runs).
@@ -809,12 +991,18 @@ impl<P: Providers> Engine<P> {
         visit_hub(&mut hub, now, &mut self.known, &self.notices)
     }
 
-    /// Start the hub job: the calls at the front of `pending` that need only the hub go with it, in their order.
-    fn start_job(&mut self, pending: &mut VecDeque<Envelope>) -> Job {
+    /// Start the hub job: the settings write, if the mode step of a `SetSettings` was done, and the calls at the front of
+    /// `pending` that need only the hub, in their order.
+    fn start_job(
+        &mut self,
+        pending: &mut VecDeque<Envelope>,
+        settings: Option<SettingsJob>,
+    ) -> Job {
         let mut calls = Vec::new();
         while pending.front().is_some_and(|(call, _)| is_hub_call(call)) {
             calls.extend(pending.pop_front());
         }
+        self.inflight = settings.as_ref().map(|s| (s.previous, s.new.mode));
         let ctx = JobCtx {
             status: (
                 self.sched.effective_mode(),
@@ -828,103 +1016,124 @@ impl<P: Providers> Engine<P> {
         let hub = Arc::clone(&self.hub.0);
         let mut known = self.known.clone();
         tokio::task::spawn_blocking(move || {
-            let visit = hub_job(&hub, &ctx, calls, &mut known);
-            (visit, known)
+            let (visit, settings) = hub_job(&hub, &ctx, JobWork { settings, calls }, &mut known);
+            JobDone {
+                visit,
+                known,
+                settings,
+            }
         })
     }
 
-    /// A finished job: what it saw is applied; a job that panicked leaves `known` as it was.
-    fn finish_job(&mut self, done: Result<(Visit, BTreeSet<i64>), tokio::task::JoinError>) {
-        match done {
-            Ok((visit, known)) => {
-                self.known = known;
-                self.apply(visit);
+    /// A finished job: what it saw is applied, a failed save has its mode reverted (the next drain); a job that panicked leaves
+    /// `known` as it was and a mode change in flight is reverted.
+    fn finish_job(&mut self, done: Result<JobDone, tokio::task::JoinError>) {
+        let inflight = self.inflight.take();
+        if let Ok(done) = done {
+            self.known = done.known;
+            if let Some(o) = done.settings {
+                let saved = o.saved.is_ok();
+                match after_save(saved, (o.previous, o.new), &self.notices) {
+                    Some(back) => self.backlog.push(Pending::Revert(back)),
+                    None if saved => self.settings_mode = o.new,
+                    None => {}
+                }
             }
-            Err(_) => {
-                let _ = self.notices.send(Notice::Unavailable);
+            self.apply(done.visit);
+        } else {
+            let _ = self.notices.send(Notice::Unavailable);
+            if let Some((previous, new)) = inflight
+                && previous != new
+            {
+                self.backlog.push(Pending::Revert(previous));
             }
+            self.drain_backlog();
         }
     }
 
-    /// An export: the rows under the store's lock, here; the key derivation and the file on the blocking pool; the reply from
-    /// a task of its own, so the loop goes on (CLAUDE.md §1.4).
-    fn export(
-        &mut self,
-        (path, passphrase, confirm, force): (std::path::PathBuf, Zeroizing<Vec<u8>>, bool, bool),
-        reply: oneshot::Sender<Result<Answer, Error>>,
-    ) {
-        let snapshot = self
-            .hub
-            .0
-            .lock()
-            .map_err(|_| Error::Unavailable)
-            .and_then(|hub| hub.core().export_snapshot(confirm, force, &path));
-        let snapshot = match snapshot {
-            Ok(snapshot) => snapshot,
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                return;
-            }
-        };
-        let write = tokio::task::spawn_blocking(move || {
-            snapshot.write(&passphrase, secmp_store::wrap::Argon2Params::PROFILE)
-        });
-        tokio::spawn(async move {
-            let answer = match write.await {
-                Ok(Ok(())) => Ok(Answer::Core(Response::Done)),
-                Ok(Err(e)) => Err(Error::from(e)),
-                Err(_) => Err(Error::Unavailable),
-            };
-            let _ = reply.send(answer);
-        });
-    }
-
+    /// What the hub and the core asked: in order, behind what is still deferred.
     fn apply(&mut self, visit: Visit) {
         for action in visit.actions {
-            self.apply_action(action);
+            self.backlog.push(Pending::Action(action));
         }
-        let now = self.clock.mono_ms();
         for op in visit.ops {
-            let _ = self
-                .sched
-                .schedule_control(now, op.kind, op.relay, op.related, op.when);
+            self.backlog.push(Pending::Op(op));
+        }
+        self.drain_backlog();
+    }
+
+    /// Apply the deferred work in order; what needs the hub waits (without waiting) while the worker holds its lock.
+    fn drain_backlog(&mut self) {
+        let hub = Arc::clone(&self.hub.0);
+        let mut backlog = core::mem::replace(&mut self.backlog, Backlog(VecDeque::new()));
+        let result = backlog.drain(&hub, needs_hub, |p, guard| self.apply_pending(p, guard));
+        if result.is_err() {
+            let _ = self.notices.send(Notice::Unavailable);
+        }
+        self.backlog = backlog;
+    }
+
+    fn apply_pending(&mut self, p: Pending, hub: Option<&mut RtHub>) {
+        let now = self.clock.mono_ms();
+        match p {
+            Pending::Action(action) => self.apply_action(action, hub),
+            Pending::Op(op) => {
+                let _ = self
+                    .sched
+                    .schedule_control(now, op.kind, op.relay, op.related, op.when);
+            }
+            Pending::Revert(previous) => {
+                if let Some(source) = hub
+                    && let Ok(outs) = apply_revert(&mut self.sched, (now, source), previous)
+                    && self.driver.submit(&mut self.sched, outs).is_ok()
+                {
+                    self.settings_mode = previous;
+                }
+            }
         }
     }
 
-    fn apply_action(&mut self, action: Action) {
+    fn apply_action(&mut self, action: Action, hub: Option<&mut RtHub>) {
         let now = self.clock.mono_ms();
         let relay = self.relay;
-        let mut source = self.hub.clone();
-        let result = match action {
-            Action::AddRecv {
-                queue,
-                relay,
-                seed,
-                period_ms,
-            } => self
+        let result = match (action, hub) {
+            (
+                Action::AddRecv {
+                    queue,
+                    relay,
+                    seed,
+                    period_ms,
+                },
+                _,
+            ) => self
                 .sched
                 .add_recv_queue_seed(now, queue, relay, &seed, period_ms),
-            Action::AddSend {
-                queue,
-                relay,
-                sid,
-                seed,
-                period_ms,
-            } => self
+            (
+                Action::AddSend {
+                    queue,
+                    relay,
+                    sid,
+                    seed,
+                    period_ms,
+                },
+                _,
+            ) => self
                 .sched
                 .add_send_queue_route(now, queue, relay, (sid, &seed), period_ms),
-            Action::Control(spec) => self
+            (Action::Control(spec), _) => self
                 .sched
                 .schedule_control(now, spec.kind, spec.relay, spec.related, spec.when)
                 .map(|_| ()),
-            Action::Remove { queue } => self
+            (Action::Remove { queue }, Some(source)) => self
                 .sched
-                .remove_queue(now, queue, &mut source)
+                .remove_queue(now, queue, source)
                 .and_then(|outs| self.driver.submit(&mut self.sched, outs)),
-            Action::TakeSpare { queue, period_ms } => {
-                self.take(now, relay, (queue, period_ms), &mut source);
+            (Action::TakeSpare { queue, period_ms }, Some(source)) => {
+                self.take(now, relay, (queue, period_ms), source);
                 Ok(())
             }
+            // `needs_hub` keeps these from running without the hub
+            (Action::Remove { .. } | Action::TakeSpare { .. }, None) => Ok(()),
         };
         // a queue that is known already (a restart registers what the hub registered before) is no error; any other refusal
         // leaves the queue as it was and is reported
@@ -938,7 +1147,7 @@ impl<P: Providers> Engine<P> {
         now: u64,
         relay: RelayId,
         (queue, period_ms): (QueueId, u64),
-        source: &mut SharedHub,
+        source: &mut RtHub,
     ) {
         let pending = self.sched.pool_pending(queue);
         let result = self
@@ -961,72 +1170,83 @@ impl<P: Providers> Engine<P> {
         }
     }
 
+    /// The takes that wait for a spare's creation, again; without the hub's lock (the worker has it) they stay for the next
+    /// boundary.
     fn retry_takes(&mut self) {
-        let now = self.clock.mono_ms();
-        let relay = self.relay;
-        let mut source = self.hub.clone();
+        if self.takes.is_empty() {
+            return;
+        }
+        let hub = Arc::clone(&self.hub.0);
+        let mut guard = match hub.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return,
+            Err(TryLockError::Poisoned(_)) => {
+                self.takes.clear();
+                let _ = self.notices.send(Notice::Unavailable);
+                return;
+            }
+        };
+        let (now, relay) = (self.clock.mono_ms(), self.relay);
         for t in core::mem::take(&mut self.takes) {
-            self.take(now, relay, (t.queue, t.period_ms), &mut source);
+            self.take(now, relay, (t.queue, t.period_ms), &mut guard);
         }
     }
 
-    /// A `SetSettings`: stored under the hub's lock, the mode change handed to the scheduler outside it (its calls reach the
-    /// cell source, which takes the lock).
-    fn set_settings(&mut self, new: crate::settings::Settings) -> Result<Answer, Error> {
-        let hub = Arc::clone(&self.hub.0);
-        let (now, mut source) = (self.clock.mono_ms(), self.hub.clone());
-        let outs = switch_settings(
-            &mut self.sched,
-            (now, &mut source),
-            new,
-            |new| {
-                let mut hub = hub.lock().map_err(|_| Error::Unavailable)?;
-                let previous = hub.core().settings;
-                hub.core_mut().handle(Request::SetSettings(new))?;
-                Ok(previous)
-            },
-            |previous| {
-                if let Ok(mut hub) = hub.lock() {
-                    let store = hub.profile_store();
-                    let _ = previous.save(&store);
-                    hub.core_mut().settings = previous;
+    /// The calls that are the loop's, at the front of `pending`: a `Quit`, and the mode step of a `SetSettings` (the
+    /// scheduler's; the write is the hub job's, which then takes it).
+    fn loop_calls(&mut self, pending: &mut VecDeque<Envelope>) -> LoopCall {
+        loop {
+            match pending.front() {
+                Some((Call::Quit, _)) => {
+                    return pending
+                        .pop_front()
+                        .map_or(LoopCall::None, |(_, reply)| LoopCall::Quit(reply));
                 }
-            },
-        )?;
-        self.driver
-            .submit(&mut self.sched, outs)
-            .map_err(|_| Error::Unavailable)?;
-        Ok(Answer::Core(Response::Done))
-    }
-
-    /// The calls that are not a hub job's, at the front of `pending`, in their order: a mode change (the scheduler), an export
-    /// (its snapshot, then the blocking pool). `Some` for a `Quit`, the reply to send after the shutdown.
-    fn loop_calls(
-        &mut self,
-        pending: &mut VecDeque<Envelope>,
-    ) -> Option<oneshot::Sender<Result<Answer, Error>>> {
-        while pending.front().is_some_and(|(call, _)| !is_hub_call(call)) {
-            let (call, reply) = pending.pop_front()?;
-            match call {
-                Call::Quit => return Some(reply),
-                Call::Export {
-                    path,
-                    passphrase,
-                    confirm,
-                    force,
-                } => self.export((path, passphrase, confirm, force), reply),
-                Call::Core(Request::SetSettings(new)) => {
-                    let _ = reply.send(self.set_settings(new));
+                Some((Call::Core(Request::SetSettings(new)), _)) => {
+                    let (new, previous) = (*new, self.settings_mode);
+                    let outs = if previous == new.mode {
+                        Ok(Vec::new())
+                    } else {
+                        let hub = Arc::clone(&self.hub.0);
+                        let now = self.clock.mono_ms();
+                        match hub.try_lock() {
+                            Ok(mut guard) => {
+                                mode_step(&mut self.sched, (now, &mut *guard), previous, new.mode)
+                            }
+                            Err(TryLockError::WouldBlock) => return LoopCall::None,
+                            Err(TryLockError::Poisoned(_)) => {
+                                let _ = self.notices.send(Notice::Unavailable);
+                                Err(Error::Unavailable)
+                            }
+                        }
+                    };
+                    let Some((_, reply)) = pending.pop_front() else {
+                        return LoopCall::None;
+                    };
+                    match outs {
+                        Err(e) => {
+                            let _ = reply.send(Err(e));
+                        }
+                        Ok(outs) => {
+                            if self.driver.submit(&mut self.sched, outs).is_ok() {
+                                return LoopCall::Settings(SettingsJob {
+                                    new,
+                                    previous,
+                                    reply,
+                                });
+                            }
+                            // the mode is set but the links could not follow: back, and the call fails
+                            let _ = self.notices.send(Notice::Refused);
+                            if previous != new.mode {
+                                self.backlog.push(Pending::Revert(previous));
+                            }
+                            let _ = reply.send(Err(Error::Unavailable));
+                        }
+                    }
                 }
-                Call::Core(_)
-                | Call::InviteCreate { .. }
-                | Call::InviteAccept { .. }
-                | Call::Status => {
-                    let _ = reply.send(Err(Error::Unsupported));
-                }
+                _ => return LoopCall::None,
             }
         }
-        None
     }
 
     /// The loop keeps only the schedule: the driver in chunks, the actions and operations the hub asked for, the takes. What
@@ -1054,16 +1274,21 @@ impl<P: Providers> Engine<P> {
             }
             // work that takes the hub's lock on the loop waits for the job
             if job.is_none() {
+                self.drain_backlog();
                 self.retry_takes();
-                if let Some(reply) = self.loop_calls(&mut pending) {
-                    let visit = self.visit();
-                    self.apply(visit);
-                    let _ = self.driver.shutdown(&mut self.sched);
-                    self.driver.release_unused();
-                    let _ = reply.send(Ok(Answer::Closed));
-                    break;
-                }
-                job = Some(self.start_job(&mut pending));
+                let settings = match self.loop_calls(&mut pending) {
+                    LoopCall::Quit(reply) => {
+                        let visit = self.visit();
+                        self.apply(visit);
+                        let _ = self.driver.shutdown(&mut self.sched);
+                        self.driver.release_unused();
+                        let _ = reply.send(Ok(Answer::Closed));
+                        break;
+                    }
+                    LoopCall::Settings(settings) => Some(settings),
+                    LoopCall::None => None,
+                };
+                job = Some(self.start_job(&mut pending, settings));
             }
             if self.calls.is_closed() && pending.is_empty() {
                 if let Some(running) = job.take() {
@@ -1118,6 +1343,7 @@ fn engine<P: Providers>(
         .and_then(|(_, a)| a.as_ref())
         .and_then(|a| SecretBytes::<32>::from_slice(a.expose_secret()).ok());
     let have_relay = directory.relays.contains_key(&relay.0);
+    let settings_mode = hub.core().settings.mode;
     let mode = match (hub.core().settings.mode, direct) {
         (Mode::Strict, true) => Mode::Balanced,
         (mode, _) => mode,
@@ -1151,6 +1377,9 @@ fn engine<P: Providers>(
         known: BTreeSet::new(),
         direct,
         takes: Vec::new(),
+        backlog: Backlog(VecDeque::new()),
+        settings_mode,
+        inflight: None,
     };
     {
         let mut hub = shared.0.lock().map_err(|_| Error::Unavailable)?;
@@ -1362,6 +1591,7 @@ mod tests {
     #[cfg(feature = "kat")]
     #[test]
     fn export_does_not_stall_the_loop() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::Ordering;
         use std::sync::{Arc, Barrier};
 
         let dir = secmp_store::kat::TempDir::new("rt-export")?;
@@ -1387,6 +1617,7 @@ mod tests {
             let serving = tokio::task::spawn_local(serve.run());
             let caller = client.caller();
             let path = target.clone();
+            hooks::HOLD_HANDLE_MS.store(3_000, Ordering::SeqCst);
             let export = tokio::task::spawn_local(async move {
                 caller
                     .call(Call::Export {
@@ -1399,7 +1630,14 @@ mod tests {
             });
             // the export is queued first
             tokio::task::yield_now().await;
+            // C2-1: the snapshot is taken in the hub job: held for 3 s, the loop's chunks go on
+            let chunks = hooks::CHUNKS.load(Ordering::SeqCst);
             let contacts = client.call(Call::Core(Request::Contacts)).await;
+            let advanced = hooks::CHUNKS.load(Ordering::SeqCst).saturating_sub(chunks);
+            assert!(
+                advanced >= 2,
+                "{advanced} chunks ran while the snapshot was held"
+            );
             assert!(
                 matches!(contacts, Ok(Answer::Core(_))),
                 "answered meanwhile"
@@ -1505,60 +1743,120 @@ mod tests {
         }
     }
 
-    /// M7-C1b (C1-3, spec §10.2): a mode the recv-queues do not fit (two queues at 10 s: 16 ≤ 32 in Balanced, 48 > 32 in
-    /// Low-bandwidth) is refused by the scheduler; the call's error is returned and the settings read back are the previous
-    /// ones, in memory and in the store.
+    /// A scheduler in Balanced with two recv-queues at 10 s (16 ≤ 32 in Balanced and Strict, 48 > 32 in Low-bandwidth).
     #[cfg(feature = "kat")]
-    #[test]
-    fn mode_change_refused_restores_settings() -> Result<(), Box<dyn std::error::Error>> {
-        use std::cell::RefCell;
-
-        use crate::settings::Settings;
-
-        let (fx, core) = core_of("rt-mode", 92)?;
-        let core = RefCell::new(core);
-        let balanced = Settings {
-            mode: Mode::Balanced,
-            ..Settings::default()
-        };
-        core.borrow_mut().handle(Request::SetSettings(balanced))?;
+    fn two_queues() -> Result<Scheduler, Box<dyn std::error::Error>> {
         let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::os());
         for n in 1..=2_u8 {
             let cap = RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32])?)?;
             sched.add_recv_queue(0, RelayId(1), cap, 10_000)?;
         }
-        let store_new = |new: Settings| {
-            let mut core = core.borrow_mut();
-            let previous = core.settings;
-            core.handle(Request::SetSettings(new))?;
-            Ok(previous)
-        };
-        let low = Settings {
-            mode: Mode::LowBw,
+        Ok(sched)
+    }
+
+    /// M7-C1b (C1-3, spec §10.2) as reordered by C-2f: a mode the recv-queues do not fit is refused by the scheduler in the
+    /// mode step, before anything is stored: the call's error is `Unsupported`, the scheduler, the settings in memory and the
+    /// store stay as they were; a mode that fits is set.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn mode_change_refused_restores_settings() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::settings::Settings;
+
+        let (fx, mut core) = core_of("rt-mode", 92)?;
+        let balanced = Settings {
+            mode: Mode::Balanced,
             ..Settings::default()
         };
-        let refused = switch_settings(&mut sched, (0, &mut NoCells), low, store_new, |previous| {
-            let mut core = core.borrow_mut();
-            let _ = previous.save(&fx.profile.store());
-            core.settings = previous;
-        });
+        core.handle(Request::SetSettings(balanced))?;
+        let mut sched = two_queues()?;
+        let refused = mode_step(&mut sched, (0, &mut NoCells), Mode::Balanced, Mode::LowBw);
         assert_eq!(refused.err(), Some(Error::Unsupported));
-        assert_eq!(core.borrow().settings, balanced);
+        assert_eq!(core.settings, balanced);
         assert_eq!(
             Settings::load(&fx.profile.store())?,
             balanced,
-            "the store too"
+            "nothing stored"
         );
         assert_eq!(sched.effective_mode(), Mode::Balanced);
-        // a mode that fits is stored and set
-        let strict = Settings {
-            mode: Mode::Strict,
-            ..Settings::default()
-        };
-        let ok = switch_settings(&mut sched, (0, &mut NoCells), strict, store_new, |_| {});
-        assert!(ok.is_ok());
+        // a mode that fits is set (stored by the job afterwards); an unchanged one touches nothing
+        assert!(mode_step(&mut sched, (0, &mut NoCells), Mode::Balanced, Mode::Strict).is_ok());
         assert_eq!(sched.effective_mode(), Mode::Strict);
-        assert_eq!(core.borrow().settings, strict);
+        assert!(mode_step(&mut sched, (0, &mut NoCells), Mode::Strict, Mode::Strict).is_ok());
         Ok(())
+    }
+
+    /// SE-192 (C2-2; C-2f): the mode is set first; when the save fails the scheduler goes back to the previous mode, the call
+    /// fails and exactly one `Notice::Refused` is sent; a save that works sends nothing and reverts nothing.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn settings_save_failure_reverts_mode() -> Result<(), Box<dyn std::error::Error>> {
+        let mut sched = two_queues()?;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let modes = (Mode::Balanced, Mode::Strict);
+        mode_step(&mut sched, (0, &mut NoCells), modes.0, modes.1)?;
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        // the save worked: nothing to revert, nothing sent
+        assert_eq!(after_save(true, modes, &tx), None);
+        assert!(rx.try_recv().is_err());
+        // the save failed
+        let back = after_save(false, modes, &tx);
+        assert_eq!(back, Some(Mode::Balanced));
+        apply_revert(&mut sched, (0, &mut NoCells), Mode::Balanced)?;
+        assert_eq!(sched.effective_mode(), Mode::Balanced);
+        assert!(matches!(rx.try_recv(), Ok(Notice::Refused)));
+        assert!(rx.try_recv().is_err(), "exactly one notice");
+        // a save that failed without a mode change: the notice, no revert
+        assert_eq!(after_save(false, (Mode::Strict, Mode::Strict), &tx), None);
+        assert!(matches!(rx.try_recv(), Ok(Notice::Refused)));
+        Ok(())
+    }
+
+    /// SE-193 (C2-8; C-2f): with the hub's lock held by another thread the loop-side drain returns at once and defers what
+    /// needs the hub — and everything behind it, in order; once the lock is free the deferred item is applied next, then the
+    /// rest.
+    #[test]
+    fn loop_side_hub_access_never_waits() {
+        use std::sync::mpsc as std_mpsc;
+        use std::time::{Duration, Instant};
+
+        let hub = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let mut backlog = Backlog(VecDeque::new());
+        for item in ["add", "remove", "add2"] {
+            backlog.push(item);
+        }
+        let needs = |a: &&str| *a == "remove";
+        let (held_tx, held_rx) = std_mpsc::channel();
+        let (release_tx, release_rx) = std_mpsc::channel::<()>();
+        let holder = {
+            let hub = Arc::clone(&hub);
+            std::thread::spawn(move || {
+                let _guard = hub.lock();
+                let _ = held_tx.send(());
+                let _ = release_rx.recv();
+            })
+        };
+        assert!(held_rx.recv().is_ok());
+        let mut applied = Vec::new();
+        let started = Instant::now();
+        let first = backlog.drain(&hub, needs, |a, _| applied.push(a));
+        assert!(started.elapsed() < Duration::from_millis(10), "never waits");
+        assert_eq!(first, Ok(()));
+        assert_eq!(applied, ["add"], "the item behind the busy one waits too");
+        assert_eq!(backlog.0.len(), 2);
+        assert!(release_tx.send(()).is_ok());
+        assert!(holder.join().is_ok());
+        let second = backlog.drain(&hub, needs, |a, guard| {
+            if let Some(guard) = guard {
+                guard.push(a);
+            }
+            applied.push(a);
+        });
+        assert_eq!(second, Ok(()));
+        assert_eq!(applied, ["add", "remove", "add2"], "in order");
+        assert_eq!(
+            hub.lock().map(|g| g.clone()).unwrap_or_default(),
+            ["remove"]
+        );
+        assert!(backlog.0.is_empty());
     }
 }

@@ -2383,3 +2383,5 @@ E2-02: 40 messages each way over the CLI (Q291); 500 in E2-02v.
 - No key reuse: PC-05, E2-02v (message-key digests 2105 total, 2105 distinct).
 - `tail`: the `open` event stream (OPEN-M7-12 A).
 - No OWNER-PENDING row is "done".
+
+**ci-fast (head `f138665`).** PASS: workspace nextest 1641/1641 (1640 + `tor::tests::onion_key_must_be_a_point`), harness 327/327 (unchanged: the example is no test, the carry-over edits existing tests; harness step 1790 s), relay-kat step 193/193, `fuzz-check` PASS; xtask 330 (unchanged); last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c5-ci-fast.txt`.

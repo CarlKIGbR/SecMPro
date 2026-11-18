@@ -2264,3 +2264,11 @@ Pre-run: 9/10 (the 3 new E2 tests and the 6 SE-02/03 tests PASS; FO-01a red: its
 **Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK; `step --strict policy` PASS; `nextest -p xtask` 330/330; harness scan tests 6/6; `step --strict fuzz-check` PASS; `Instant::now`/`SystemTime::now` only in comments outside `clock.rs`; no seed/`SystemTime`/`Instant`/`set_var`/`mem::forget` token in `m7_e2e_virt.rs`, `m7_forensic.rs`, `driver.rs`; `-p secmp-client-core --features kat -E 'test(hub::)'` 73/73; `-p secmp-relay --features kat` 193/193.
 
 **ci-fast (head `c0f8e63`).** PASS: workspace nextest 1640/1640 (unchanged: no non-harness test added), harness 327/327 (323 + the 4 new; harness step 1880 s), relay-kat step 193/193, `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c4-ci-fast.txt`.
+
+## C-4b (WEISUNG M7-C4b; modell=claude-sonnet-5-5)
+
+PR run 44280920220 (head `5bd3d73`), job `windows-native` 134721555578, step `harness`: exactly one failure, `m7_e2e::smoke_invite_and_message_both_ways`, after 662.7 s, `m7_e2e.rs:40:5`: ``no `opened` within 0ns; saw []``. Cause: the test took `started`/`end` (`DEADLINE` 600 s) before `E2eRelay::start` and `cli_bin`, which run `cargo build` of relay (`direct-tls`) and CLI inside the test; on the cold Windows runner they used the whole budget. No product code involved.
+
+Change (test code only, one function): `built = Instant::now()` first; `started`, `end`, `left` are taken after `cli_bin`, with the note `relay and cli built`; doc line added (Q294). `DEADLINE`, assertions and later uses unchanged. Not demonstrable on Linux (builds are warm: note shows 0.6 s); the evidence for Q288 and Q294 is the next PR run's `windows-native` job, step `harness`.
+
+Gates: fmt OK; clippy `-p secmp-testkit --all-targets --features kat,harness` OK; `step --strict policy` PASS; source scans 14/14 (`m6_driver::`/`m6_scan`) and the six C-4 scan tests 6/6; no `SystemTime::now` in `m7_e2e.rs`; smoke PASS in 156.7 s (`relay and cli built` at 0.6 s, `both open` at 33.1 s).

@@ -2275,6 +2275,8 @@ Gates: fmt OK; clippy `-p secmp-testkit --all-targets --features kat,harness` OK
 
 **ci-fast (head `31fa525`).** PASS: workspace nextest 1640/1640, harness 327/327 (harness step 1850 s), `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c4b-ci-fast.txt`.
 
+**Windows evidence.** PR run 44313775321 (head `f73e2e0`): job `windows-native` 134834384908 ended `success` (2026-11-18 13:26:47–16:06:52 UTC); `harness`, `linux-fast`, `ct`, `kani`, `fuzz`, `proverif-hx`, `proverif-link`, `xwin-cross` success; `linux-full` was still running at 16:32 UTC. This is the evidence for Q288 and Q294; the per-test lines of that job were not read.
+
 ## C-5 (BRIEF M7-C5; modell=claude-sonnet-5-5)
 
 Commits: K1 `4d48819` `fix(transport)` (`tor/mod.rs` +79/−4, `tests/tor/main.rs` +5/−5, `m6_tor.rs` +2, fuzz target +8/−2); K1b `fbf566e` `test(e2e)` (`m7_e2e.rs` +33/−5); K2 `f176553` `test(e2e)` (`ks_cli.rs` new, 645 lines (the brief said ≈ 300; rustfmt and the doc comment on every item made it longer), `e2e.rs` +27, `Cargo.toml` +5); K3 `b9644b5` evidence (`docs/reviews/M07-evidence/e2e-10-f176553.txt`); K4 docs (this section, Q293, HB-46…HB-48, `docs/07` status line); K5 evidence (`c5-ci-fast.txt`).
@@ -2315,7 +2317,7 @@ reads analysed: 916, sha256 987e9589517bd0d8f9d21942a681b29571c9c97305d6b5e6cdd2
 criterion (p >= 0.01 on exactly one link per client, no torn link: at most 3 departures on every other connection, every call answered and every message received, exits 0): MET
 ```
 
-One link per client (the connection with 360 departures, one every 10 s over the 3 590 s from the idle start to the cut), p = 0.94 and 0.99; the other connections are one-departure control connections (8 763 B each; two of client 0, one of client 1; not identified further, the proxy sees no TLS content, HB-47); no torn link. Smoke (`ks_cli … smoke 60 60`): rc 3 (not judged), 523 s wall, one `link` line per client (p = 0.9996, n = 5/5), both `client` lines `queued == sends` (2), `answered == calls` (4), `received` 2, `errors []`, `exit Some(0)`. The first smoke attempt aborted in `E2eRelay::start` (a relative out-dir: the relay is started with its own directory as the working directory, so its relative binary path did not resolve); the example now makes the out-dir absolute (`std::path::absolute`); one fix, one re-run, as the brief allows.
+One link per client (the connection with 360 departures, one every 10 s over the 3 590 s from the idle start to the cut), p = 0.94 and 0.99; the other connections are one-departure control connections (8 763 B each; two of client 0, one of client 1; all three in the active phase (first departures at 2 384.6 s, 3 285.7 s and 3 042.3 s of the run; the idle/active cut is at ≈ 2 215 s), none in the idle phase; identified by the reviewer in the code as the spare-pool refills (`QUEUE_NEW`, one-shot link, spec §10.6 (2)) of the three spares taken during SETUP — client 0: `invite create` and the first-reply rotation, client 1: `invite accept` — each with a delay drawn at the take from U[1 min, 60 min]; the active script takes no spare, so they do not depend on the measured activity (Q295); the proxy sees no TLS content, HB-47; the criterion would not catch an activity-dependent extra connection, HB-52); no torn link. Smoke (`ks_cli … smoke 60 60`): rc 3 (not judged), 523 s wall, one `link` line per client (p = 0.9996, n = 5/5), both `client` lines `queued == sends` (2), `answered == calls` (4), `received` 2, `errors []`, `exit Some(0)`. The first smoke attempt aborted in `E2eRelay::start` (a relative out-dir: the relay is started with its own directory as the working directory, so its relative binary path did not resolve); the example now makes the out-dir absolute (`std::path::absolute`); one fix, one re-run, as the brief allows.
 
 **Q293, HB-46…HB-48** added (`OPEN-M7-decided.md`, `HARDENING-BACKLOG.md`); `docs/07-milestones.md` status line updated. TEST-SPEC-M7 is not edited.
 
@@ -2359,7 +2361,7 @@ One link per client (the connection with 360 departures, one every 10 s over the
 | FO-02 | C-4 | `m7_forensic::store_dir_has_no_plaintext` (the same run, empty `HOME`/`TMPDIR`/`XDG_*`) | evidenced |
 | E2-11 | C-3 | `m7_e2e::cli_uses_no_wall_clock_for_schedule` and the `at_ms` check inside E2-02 | evidenced |
 | C-T1 | C-5 | `tor::tests::onion_key_must_be_a_point` | evidenced |
-| E2-10 | C-5 | `ks_cli`, `e2e-10-f176553.txt` (MET) | evidenced |
+| E2-10 | C-5 | `ks_cli`, `e2e-10-f176553.txt` (MET) | evidenced for the one link per client; three setup-triggered pool refills fell into the active phase (Q295); extra connections are not judged by the criterion (HB-52) |
 | E2-07 | — | TEST-SPEC: `m7_e2e::e2e_over_tor_nightly` | OWNER-PENDING (owner relay and the dispatch job, D13) |
 | G7-11 | — | TEST-SPEC: `xtask::sbom::tests::sbom_embedded_names_match_lock` | OWNER-PENDING (the `miniz_oxide` vet record; `supply-chain/config.toml` is still an exemption) |
 | G7-20 | — | TEST-SPEC: `xtask::gates::tests::optional_jobs_are_not_required` | OWNER-PENDING (the ruleset, then `REQUIRED_JOBS` += `harness`) |
@@ -2385,3 +2387,11 @@ E2-02: 40 messages each way over the CLI (Q291); 500 in E2-02v.
 - No OWNER-PENDING row is "done".
 
 **ci-fast (head `f138665`).** PASS: workspace nextest 1641/1641 (1640 + `tor::tests::onion_key_must_be_a_point`), harness 327/327 (unchanged: the example is no test, the carry-over edits existing tests; harness step 1790 s), relay-kat step 193/193, `fuzz-check` PASS; xtask 330 (unchanged); last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c5-ci-fast.txt`.
+
+## C-5b (WEISUNG M7-C5b; modell=claude-sonnet-5-5)
+
+Docs only. The three one-departure connections of the E2-10 evidence are named in `## C-5` (spare-pool refills of the three spares taken during setup, all in the active phase by chance; Q295, HB-52); the Phase C close row of E2-10 says so; `## C-4b` gets the Windows evidence of PR run 44313775321 (Q288, Q294); HB-49…HB-52 (review items C4-1, C4-3, C4-4, C5-1) and Q295 are added. No code, no TEST-SPEC edit, no evidence file changed.
+
+Cross-review verdicts: C-3 PUSH 0/0/2/8, C-4 PUSH 0/0/4/7, C-5 PUSH 0/0/2/5.
+
+Gates: `step --strict policy` and `nextest -p xtask` as in the return block; `ci-fast`: see below.

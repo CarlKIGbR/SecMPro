@@ -112,16 +112,19 @@ fn message_text(p: &mut CliProc, contact: u64, within: Duration) -> String {
     text(&found.unwrap(), "text")
 }
 
+/// The 600 s budget starts after the in-test builds of the relay and the CLI (Q294): on a cold Windows runner those builds alone took longer.
 #[test]
 fn smoke_invite_and_message_both_ways() {
-    let started = Instant::now();
-    let end = started + DEADLINE;
-    let left = |(): ()| end.saturating_duration_since(Instant::now());
+    let built = Instant::now();
     let root = std::env::temp_dir().join(format!("secmp-e2e-smoke-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let relay = E2eRelay::start(&root.join("relay"));
     let bin = cli_bin(&root.join("bin"));
+    note(built, "relay and cli built");
+    let started = Instant::now();
+    let end = started + DEADLINE;
+    let left = |(): ()| end.saturating_duration_since(Instant::now());
     let pass = PASS.strip_suffix(b"\n").unwrap();
 
     let a_profile = profile(&bin, &root, "alice", &relay.ref_path());

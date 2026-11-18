@@ -2190,3 +2190,17 @@ Commits: K1 `092079d` (core), K2 `2c321fb` (harness), K3 docs (this section, Q28
 **Scan gates before ci-fast.** fmt, clippy (workspace, all features), `step --strict policy`, `nextest -p xtask` (330/330), the five scan tests of `m6_*` (5/5), `step --strict fuzz-check`, the greps for `Instant::now`/`SystemTime::now` (code only in `clock.rs`) and for the seed variable (nothing in `secmp-cli`), `secmp-client-core` kat (357/357), `two_clients_loopback_tcp` and `relay_config_parses_with_a_windows_style_dir` (2/2): all PASS.
 
 **Backlog.** C2f-2 → HB-34; the engine-level guard → HB-35; the nextest residual on Windows → HB-36.
+
+## C-2b (BRIEF M7-C2b; modell=claude-sonnet-5-5)
+
+Commits: K1 `84aa8ac` (relay `ref`), K3 `5ebd24e` (`revert_step` doc), K4 docs (this section, Q289, HB-37…39), K5 evidence (`docs/reviews/M07-evidence/c2b-ci-fast.txt`). No K2: F is held.
+
+**E — `secmp-relay ref` (Q289).** `ref --keys <file> --onion <addr>.onion [--direct <host>:<port> --cert <cert.der>] --out <file>` writes `relay_ref = <hex RelayRef>` and `access_key = <hex>` (the format of `runtime::read_relay_ref`) to a new file (`create_new`, 0600 on Unix; Windows inherits the directory's ACL, HB-39). The onion text is parsed strictly (56 lower-case base32 characters, `.onion`; version and checksum by `Onion::from_bytes`). Only `ref written` goes to stdout; no error string carries a value. The relay keeps its two workspace dependencies. Test `cli::ref_round_trips` (decoded `RelayRef` equals the expected one with and without `direct`, `access_key` line, mode 0600, five refusals with no secret on stdout/stderr and no file written). Clippy forced two changes in code, not by `allow`: the refusals moved into the helper `ref_refusals` (`too_many_lines`), and `as_chunks::<8>` replaced `chunks_exact(8)`.
+
+**F — held.** The owner line for `fuzz-nightly.yml:12` was NO: no FZ-03 `cli_command_line`, no `fuzz/` change, no Q290, no ADR-047 Amendment 15, no G7-23 edit, no `gates.rs`/`expect.rs` change, gate 6 (`fuzz-check`) not run (nothing it checks changed).
+
+**C2g-2.** The doc of `revert_step` now states `Ok(outputs)` / `Err(())` and what `sched_mode` holds. No code change.
+
+**Backlog.** C2g-5 → HB-37; C2g-4 → HB-38 (`.config/nextest.toml` unchanged); Windows ACL of `ref`/`keygen` → HB-39. HB-30 stays open.
+
+**Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK after the two fixes above; `step --strict policy` PASS; `nextest -p xtask` 330/330 (no new xtask test without F); harness scan tests 5/5; `step --strict hello` PASS; greps: `Instant::now`/`SystemTime::now` code only in `clock.rs`, `SECMP_PROPTEST_SEED` comments only; `secmp-relay --test cli` 9/9; `secmp-relay --features kat` 193/193; `secmp-proto --test fuzz_max_len` 2/2; `secmp-client-core --features kat -E 'test(runtime::)'` 10/10.

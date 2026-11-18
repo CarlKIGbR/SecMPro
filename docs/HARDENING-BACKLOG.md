@@ -26,5 +26,12 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-20 | Windows: no ACL check of the passphrase file (`--passphrase-file`): the Unix `mode & 0o077` rule has no counterpart; add an owner-only ACL check before the file is read (Q282). | M7-C1 (D6) | Open |
 | HB-21 | The CLI keeps plain `String` copies of secrets and plaintext that are never zeroized: the stdin line, `send` text, `from_utf8_lossy` output and the JSON output lines (the invitation URI of `invite accept` is fixed in C-2). | cross-review C-1 (C1-5) | Open |
 | HB-22 | The relay consumes an invitation's link data before the client's `link_consumed` commits; a store error or `quit` in between loses the invitation (inherent to spec §9.7; warned in the CLI usage text). | cross-review C-1 (C1-9) | Open |
+| HB-23 | OQ-19: the owner's ruling A/B; M7 behaviour B is built (SE-13b), SE-13a dictated, not built | OPEN-M7-07 | Open |
+| HB-24 | the docs/01 RT-3/F-M7 sentence of ADR-048 (owner text; review R7-9) | OPEN-M7-30 | Open |
+| HB-25 | docs/03 §10.1/§10.2 sentence on the 50 ms driver jitter (owner errata) | OPEN-M7-B-11 | Open |
+| HB-26 | residuals D-B73, D-B74 accepted (A) by the reviewer; §7.7 succession chain rule (C) is the owner's | OPEN-M7-B-12 | Open |
+| HB-27 | (1) live-page test across identity rotations, (2) the 18 live SecretPages, (3) CS-3.1 names SQLCipher 4.17.0, bundled is 4.10.0 (owner text) | OPEN-M7-B-26 | Open |
+| HB-28 | D-B98 residuals of B17c; owner informed, not objected | OPEN-M7-B-31 | Open |
+| HB-29 | a hub job longer than P_min − ε (≈ 10 s) still costs ticks (B0 bound; with one KeyChange signature only at ≈ 10⁵ contacts or a very slow disk); measure in the hardening phase | INV4-CALLS (C-2 B0) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

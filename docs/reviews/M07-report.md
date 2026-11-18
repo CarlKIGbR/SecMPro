@@ -339,7 +339,7 @@ Kani peaks of the ci-full `kani` step (cbmc RSS, KiB; limit `KANI_CBMC_RSS_LIMIT
 
 ## 5. Deviations from spec / plan
 
-No deviation from the spec. Deviations from the weisung's wording or the TEST-SPEC rows (each for the reviewer, Q-A6…Q-A13):
+No deviation from the spec text. One decision touches §7.7 and awaits the owner's ratification: ADR-058 (accepted by the reviewer under the delegation of 2026-11-10; an authenticated repeat of the last accepted KeyChange is a no-op instead of a freeze; review R7-2); docs/03 is unchanged until then. Deviations from the weisung's wording or the TEST-SPEC rows (each for the reviewer, Q-A6…Q-A13):
 
 - **D1 (Q-A6) G7-06:** the `cargo tree` of `kani_build_has_no_store` uses `-e normal,build`, not `-e normal`: `openssl-src` is a
   build-dependency of `openssl-sys`, so with `-e normal` the dictated negative control has no `openssl-src v` line (first run:
@@ -2133,3 +2133,25 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 
 **C-1b** (WEISUNG M7-C1b): K1 `fix(core,cli): Call::Core allowlist, …` (all code and tests; the pin of the RUSTSEC-2026-0542 reason in `expect::tests::audit_ignores_unchanged` follows the new text), K2 docs (Q284, HB-21, HB-22, this section), K3 evidence (`docs/reviews/M07-evidence/c1b-policy.txt`, `c1b-ci-fast.txt`).
 
+
+## C-2 (BRIEF M7-C2; modell=claude-sonnet-5-5)
+
+Commits: K1 `25d56f6` (core, store, testkit), K2 `8d739e2` (cli), K3 docs (DOCS9 R7-3, Q285, HB-23…29, TEST-SPEC SE-189…191, this section), K4 evidence (`docs/reviews/M07-evidence/c2-ci-fast.txt`).
+
+**Built.**
+- B0, hub work off the loop: `Engine::run` keeps the schedule (`run_until`, actions and operations, takes); `visit` and the calls that need only the hub run as ONE hub job on `spawn_blocking` (hub lock held there) while the chunks go on; the result is applied at the next chunk boundary and the next job starts when a call or a visit is due (order of calls kept; `SetSettings`, `Export`, `Quit` are handled on the loop when no job runs). `Profile::rotate_identity` signs one `KeyChange` and clones it per contact (spec §7.6).
+- A, events: `Event::{Relayed, Delivered, KeyChangeSent}` from `SessionEvent` (`OK_SEND` of a real message's last cell; a committed `Receipt{delivered}` for a message of ours not yet delivered; the `OK_SEND` that settles a `KeyChange` content, the `e.done` transition of Q222 (2)).
+- B, export: `secmp-store::backup::{snapshot, Snapshot::write}` (bytes of the file unchanged; BK-01…BK-07, FO-03 unchanged and green); `Call::Export` (snapshot under the hub lock; Argon2id, seal and write on the blocking pool; the reply from a task of its own); `Call::Core(Request::Export)` stays refused (Q284).
+- C, runtime: `Call::Status` / `Answer::Status(StatusView)`, `runtime::list_contacts`, `runtime::import_profile` (the contact count is the store's, not the session index's: a restored contact has no session).
+- D, CLI: `contacts sas|verify`, `status`, `identity rotate`, `rotate`, `export`; events `relayed`, `delivered`, `key_change_sent`; one-shots `contacts list <dir>` and `import`; error codes `reinvite_required`, `confirm_required`, `cloud_folder`, `blocked`, `frozen`, `unverified`; D-B55 (g) (`daemon::repeats`); stdin lines capped at 65 536 bytes (`daemon::next_line`), `Line::InviteAccept` holds a `Zeroizing<String>`, `Debug` of `Line` is the variant name.
+
+**Tests (wall seconds of the runs in this session).**
+- B0: `harness::m7_runtime::loop_keeps_running_during_a_slow_call` (5 s), `profile::tests::rotation_signs_once` (3 s).
+- A: SE-189 `sessions::tests::relayed_event_once`, SE-190 `…::delivered_event_after_receipt_commit`, SE-191 `…::key_change_sent_at_ok_send` (1–2 s each).
+- B: `runtime::tests::export_does_not_stall_the_loop` (3 s); `daemon::tests::{removal_events_are_printed_once, long_lines_are_drained}`; `args::tests::{the_session_lines, the_one_shot_forms}`.
+- CL-04 `cli_it::contacts_list_and_verify` (93 s), CL-05 `cli_it::send_and_tail` (266 s), CL-06 `cli_it::status_shape` (4 s), CL-07 `cli_it::export_import` (156 s), CL-08 `cli_it::identity_rotate` (400 s), CL-09 `cli_it::jsonl_schema` (173 s), CL-14 `cli_it::stdin_commands_are_total` (66 s; 10 000 lines, 60 of them reach the runtime).
+- `secmp-client-core` + `secmp-store` with `kat`: 456 tests passed (before the CLI work).
+
+**Deviations from the spec.** None. From the brief: guard 0.2's literal `git grep -c 'fn admitted'` is 2 (it also matches the test `fn admitted_is_an_allowlist`); there is exactly one `fn admitted` (`runtime.rs:148`), C-1 and C-1b are complete. Notes: CL-14 sends the runtime-reaching verbs rarely (a call waits for a chunk boundary, ≤ 1 s); `import_profile` first returned the session count (0) — fixed before K2 was committed.
+
+**Open risks.** HB-29 (a hub job longer than P_min − ε still costs ticks). A call is answered at the next chunk boundary of the loop (≤ 1 s) as before.

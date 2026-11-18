@@ -8,14 +8,20 @@
 //! secmp-relay keygen --out <file> [--valid-days N]  new identity and key generation 1; prints relay_fp
 //! secmp-relay rotate-static --keys <file> [--valid-days N]   add generation kid + 1, drop the expired ones
 //! secmp-relay spki <cert.der>                       the pin of the direct listener's certificate (docs/05 §7)
+//! secmp-relay ref --keys <file> --onion <addr>.onion [--direct <host>:<port> --cert <cert.der>] --out <file>   the client's relay reference file (holds the access key; never printed)
 //! ```
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::num::NonZeroU16;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use secmp_crypto::Zeroizing;
+use secmp_proto::Encode as _;
+use secmp_proto::link::ids::akc;
+use secmp_proto::wire::inv::{Direct, Host, Onion, RelayRef};
 use secmp_relay::clock::wall_clock_unix_secs;
 use secmp_relay::event::{Event, EventSink as _, StderrSink};
 use secmp_relay::keys::{DEFAULT_VALIDITY_SECS, KeyFile};
@@ -63,6 +69,139 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
         s
     })
+}
+
+fn value_after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let i = args.iter().position(|a| a == flag)?;
+    args.get(i.saturating_add(1)).map(String::as_str)
+}
+
+fn hex_to(out: &mut String, bytes: &[u8]) {
+    use std::fmt::Write as _;
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+}
+
+/// The 35 bytes of a v3 onion address text (rend-spec-v3 §6, spec §5.3): 56 lower-case base32 characters and
+/// `.onion`; the version and the checksum are checked by [`Onion::from_bytes`].
+fn onion_of(text: &str) -> Option<Onion> {
+    let label = text.strip_suffix(".onion")?;
+    if label.len() != 56 {
+        return None;
+    }
+    let mut bits: Vec<bool> = Vec::with_capacity(280);
+    for c in label.bytes() {
+        let v = b"abcdefghijklmnopqrstuvwxyz234567"
+            .iter()
+            .position(|a| *a == c)?;
+        for shift in (0..5_u32).rev() {
+            bits.push((v >> shift) & 1 == 1);
+        }
+    }
+    let bytes: Vec<u8> = bits
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|byte| byte.iter().fold(0_u8, |a, b| (a << 1) | u8::from(*b)))
+        .collect();
+    Onion::from_bytes(&bytes).ok()
+}
+
+/// The text of the client's relay reference file (`relay_ref`, `access_key`; spec §5.3). It holds the access key and
+/// lives only in a `Zeroizing` string; no error carries a value.
+fn ref_text(
+    keys: &Path,
+    onion: &str,
+    direct: Option<(&str, &Path)>,
+) -> Result<Zeroizing<String>, &'static str> {
+    const KEYS: &str = "key file missing, unreadable or malformed";
+    let ring = KeyFile::read(keys)
+        .and_then(|f| f.ring())
+        .map_err(|_| KEYS)?;
+    let relay_fp = ring.newest().map_err(|_| KEYS)?.0.fp();
+    let access = ring.access_key().map_err(|_| KEYS)?;
+    let onion = onion_of(onion).ok_or("--onion needs a v3 onion address")?;
+    let direct = match direct {
+        None => None,
+        Some((hostport, cert)) => {
+            const USAGE: &str = "--direct needs <host>:<port>";
+            let (host, port) = hostport.rsplit_once(':').ok_or(USAGE)?;
+            let host = Host::from_bytes(host.as_bytes()).map_err(|_| USAGE)?;
+            let port = port
+                .parse::<u16>()
+                .ok()
+                .and_then(NonZeroU16::new)
+                .ok_or(USAGE)?;
+            let cert = std::fs::read(cert).map_err(|_| "cannot read the certificate")?;
+            let spki_sha256 =
+                secmp_relay::spki::pin_of(&cert).ok_or("not a DER X.509 certificate")?;
+            Some(Direct {
+                host,
+                port,
+                spki_sha256,
+            })
+        }
+    };
+    let encoded = RelayRef {
+        relay_fp,
+        onion,
+        akc: akc(access),
+        direct,
+    }
+    .encode()
+    .map_err(|_| "the relay reference does not encode")?;
+    let mut text = Zeroizing::new(String::from(
+        "# SecMPro relay reference (spec §5.3); it holds the relay's access key: keep it private\nrelay_ref = ",
+    ));
+    hex_to(&mut text, &encoded);
+    text.push_str("\naccess_key = ");
+    hex_to(&mut text, access.expose_secret());
+    text.push('\n');
+    Ok(text)
+}
+
+/// A new file at `path`, never overwriting; mode 0600 on Unix. Windows: no mode, the file inherits the directory's
+/// ACL, exactly as the key file of `keygen` (HB-39).
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut f = options.open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// `ref`: the file `secmp-client-core`'s `read_relay_ref` reads. The only output is `ref written`.
+fn reference(args: &[String]) -> ExitCode {
+    let (Some(keys), Some(onion), Some(out_path)) = (
+        path_after(args, "--keys"),
+        value_after(args, "--onion"),
+        path_after(args, "--out"),
+    ) else {
+        return fail("ref needs --keys <file>, --onion <address> and --out <file>");
+    };
+    let direct = match (value_after(args, "--direct"), path_after(args, "--cert")) {
+        (None, None) => None,
+        (Some(hostport), Some(cert)) => Some((hostport, cert)),
+        _ => return fail("ref needs --direct and --cert together"),
+    };
+    let text = match ref_text(
+        &keys,
+        onion,
+        direct.as_ref().map(|(h, c)| (*h, c.as_path())),
+    ) {
+        Ok(t) => t,
+        Err(why) => return fail(why),
+    };
+    if write_private(&out_path, text.as_bytes()).is_err() {
+        return fail("cannot write the reference file (it must not exist)");
+    }
+    out("ref written")
 }
 
 fn keygen(args: &[String]) -> ExitCode {
@@ -165,6 +304,7 @@ fn main() -> ExitCode {
         Some("keygen") => keygen(&args),
         Some("rotate-static") => rotate(&args),
         Some("spki") => spki(&args),
+        Some("ref") => reference(&args),
         Some("--config") => match path_after(&args, "--config") {
             Some(p) => run(&p),
             None => fail("--config needs a file"),

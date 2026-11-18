@@ -5,10 +5,14 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use core::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use secmp_proto::Decode as _;
+use secmp_proto::link::ids::akc;
+use secmp_proto::wire::inv::{Direct, Host, Onion, RelayRef};
 use secmp_relay::KeyFile;
 
 fn relay(args: &[&str]) -> Output {
@@ -355,5 +359,176 @@ fn relay_spki_command_prints_pin() {
         assert!(!o.status.success(), "{args:?}");
         assert_eq!(stdout(&o), "", "{args:?}");
     }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A self-signed Ed25519 X.509 v3 certificate (the fixture of `relay_spki_command_prints_pin`, with `version`).
+fn fixture_cert() -> Vec<u8> {
+    let key = secmp_crypto::Ed25519SigningKey::from_seed(&[0x5a; 32]).unwrap();
+    let alg = [0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70];
+    let cn = [
+        &[0x06, 0x03, 0x55, 0x04, 0x03][..],
+        &der(0x0c, b"relay.test"),
+    ]
+    .concat();
+    let name = der(0x30, &der(0x31, &der(0x30, &cn)));
+    let validity = der(
+        0x30,
+        &[der(0x17, b"200101000000Z"), der(0x17, b"491231235959Z")].concat(),
+    );
+    let bits = [&[0_u8][..], key.verifying_key().as_bytes()].concat();
+    let spki = der(0x30, &[&alg[..], &der(0x03, &bits)].concat());
+    let version = true;
+    let mut tbs = Vec::new();
+    if version {
+        tbs.extend(der(0xa0, &[0x02, 0x01, 0x02]));
+    }
+    tbs.extend([0x02, 0x01, 0x01]);
+    for part in [&alg[..], &name, &validity, &name, &spki] {
+        tbs.extend_from_slice(part);
+    }
+    let tbs = der(0x30, &tbs);
+    let sig = key.sign(&tbs);
+    let sig_bits = [&[0_u8][..], sig.as_ref()].concat();
+    der(0x30, &[&tbs[..], &alg, &der(0x03, &sig_bits)].concat())
+}
+
+/// RFC 4648 base32, lower case, no padding (whole 5-byte groups only).
+fn base32(bytes: &[u8]) -> String {
+    let alphabet = b"abcdefghijklmnopqrstuvwxyz234567";
+    let bits: Vec<bool> = bytes
+        .iter()
+        .flat_map(|b| (0..8).rev().map(move |i| (b >> i) & 1 == 1))
+        .collect();
+    bits.chunks(5)
+        .map(|c| {
+            let v = c.iter().fold(0_usize, |a, b| (a << 1) | usize::from(*b));
+            char::from(*alphabet.get(v).unwrap())
+        })
+        .collect()
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    s.as_bytes()
+        .chunks(2)
+        .map(|c| u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap())
+        .collect()
+}
+
+/// The refusals of `ref`: no secret on stdout or stderr, an existing output untouched, no file for a refused call.
+fn ref_refusals(dir: &Path, keys: &Path, onion_text: &str, access_hex: &str) {
+    let refused = |o: &Output| {
+        assert!(!o.status.success());
+        assert!(stdout(o).is_empty());
+        assert!(!stderr(o).contains(access_hex));
+    };
+    // the output exists: refused, unchanged
+    let existing = dir.join("relay-false.ref");
+    let before = std::fs::read(&existing).unwrap();
+    refused(&relay(&[
+        "ref",
+        "--keys",
+        s(keys),
+        "--onion",
+        onion_text,
+        "--out",
+        s(&existing),
+    ]));
+    assert_eq!(std::fs::read(&existing).unwrap(), before);
+    let upper = onion_text.to_uppercase();
+    let fresh = |name: &str| dir.join(name);
+    let cases: Vec<(PathBuf, Vec<&str>)> = vec![
+        (fresh("no-onion"), vec!["ref", "--keys", s(keys)]),
+        (
+            fresh("no-cert"),
+            vec![
+                "ref",
+                "--keys",
+                s(keys),
+                "--onion",
+                onion_text,
+                "--direct",
+                "relay.example:8443",
+            ],
+        ),
+        (
+            fresh("bad-onion"),
+            vec!["ref", "--keys", s(keys), "--onion", "x.onion"],
+        ),
+        (
+            fresh("upper-onion"),
+            vec!["ref", "--keys", s(keys), "--onion", &upper],
+        ),
+    ];
+    for (path, mut args) in cases {
+        args.extend(["--out", s(&path)]);
+        refused(&relay(&args));
+        assert!(!path.exists(), "{args:?} wrote a file");
+    }
+}
+
+/// M7-C2b (Q289): `ref` writes the file `runtime::read_relay_ref` reads; the `relay_ref` line decodes to the
+/// `RelayRef` of the key file, the onion address and (with `--direct`) the certificate's pin; `access_key` is the key
+/// file's access key; the file is new and private; refusals print no secret and leave no file.
+#[test]
+fn ref_round_trips() {
+    let dir = scratch("ref");
+    let keys = dir.join("relay-keys");
+    assert!(relay(&["keygen", "--out", s(&keys)]).status.success());
+    let ring = KeyFile::read(&keys).unwrap().ring().unwrap();
+    let access_hex = hex(ring.access_key().unwrap().expose_secret());
+    let onion = Onion::from_pubkey(&[0x33; 32]);
+    let onion_text = format!("{}.onion", base32(onion.as_bytes()));
+    let cert = fixture_cert();
+    let cert_path = dir.join("cert.der");
+    std::fs::write(&cert_path, &cert).unwrap();
+    for direct in [false, true] {
+        let out_path = dir.join(format!("relay-{direct}.ref"));
+        let mut args = vec![
+            "ref",
+            "--keys",
+            s(&keys),
+            "--onion",
+            &onion_text,
+            "--out",
+            s(&out_path),
+        ];
+        if direct {
+            args.extend(["--direct", "relay.example:8443", "--cert", s(&cert_path)]);
+        }
+        let o = relay(&args);
+        assert!(o.status.success(), "{}", stderr(&o));
+        assert_eq!(stdout(&o), "ref written\n");
+        assert!(stderr(&o).is_empty());
+        let text = std::fs::read_to_string(&out_path).unwrap();
+        let line = text
+            .lines()
+            .find_map(|l| l.strip_prefix("relay_ref = "))
+            .unwrap();
+        let decoded = RelayRef::decode(&unhex(line)).unwrap();
+        let expected = RelayRef {
+            relay_fp: ring.newest().unwrap().0.fp(),
+            onion: onion.clone(),
+            akc: akc(ring.access_key().unwrap()),
+            direct: direct.then(|| Direct {
+                host: Host::from_bytes(b"relay.example").unwrap(),
+                port: NonZeroU16::new(8443).unwrap(),
+                spki_sha256: secmp_relay::spki::pin_of(&cert).unwrap(),
+            }),
+        };
+        assert!(decoded == expected, "direct = {direct}");
+        let key_line = text
+            .lines()
+            .find_map(|l| l.strip_prefix("access_key = "))
+            .unwrap();
+        assert_eq!(key_line, access_hex);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&out_path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "the reference file is private");
+        }
+    }
+    ref_refusals(&dir, &keys, &onion_text, &access_hex);
     std::fs::remove_dir_all(&dir).unwrap();
 }

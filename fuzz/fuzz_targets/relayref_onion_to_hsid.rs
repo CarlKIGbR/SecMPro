@@ -4,7 +4,8 @@
 //! and a valid checksum (checked here independently); for every accepted address the Tor provider's target
 //! (`secmp_transport::tor::target`) is the address's base32 plus `.onion` — it decodes back to the input — on port
 //! 443, and Arti's address parser takes it as a host name. The harness also builds the valid address of the input's
-//! first 32 bytes, so the accepting path is reached on every run.
+//! first 32 bytes, so the accepting path is reached on every run. The target is `Ok` exactly for keys that import as
+//! Ed25519 public keys (C-T1).
 //!
 //! (TEST-SPEC FZ-03 asks that "Arti's parse re-encodes to the input": Arti's `HsId` is public only with its
 //! `experimental-api` feature, which TOR-07 forbids; the base32 round trip and Arti's `TorAddr` parse stand in.)
@@ -42,7 +43,12 @@ fn check(data: &[u8]) {
     let valid = data.len() == 35 && data.get(34) == Some(&0x03) && checksum_ok(data);
     assert_eq!(parsed.is_ok(), valid);
     if let Ok(onion) = parsed {
-        let (host, port) = tor::target(&onion).unwrap();
+        let point = data
+            .get(..32)
+            .is_some_and(|pk| secmp_crypto::Ed25519VerifyingKey::from_bytes(pk).is_ok());
+        let target = tor::target(&onion);
+        assert_eq!(target.is_ok(), point);
+        let Ok((host, port)) = target else { return };
         assert_eq!(port, 443);
         assert_eq!(host.len(), 62);
         let (b32, suffix) = host.split_at(56);

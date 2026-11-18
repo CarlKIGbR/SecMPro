@@ -70,9 +70,7 @@ fn base32(bytes: &[u8]) -> String {
 ///
 /// This hand-written re-encode stands in for Arti's `HsId`, whose public use needs the `experimental-api` feature of
 /// `arti-client` (OPEN-M6-B-3). Arti then parses the text itself in [`target`]. The checksum and version are checked
-/// when the `Onion` is decoded (`Onion::from_bytes`); there is no Ed25519 point check at this layer (a 32-byte string
-/// that is not a curve point yields a host name that no onion service answers). Fix in M7, once `HsId` is reachable
-/// without the experimental feature.
+/// when the `Onion` is decoded (`Onion::from_bytes`); the Ed25519 key check is done by [`target`] (OPEN-M7-22 A, C-T1).
 #[must_use]
 pub fn onion_host(onion: &Onion) -> String {
     let mut host = base32(onion.as_bytes());
@@ -84,8 +82,16 @@ pub fn onion_host(onion: &Onion) -> String {
 /// name (Arti's onion form) and not an IP address (TEST-SPEC-M6 TOR-08, TOR-09, FZ-03).
 ///
 /// # Errors
-/// [`Error::Invalid`] if Arti does not take it as a host name (never for a decoded `Onion`).
+/// [`Error::Invalid`] if the key is not an Ed25519 public key (spec §3.5 import rules; OPEN-M7-22 A), or if Arti does
+/// not take the name as a host name (never for a decoded `Onion`).
 pub fn target(onion: &Onion) -> Result<(String, u16)> {
+    // spec §5.3, §3.5 (OPEN-M7-22 A, C-T1): the onion's 32-byte key must import as an Ed25519 public key — a curve point,
+    // canonical, not of small order — before any connect
+    let key = onion
+        .as_bytes()
+        .get(..secmp_crypto::ED25519_PK_LEN)
+        .ok_or(Error::Invalid)?;
+    secmp_crypto::Ed25519VerifyingKey::from_bytes(key).map_err(|_| Error::Invalid)?;
     let host = onion_host(onion);
     let addr =
         arti_client::TorAddr::from((host.as_str(), ONION_PORT)).map_err(|_| Error::Invalid)?;
@@ -317,6 +323,75 @@ mod tests {
             assert_eq!(base32(input.as_bytes()), expected, "{input:?}");
         }
         assert_eq!(base32(&[0xff; 35]).len(), 56);
+    }
+
+    /// A Tor backend that counts its connects, answers in memory.
+    #[derive(Clone, Default)]
+    struct Counting(Arc<core::sync::atomic::AtomicUsize>);
+
+    impl TorBackend for Counting {
+        type Stream = tokio::io::DuplexStream;
+
+        fn connect(
+            &self,
+            _host: String,
+            _port: u16,
+            _isolation: IsolationToken,
+        ) -> impl Future<Output = Result<Self::Stream>> + Send {
+            self.0.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+            core::future::ready(Ok(tokio::io::duplex(64).0))
+        }
+    }
+
+    /// C-T1 (TEST-SPEC-M7 row C-T1, OPEN-M7-22 A; spec §5.3, §3.5): an onion whose 32-byte key does not import as an
+    /// Ed25519 public key (not a curve point, not canonical, small order) is `Invalid` in [`target`] and in a Tor connect,
+    /// and the backend is not called for it; a real key (the one of T-01/T-02, unchanged) still passes.
+    #[test]
+    fn onion_key_must_be_a_point() -> core::result::Result<(), Box<dyn std::error::Error>> {
+        let known = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
+        let good = decode_onion_text(known).ok_or("the known address decodes")?;
+        assert_eq!(target(&good), Ok((known.to_owned(), ONION_PORT)));
+        // not a point, not canonical, small order
+        let bad: Vec<Onion> = [[0x42_u8; 32], [0xff; 32], [0; 32]]
+            .iter()
+            .map(Onion::from_pubkey)
+            .collect();
+        for o in &bad {
+            assert_eq!(target(o), Err(Error::Invalid));
+        }
+        let backend = Counting::default();
+        let state = Arc::new(TorState::new());
+        state.observe(Status {
+            frac: 1.0,
+            ready: true,
+            blocked: false,
+        });
+        let provider = TorProvider::with_backend(backend.clone(), state);
+        let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+        let relay = |o: &Onion| RelayRef {
+            relay_fp: [1; 32],
+            onion: o.clone(),
+            akc: [3; 32],
+            direct: None,
+        };
+        for o in &bad {
+            let refused = runtime
+                .block_on(provider.connect(&relay(o), Isolation(1)))
+                .err();
+            assert_eq!(refused, Some(Error::Invalid));
+        }
+        assert_eq!(
+            backend.0.load(core::sync::atomic::Ordering::SeqCst),
+            0,
+            "no connect for a refused key"
+        );
+        assert!(
+            runtime
+                .block_on(provider.connect(&relay(&good), Isolation(1)))
+                .is_ok()
+        );
+        assert_eq!(backend.0.load(core::sync::atomic::Ordering::SeqCst), 1);
+        Ok(())
     }
 
     /// Strict canonical decoder of an onion address text (rend-spec-v3 §6) into its 35 bytes: exactly 56 lowercase

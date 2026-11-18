@@ -176,11 +176,22 @@ async fn session(a: &OpenArgs<'_>, pass: &[u8]) -> u8 {
     let events = tokio::spawn(events(client));
     let input = tokio::spawn(input(caller, stdin_lines()));
     serve.run().await;
-    let _ = events.await;
-    // the stdin thread blocks in a read: the task that waits for it is dropped, the process ends with `closed`
+    let stopped = events.await.unwrap_or(false);
+    // the stdin thread blocks in a read: the task that waits for it is dropped
     input.abort();
-    out(&Obj::new("closed").done());
-    EXIT_OK
+    let (line, code) = session_end(stopped);
+    out(&line);
+    code
+}
+
+/// How a session ends: `quit` or the end of stdin is `closed` and exit 0; a loop that stopped by itself (no randomness: fail
+/// closed) is an `unavailable` error and exit 1 — not a clean close.
+fn session_end(stopped: bool) -> (String, u8) {
+    if stopped {
+        (error_line("unavailable"), EXIT_OTHER)
+    } else {
+        (Obj::new("closed").done(), EXIT_OK)
+    }
 }
 
 /// stdin on a thread of its own, forwarding the lines (a line that is not UTF-8 is forwarded empty: a usage error).
@@ -282,17 +293,23 @@ fn answer_line(answer: Result<Answer, Error>) -> String {
 }
 
 /// The notices of the runtime, as lines.
-async fn events(mut client: Client) {
+///
+/// Returns whether the runtime reported that its loop stopped by itself.
+async fn events(mut client: Client) -> bool {
     let caller = client.caller();
+    let mut stopped = false;
     while let Some(notice) = client.next_event().await {
         match notice {
             Notice::Event(stamped) => {
                 let line = event_line(&caller, stamped.at_ms, &stamped.event).await;
                 out(&line);
             }
+            Notice::Refused => out(&Obj::new("event").text("name", "Refused").done()),
+            Notice::Stopped => stopped = true,
             _ => out(&error_line("unavailable")),
         }
     }
+    stopped
 }
 
 const fn contact_of(event: &Event) -> Option<i64> {
@@ -357,5 +374,23 @@ async fn event_line(caller: &Caller, at_ms: u64, event: &Event) -> String {
                 None => line.done(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M7-C1b (C1-8): a session whose loop stopped by itself ends with the `unavailable` error and exit 1, not `closed` and 0.
+    #[test]
+    fn stopped_session_exits_1() {
+        assert_eq!(
+            session_end(true),
+            (
+                "{\"type\":\"error\",\"code\":\"unavailable\"}".to_owned(),
+                1
+            )
+        );
+        assert_eq!(session_end(false), ("{\"type\":\"closed\"}".to_owned(), 0));
     }
 }

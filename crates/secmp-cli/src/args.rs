@@ -36,7 +36,7 @@ pub enum Command {
 pub struct Usage;
 
 /// The usage text (stderr).
-pub const USAGE: &str = "usage:\n  secmp-cli\n  secmp-cli profile new <dir> --passphrase-file <file> [--relay <file>]\n  secmp-cli open <dir> --passphrase-file <file> [--direct] [--name <name>]\n";
+pub const USAGE: &str = "usage:\n  secmp-cli\n  secmp-cli profile new <dir> --passphrase-file <file> [--relay <file>]\n  secmp-cli open <dir> --passphrase-file <file> [--direct] [--name <name>]\n  note: an accepted invitation is consumed at the relay before it is stored; quitting during `accepting` loses it\n";
 
 /// Parse the arguments after the program name.
 ///

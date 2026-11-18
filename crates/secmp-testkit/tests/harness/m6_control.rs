@@ -782,3 +782,70 @@ fn rejected_pool_handout_keeps_spare() {
     assert_eq!(taken, spares.first().copied());
     assert_eq!(sched.pool_spares(RelayId(0)), 1);
 }
+
+/// M7-C1b (C1-2): removing a recv queue drops its pending re-create too. A `FETCH` answered `NoQueue` schedules `QUEUE_NEW`
+/// of the queue at `U[10 s, 5 min]`; `remove_queue` leaves no `QUEUE_NEW` (and no `QUEUE_DEL`) of it, so no control operation
+/// for it ever runs and the host is never asked for its material (it would mint a spare under that id).
+#[test]
+fn removed_queue_drops_pending_recreate() {
+    use secmp_crypto::SecretBytes;
+    use secmp_transport::{QueueTransport, RecvCap, RelayQueueTransport};
+
+    use crate::m6_common::at;
+
+    let mut sim = driver();
+    let alice = client(&mut sim, Mode::Strict, 321);
+    let bob = client(&mut sim, Mode::Strict, 322);
+    let link = contact(&mut sim, alice, bob, 10_000, 10_000);
+    let (_, t_up) = run_until_link_up(&mut sim, alice, LinkKind::Recv);
+    sim.run_until(at(t_up, 40, 10_000));
+    let (recv_seed, _) = *sim
+        .client_ref(alice)
+        .material
+        .queues
+        .get(&link.a_recv.0)
+        .unwrap();
+    {
+        let access = sim.harness().access_key();
+        let fp = sim.harness().relay_fp();
+        let unix = sim.harness().clock().unix();
+        let stream = sim.harness_mut().open_stream().unwrap();
+        let mut t = RelayQueueTransport::connect(
+            stream,
+            fp,
+            Some(&access),
+            unix,
+            sim.client(alice).entropy.get(),
+        )
+        .unwrap();
+        t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv_seed).unwrap()).unwrap())
+            .unwrap();
+    }
+    // the next FETCH sees NoQueue: the re-create is scheduled, not yet started (it is due ≥ 10 s later)
+    let t_seen = at(t_up, 41, 10_000);
+    sim.run_until(t_seen);
+    let before = sim.client_ref(alice).controls_started.len();
+    assert!(
+        !sim.client_ref(alice)
+            .controls_started
+            .iter()
+            .any(|(_, _, k)| matches!(k, ControlKind::QueueNew(q) if *q == link.a_recv)),
+        "pending, not started"
+    );
+    let t = sim.now();
+    sim.client(alice)
+        .sched
+        .remove_queue(t, link.a_recv, &mut NoCells)
+        .unwrap();
+    sim.run_until(t + 360_000);
+    let ops_of_q = sim
+        .client_ref(alice)
+        .controls_started
+        .iter()
+        .skip(before)
+        .filter(|(_, _, k)| {
+            matches!(k, ControlKind::QueueNew(q) | ControlKind::QueueDel(q) if *q == link.a_recv)
+        })
+        .count();
+    assert_eq!(ops_of_q, 0, "no QUEUE_NEW / QUEUE_DEL of the removed queue");
+}

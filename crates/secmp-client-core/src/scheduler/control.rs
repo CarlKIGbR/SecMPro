@@ -112,9 +112,12 @@ impl ControlOps {
             .any(|o| o.kind == ControlKind::QueueDel(queue))
     }
 
-    /// Drop the `QUEUE_DEL`s of `queue`: the queue is gone from the schedule, there is nothing left to delete (Q201).
-    pub fn drop_queue_del(&mut self, queue: crate::scheduler::types::QueueId) {
-        self.ops.retain(|o| o.kind != ControlKind::QueueDel(queue));
+    /// Drop the `QUEUE_DEL`s and the `QUEUE_NEW`s of `queue`: the queue is gone from the schedule, there is nothing left to
+    /// delete (Q201) and nothing to re-create (a pending re-create of a removed queue would make the host mint a spare for it).
+    pub fn drop_queue_ops(&mut self, queue: crate::scheduler::types::QueueId) {
+        self.ops.retain(|o| {
+            o.kind != ControlKind::QueueDel(queue) && o.kind != ControlKind::QueueNew(queue)
+        });
     }
 
     /// What `id` runs, while it waits or runs.

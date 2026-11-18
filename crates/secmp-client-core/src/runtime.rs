@@ -52,9 +52,6 @@ use crate::timing::TimingRng;
 /// The step of the loop: how long the driver runs between two visits to the hub (spec §10.1 does not depend on it).
 pub const CHUNK_MS: u64 = 1_000;
 
-/// How many chunks a hand-out of a spare that the scheduler does not hold yet (its `QUEUE_NEW` still running) waits.
-const TAKE_TRIES: u32 = 600;
-
 /// The relay rows a profile may hold that the runtime looks for.
 const RELAY_ROWS: u32 = 16;
 
@@ -137,6 +134,87 @@ pub enum Notice {
     Event(Stamped),
     /// The hub could not work on what the sessions delivered (the store); the next chunk tries again (RJ semantics).
     Unavailable,
+    /// The scheduler refused something the hub asked for (a queue it could not add or hand out); the queue stays as it was.
+    Refused,
+    /// The loop has stopped for good (no randomness: fail closed, nothing more is sent); no [`Answer::Closed`] follows.
+    Stopped,
+}
+
+/// Whether `Call::Core` may carry `request`: the loop runs a call between two chunks of the schedule, under the hub's lock, so
+/// only requests that take milliseconds are admitted (CLAUDE.md §1.4). `Request::Export` runs Argon2id (`PROFILE`, 256 MiB)
+/// and writes a file under the store's lock: refused here (`Error::Unsupported`); a host exports off the loop.
+/// Exhaustive on purpose: a new `Request` variant must be classified.
+#[must_use]
+pub const fn admitted(request: &Request) -> bool {
+    match request {
+        Request::Contacts
+        | Request::SafetyNumber { .. }
+        | Request::Verify { .. }
+        | Request::Settings
+        | Request::RelayView { .. }
+        | Request::Send { .. }
+        | Request::Message { .. }
+        | Request::Reveal { .. }
+        | Request::Rotate { .. }
+        | Request::ResetSession { .. }
+        | Request::Remove { .. }
+        | Request::SetSettings(_)
+        | Request::RotateIdentity => true,
+        Request::Export { .. } => false,
+    }
+}
+
+/// What a take of a spare came to.
+#[derive(Debug, PartialEq, Eq)]
+enum TakeStep {
+    /// Handed out.
+    Done,
+    /// The spare's `QUEUE_NEW` is still running: its registration follows, the hand-out then (no cap: it ends with the
+    /// creation).
+    Retry,
+    /// The scheduler refused, or does not hold the queue and is not creating it: nobody is waiting for it any more.
+    Refused,
+}
+
+fn take_step(
+    result: Result<Option<QueueId>, crate::scheduler::core::SchedError>,
+    pending: bool,
+) -> TakeStep {
+    match result {
+        Ok(Some(_)) => TakeStep::Done,
+        Ok(None) if pending => TakeStep::Retry,
+        Ok(None) | Err(_) => TakeStep::Refused,
+    }
+}
+
+/// The scheduler view the core is left with at the start: what the hub keeps of the recv-queue periods (`Hub::sync_view`,
+/// the rate bound of a rotation, spec §10.2) and the transport the user chose.
+fn start_view<C: Clock, S: crate::sessions::actor::EntropySource>(
+    core: &mut Core<C, S>,
+    direct: bool,
+) {
+    core.view.direct = direct;
+}
+
+/// A `SetSettings` and what it means for the scheduler: the settings are stored, then a changed mode is set on the scheduler
+/// (direct implies Balanced); a refusal (the recv-queues do not fit the mode, spec §10.2) is the call's error and the settings
+/// are put back — the store and the scheduler never disagree. `store` stores and returns the previous settings, `restore` puts
+/// them back.
+fn switch_settings<S: CellSource>(
+    sched: &mut Scheduler,
+    (now, source): (u64, &mut S),
+    new: crate::settings::Settings,
+    store: impl FnOnce(crate::settings::Settings) -> Result<crate::settings::Settings, Error>,
+    restore: impl FnOnce(crate::settings::Settings),
+) -> Result<Vec<crate::scheduler::types::Output>, Error> {
+    let previous = store(new)?;
+    if previous.mode == new.mode {
+        return Ok(Vec::new());
+    }
+    sched.set_mode(now, new.mode, source).map_err(|_| {
+        restore(previous);
+        Error::Unsupported
+    })
 }
 
 type Envelope = (Call, oneshot::Sender<Result<Answer, Error>>);
@@ -499,7 +577,6 @@ impl ControlRunner for HostControl {
 struct Take {
     queue: QueueId,
     period_ms: u64,
-    tries: u32,
 }
 
 struct Engine<P: Providers> {
@@ -594,12 +671,15 @@ impl<P: Providers> Engine<P> {
                 .remove_queue(now, queue, &mut source)
                 .and_then(|outs| self.driver.submit(&mut self.sched, outs)),
             Action::TakeSpare { queue, period_ms } => {
-                self.take(now, relay, (queue, period_ms), 0, &mut source)
+                self.take(now, relay, (queue, period_ms), &mut source);
+                Ok(())
             }
         };
-        // a queue that is known already (a restart registers what the hub registered before) is no error; the others have
-        // nobody to tell in this host: the queue stays as it was
-        let _ = result;
+        // a queue that is known already (a restart registers what the hub registered before) is no error; any other refusal
+        // leaves the queue as it was and is reported
+        if result.is_err_and(|e| e != crate::scheduler::core::SchedError::DuplicateQueue) {
+            let _ = self.notices.send(Notice::Refused);
+        }
     }
 
     fn take(
@@ -607,24 +687,27 @@ impl<P: Providers> Engine<P> {
         now: u64,
         relay: RelayId,
         (queue, period_ms): (QueueId, u64),
-        tries: u32,
         source: &mut SharedHub,
-    ) -> Result<(), crate::scheduler::core::SchedError> {
-        let (taken, outs) = self
+    ) {
+        let pending = self.sched.pool_pending(queue);
+        let result = self
             .sched
-            .take_pool_queue_id(now, relay, queue, period_ms, source)?;
-        if taken.is_some() {
-            return self.driver.submit(&mut self.sched, outs);
+            .take_pool_queue_id(now, relay, queue, period_ms, source);
+        let (taken, outs) = match result {
+            Ok((taken, outs)) => (Ok(taken), outs),
+            Err(e) => (Err(e), Vec::new()),
+        };
+        match take_step(taken, pending) {
+            TakeStep::Done => {
+                if self.driver.submit(&mut self.sched, outs).is_err() {
+                    let _ = self.notices.send(Notice::Refused);
+                }
+            }
+            TakeStep::Retry => self.takes.push(Take { queue, period_ms }),
+            TakeStep::Refused => {
+                let _ = self.notices.send(Notice::Refused);
+            }
         }
-        // the spare's `QUEUE_NEW` is still running: its registration follows, the hand-out then
-        if tries < TAKE_TRIES {
-            self.takes.push(Take {
-                queue,
-                period_ms,
-                tries: tries.saturating_add(1),
-            });
-        }
-        Ok(())
     }
 
     fn retry_takes(&mut self) {
@@ -632,12 +715,49 @@ impl<P: Providers> Engine<P> {
         let relay = self.relay;
         let mut source = self.hub.clone();
         for t in core::mem::take(&mut self.takes) {
-            let _ = self.take(now, relay, (t.queue, t.period_ms), t.tries, &mut source);
+            self.take(now, relay, (t.queue, t.period_ms), &mut source);
         }
+    }
+
+    /// A `SetSettings`: stored under the hub's lock, the mode change handed to the scheduler outside it (its calls reach the
+    /// cell source, which takes the lock).
+    fn set_settings(&mut self, new: crate::settings::Settings) -> Result<Answer, Error> {
+        let hub = Arc::clone(&self.hub.0);
+        let (now, mut source) = (self.clock.mono_ms(), self.hub.clone());
+        let outs = switch_settings(
+            &mut self.sched,
+            (now, &mut source),
+            new,
+            |new| {
+                let mut hub = hub.lock().map_err(|_| Error::Unavailable)?;
+                let previous = hub.core().settings;
+                hub.core_mut().handle(Request::SetSettings(new))?;
+                Ok(previous)
+            },
+            |previous| {
+                if let Ok(mut hub) = hub.lock() {
+                    let store = hub.profile_store();
+                    let _ = previous.save(&store);
+                    hub.core_mut().settings = previous;
+                }
+            },
+        )?;
+        self.driver
+            .submit(&mut self.sched, outs)
+            .map_err(|_| Error::Unavailable)?;
+        Ok(Answer::Core(Response::Done))
     }
 
     /// One call, under the hub's lock.
     fn answer(&mut self, call: Call) -> Result<Answer, Error> {
+        if let Call::Core(request) = &call
+            && !admitted(request)
+        {
+            return Err(Error::Unsupported);
+        }
+        if let Call::Core(Request::SetSettings(new)) = call {
+            return self.set_settings(new);
+        }
         let mut hub = self.hub.0.lock().map_err(|_| Error::Unavailable)?;
         match call {
             Call::Core(request) => hub.core_mut().handle(request).map(Answer::Core),
@@ -671,7 +791,7 @@ impl<P: Providers> Engine<P> {
             let until = self.clock.mono_ms().saturating_add(CHUNK_MS);
             if self.driver.run_until(&mut self.sched, until).await.is_err() {
                 // no randomness: fail closed, nothing more is sent
-                let _ = self.notices.send(Notice::Unavailable);
+                let _ = self.notices.send(Notice::Stopped);
                 break;
             }
             self.retry_takes();
@@ -756,11 +876,7 @@ fn engine<P: Providers>(
     };
     {
         let mut hub = shared.0.lock().map_err(|_| Error::Unavailable)?;
-        hub.core_mut()
-            .set_scheduler_view(crate::api::SchedulerView {
-                direct,
-                recv_periods_ms: Vec::new(),
-            });
+        start_view(hub.core_mut(), direct);
         engine.known = hub.core().contact_ids().collect();
     }
     let now = clock.mono_ms();
@@ -895,6 +1011,205 @@ mod tests {
         ] {
             assert!(read_relay_ref(&bad).is_err(), "{bad:?}");
         }
+        Ok(())
+    }
+
+    /// M7-C1b (C1-1): `admitted` is an allowlist over every `Request`: only `Export` (Argon2id and a file under the store's
+    /// lock, on the loop) is refused.
+    #[test]
+    fn admitted_is_an_allowlist() {
+        let contact = ContactId(1);
+        let secret = || Zeroizing::new(b"x".to_vec());
+        let all = [
+            (Request::Contacts, true),
+            (Request::SafetyNumber { contact }, true),
+            (
+                Request::Verify {
+                    contact,
+                    digits: String::new(),
+                },
+                true,
+            ),
+            (
+                Request::Send {
+                    contact,
+                    kind: 1,
+                    payload: secret(),
+                    expire_after: 0,
+                },
+                true,
+            ),
+            (
+                Request::Message {
+                    contact,
+                    msg_id: [0; 16],
+                },
+                true,
+            ),
+            (
+                Request::Reveal {
+                    contact,
+                    msg_id: [0; 16],
+                },
+                true,
+            ),
+            (Request::Rotate { contact, relay: 1 }, true),
+            (Request::RotateIdentity, true),
+            (Request::ResetSession { contact }, true),
+            (Request::Remove { contact }, true),
+            (Request::Settings, true),
+            (
+                Request::SetSettings(crate::settings::Settings::default()),
+                true,
+            ),
+            (Request::RelayView { direct: true }, true),
+            (
+                Request::Export {
+                    path: std::path::PathBuf::from("x"),
+                    passphrase: secret(),
+                    confirm: true,
+                    force: true,
+                },
+                false,
+            ),
+        ];
+        for (request, want) in &all {
+            assert_eq!(admitted(request), *want, "{request:?}");
+        }
+    }
+
+    /// M7-C1b (C1-4): the outcomes of a take; a spare still being created is retried however often it was asked.
+    #[test]
+    fn take_step_outcomes() {
+        use crate::scheduler::core::SchedError;
+
+        assert_eq!(
+            take_step(Err(SchedError::UnknownQueue), true),
+            TakeStep::Refused
+        );
+        assert_eq!(
+            take_step(Err(SchedError::RateBound), false),
+            TakeStep::Refused
+        );
+        assert_eq!(take_step(Ok(Some(QueueId(1))), false), TakeStep::Done);
+        for _ in 0..10_000 {
+            assert_eq!(take_step(Ok(None), true), TakeStep::Retry);
+        }
+        assert_eq!(take_step(Ok(None), false), TakeStep::Refused);
+    }
+
+    #[cfg(feature = "kat")]
+    type TestCore = Core<crate::clock::ManualClock, crate::testutil::Fixed>;
+
+    #[cfg(feature = "kat")]
+    fn core_of(
+        label: &str,
+        seed: u64,
+    ) -> Result<(crate::testutil::Fixture, TestCore), Box<dyn std::error::Error>> {
+        use crate::testutil::{Fixed, entropy};
+
+        let fx = crate::sessions::tests::party(label, seed)?;
+        let core = Core::with_profile(fx.profile.clone(), fx.clock.clone(), move || {
+            Fixed(entropy(seed))
+        })?;
+        Ok((fx, core))
+    }
+
+    /// M7-C1b (C1-3): the start sets only `direct` on the core's view; the periods the hub keeps stay.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn start_view_keeps_hub_periods() -> Result<(), Box<dyn std::error::Error>> {
+        let (_fx, mut core) = core_of("rt-view", 91)?;
+        core.view.recv_periods_ms = vec![10_000, 80_000];
+        start_view(&mut core, true);
+        assert!(core.view.direct);
+        assert_eq!(core.view.recv_periods_ms, [10_000, 80_000]);
+        Ok(())
+    }
+
+    /// A cell source that never has a cell.
+    #[cfg(feature = "kat")]
+    struct NoCells;
+
+    #[cfg(feature = "kat")]
+    impl CellSource for NoCells {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            Ok(None)
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &secmp_proto::wire::cell::Cell,
+        ) -> Result<Delivered, SourceError> {
+            Err(SourceError)
+        }
+    }
+
+    /// M7-C1b (C1-3, spec §10.2): a mode the recv-queues do not fit (two queues at 10 s: 16 ≤ 32 in Balanced, 48 > 32 in
+    /// Low-bandwidth) is refused by the scheduler; the call's error is returned and the settings read back are the previous
+    /// ones, in memory and in the store.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn mode_change_refused_restores_settings() -> Result<(), Box<dyn std::error::Error>> {
+        use std::cell::RefCell;
+
+        use crate::settings::Settings;
+
+        let (fx, core) = core_of("rt-mode", 92)?;
+        let core = RefCell::new(core);
+        let balanced = Settings {
+            mode: Mode::Balanced,
+            ..Settings::default()
+        };
+        core.borrow_mut().handle(Request::SetSettings(balanced))?;
+        let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::os());
+        for n in 1..=2_u8 {
+            let cap = RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32])?)?;
+            sched.add_recv_queue(0, RelayId(1), cap, 10_000)?;
+        }
+        let store_new = |new: Settings| {
+            let mut core = core.borrow_mut();
+            let previous = core.settings;
+            core.handle(Request::SetSettings(new))?;
+            Ok(previous)
+        };
+        let low = Settings {
+            mode: Mode::LowBw,
+            ..Settings::default()
+        };
+        let refused = switch_settings(&mut sched, (0, &mut NoCells), low, store_new, |previous| {
+            let mut core = core.borrow_mut();
+            let _ = previous.save(&fx.profile.store());
+            core.settings = previous;
+        });
+        assert_eq!(refused.err(), Some(Error::Unsupported));
+        assert_eq!(core.borrow().settings, balanced);
+        assert_eq!(
+            Settings::load(&fx.profile.store())?,
+            balanced,
+            "the store too"
+        );
+        assert_eq!(sched.effective_mode(), Mode::Balanced);
+        // a mode that fits is stored and set
+        let strict = Settings {
+            mode: Mode::Strict,
+            ..Settings::default()
+        };
+        let ok = switch_settings(&mut sched, (0, &mut NoCells), strict, store_new, |_| {});
+        assert!(ok.is_ok());
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        assert_eq!(core.borrow().settings, strict);
         Ok(())
     }
 }

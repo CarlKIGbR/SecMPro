@@ -26,17 +26,31 @@ pub enum Refusal {
 /// # Errors
 /// [`Refusal::Mode`] for a file others can access; [`Refusal::Unreadable`] otherwise.
 pub fn read(path: &Path) -> Result<Zeroizing<Vec<u8>>, Refusal> {
-    let file = std::fs::File::open(path).map_err(|_| Refusal::Unreadable)?;
-    let meta = file.metadata().map_err(|_| Refusal::Unreadable)?;
-    if !meta.is_file() {
+    // the path is looked at before it is opened: a FIFO or a device would block or yield forever at `open`/`read`
+    let before = std::fs::metadata(path).map_err(|_| Refusal::Unreadable)?;
+    if !before.is_file() {
         return Err(Refusal::Unreadable);
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        if meta.permissions().mode() & 0o077 != 0 {
+        if before.permissions().mode() & 0o077 != 0 {
             return Err(Refusal::Mode);
         }
+    }
+    let file = std::fs::File::open(path).map_err(|_| Refusal::Unreadable)?;
+    let meta = file.metadata().map_err(|_| Refusal::Unreadable)?;
+    // and what was opened is that same regular file (the path may have been replaced in between)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if !meta.is_file() || (meta.dev(), meta.ino()) != (before.dev(), before.ino()) {
+            return Err(Refusal::Unreadable);
+        }
+    }
+    #[cfg(not(unix))]
+    if !meta.is_file() {
+        return Err(Refusal::Unreadable);
     }
     // one allocation of the final size: a growing buffer would leave copies of the passphrase in freed memory
     let mut bytes = Zeroizing::new(Vec::with_capacity(MAX_LEN.saturating_add(2)));
@@ -66,6 +80,26 @@ mod tests {
         std::fs::write(&path, content)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))?;
         Ok(path)
+    }
+
+    /// M7-C1b (C1-10): a FIFO is refused as `Unreadable` without being opened (an open would block), within a second.
+    #[test]
+    fn fifo_is_refused() -> Result<(), std::io::Error> {
+        let dir = std::env::temp_dir().join(format!("secmp-cli-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("fifo");
+        let _ = std::fs::remove_file(&path);
+        let made = std::process::Command::new("mkfifo").arg(&path).status()?;
+        assert!(made.success());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let probe = path.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(read(&probe));
+        });
+        let got = rx.recv_timeout(std::time::Duration::from_secs(1));
+        assert_eq!(got, Ok(Err(Refusal::Unreadable)));
+        Ok(())
     }
 
     #[test]

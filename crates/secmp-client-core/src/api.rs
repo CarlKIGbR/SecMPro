@@ -803,11 +803,12 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 )?)
             }
             Request::Message { contact, msg_id } => {
+                let now = self.now_ms();
                 let found = self
                     .store
                     .lock()
                     .map_err(|_| Error::Unavailable)?
-                    .message(contact.0, &msg_id)?
+                    .message(contact.0, &msg_id, now)?
                     .ok_or(Error::Unavailable)?;
                 Response::Message {
                     incoming: found.direction == secmp_store::messages::Direction::In,

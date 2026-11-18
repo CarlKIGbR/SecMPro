@@ -144,13 +144,19 @@ impl Store {
             > 0)
     }
 
-    /// The message `msg_id` of `contact_id` as the history holds it (a view-once is never there).
+    /// The message `msg_id` of `contact_id` as the history holds it (a view-once is never there; one whose `expire_after` has
+    /// run out at `now_ms` is gone, as `expire_messages` deletes it: `expire_at_ms <= now_ms`).
     ///
     /// # Errors
     /// [`Error::Unavailable`] if the read fails or the row does not fit the types.
-    pub fn message(&self, contact_id: i64, msg_id: &[u8; 16]) -> Result<Option<StoredMessage>> {
+    pub fn message(
+        &self,
+        contact_id: i64,
+        msg_id: &[u8; 16],
+        now_ms: u64,
+    ) -> Result<Option<StoredMessage>> {
         let row = self.query_row(
-            "SELECT direction, kind, ts_ms, payload FROM messages WHERE contact_id = ?1 AND msg_id = ?2",
+            "SELECT direction, kind, ts_ms, payload, expire_at_ms FROM messages WHERE contact_id = ?1 AND msg_id = ?2",
             params![contact_id, msg_id.as_slice()],
             |r| {
                 Ok((
@@ -158,12 +164,16 @@ impl Store {
                     r.get::<_, i64>(1)?,
                     r.get::<_, i64>(2)?,
                     Zeroizing::new(r.get::<_, Vec<u8>>(3)?),
+                    r.get::<_, Option<i64>>(4)?,
                 ))
             },
         )?;
-        let Some((direction, kind, ts, payload)) = row else {
+        let Some((direction, kind, ts, payload, expire_at)) = row else {
             return Ok(None);
         };
+        if expire_at.is_some_and(|at| at <= i64_of(now_ms).unwrap_or(i64::MAX)) {
+            return Ok(None);
+        }
         Ok(Some(StoredMessage {
             direction: if direction == 0 {
                 Direction::In
@@ -447,13 +457,36 @@ mod tests {
             expire_after: 0,
             payload: b"ping",
         })?;
-        let got = store.message(3, &id)?.ok_or("the message")?;
+        let got = store.message(3, &id, 2_000)?.ok_or("the message")?;
         assert_eq!(
             (got.direction, got.kind, got.ts_ms, got.payload.as_slice()),
             (Direction::Out, 1, 1_234, b"ping".as_slice())
         );
-        assert!(store.message(4, &id)?.is_none());
-        assert!(store.message(3, &[0; 16])?.is_none());
+        assert!(store.message(4, &id, 2_000)?.is_none());
+        assert!(store.message(3, &[0; 16], 2_000)?.is_none());
+        Ok(())
+    }
+
+    /// M7-C1b (C1-6): a message past its `expire_after` is not returned by `message` — the same `<=` comparison as
+    /// `expire_messages` — though its row may still be there.
+    #[test]
+    fn expired_message_not_returned() -> R {
+        let dir = TempDir::new("message-expired")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let id = [0x2b_u8; 16];
+        store.insert_message(&NewMessage {
+            contact_id: 3,
+            msg_id: id,
+            direction: Direction::In,
+            kind: 1,
+            ts_ms: 10_000,
+            expire_after: 1,
+            payload: b"short-lived",
+        })?;
+        assert!(store.message(3, &id, 10_999)?.is_some(), "before");
+        assert!(store.message(3, &id, 11_000)?.is_none(), "at expiry");
+        assert!(store.message(3, &id, 50_000)?.is_none(), "after");
+        assert!(store.has_message(3, &id)?, "the row is still there");
         Ok(())
     }
 

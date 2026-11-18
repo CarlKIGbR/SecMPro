@@ -47,6 +47,7 @@ mod m7_persist;
 mod m7_pool;
 mod m7_restart;
 mod m7_rotation;
+mod m7_runtime;
 mod m7_scheduled;
 mod m7_world;
 mod scenarios;

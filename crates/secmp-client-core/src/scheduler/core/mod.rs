@@ -1545,7 +1545,7 @@ impl Scheduler {
         }
         self.world.sends.retain(|s| s.id != queue);
         self.world.recvs.retain(|r| r.id != queue);
-        self.world.control.drop_queue_del(queue);
+        self.world.control.drop_queue_ops(queue);
         let (world, links) = (&mut self.world, &mut self.links);
         for link in links.iter_mut() {
             let gone = match link.spec {
@@ -1730,6 +1730,12 @@ impl Scheduler {
     pub fn manage_pool(&mut self, now: u64, relay: RelayId) -> Result<(), SchedError> {
         self.world.pool.manage(relay);
         self.world.top_up_pool(now)
+    }
+
+    /// Whether the pool still creates the spare `queue` (its `QUEUE_NEW` is scheduled or running).
+    #[must_use]
+    pub fn pool_pending(&self, queue: QueueId) -> bool {
+        self.world.pool.pending_relay(queue).is_some()
     }
 
     /// Spare queues on `relay`.

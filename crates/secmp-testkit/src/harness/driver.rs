@@ -222,6 +222,10 @@ pub struct GateState {
     pub relayed_max: u64,
     /// How many evicted ids `OK_SEND` reported.
     pub evicted_count: u64,
+    /// The largest `KDF_CK` fast-forward of one received cell, `SKIP_STEPS_KAT` after its decision (E2-05, F25).
+    pub ff_max: u32,
+    /// The sum of those fast-forwards.
+    pub ff_steps: u64,
 }
 
 /// One audited event (feature `kat`).
@@ -433,7 +437,11 @@ impl CellSource for Gate<'_> {
             .saturating_add(late);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
+        secmp_proto::tr::SKIP_STEPS_KAT.set(0);
         let out = self.convs.deliver(queue, generation, cell_id, cell);
+        let steps = secmp_proto::tr::SKIP_STEPS_KAT.get();
+        self.state.ff_max = self.state.ff_max.max(steps);
+        self.state.ff_steps = self.state.ff_steps.saturating_add(u64::from(steps));
         if out.is_ok() {
             self.state.audit.push(Audit::Decided([
                 u64::from(queue.0),

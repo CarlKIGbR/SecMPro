@@ -22,7 +22,7 @@ use super::m7_world::{
 };
 
 /// Queue a text for contact 1 of client `i`.
-fn say(d: &mut VirtualDriver, i: usize, n: u8) -> [u8; 16] {
+pub(crate) fn say(d: &mut VirtualDriver, i: usize, n: u8) -> [u8; 16] {
     let payload = Zeroizing::new(format!("message {n}").into_bytes());
     match hub(d, i)
         .core_mut()
@@ -146,19 +146,19 @@ fn queue_set_of(d: &mut VirtualDriver, i: usize) -> QueueSet {
 }
 
 /// The queue a rotation retired and what its retirement is measured against.
-struct Retired {
-    queue: QueueId,
-    rid: [u8; 16],
+pub(crate) struct Retired {
+    pub(crate) queue: QueueId,
+    pub(crate) rid: [u8; 16],
     /// The sender id of the queue (the invitee's route before the switch).
-    sid: [u8; 16],
+    pub(crate) sid: [u8; 16],
     /// The end of the overlap, in virtual milliseconds.
-    deadline_ms: u64,
+    pub(crate) deadline_ms: u64,
     /// The time of the rotation.
-    t0: u64,
+    pub(crate) t0: u64,
 }
 
 /// The inviter rotates at the current time; returns the queue it retired.
-fn rotate(d: &mut VirtualDriver, host: usize, guest: usize) -> Retired {
+pub(crate) fn rotate(d: &mut VirtualDriver, host: usize, guest: usize) -> Retired {
     let sid = send_sid(d, guest);
     let t0 = d.now();
     let started = hub(d, host)
@@ -194,7 +194,7 @@ fn rotate(d: &mut VirtualDriver, host: usize, guest: usize) -> Retired {
 /// The `QUEUE_DEL` of `old` ran once, on a control link of its own, never before the end of the overlap, nor before the
 /// sender's last cell was fetched and an empty `FETCH` followed, and not later than `U[1 min, 60 min]` after that; the old
 /// queue was fetched up to the deletion and not after; it left the queue set. Returns `(t_del, quiet)`.
-fn check_deleted(
+pub(crate) fn check_deleted(
     d: &mut VirtualDriver,
     (host, guest): (usize, usize),
     old: &Retired,
@@ -297,7 +297,7 @@ fn check_deleted(
 
 /// The draws that decide how long the run is, chosen short: the inviter's second overlap draw (the queue retired here) is
 /// 1.07 h, the invitee's (when it stops sending to the old queue) 1.08 h — both inside `U[1 h, 24 h]`, which is asserted.
-const SHORT_DRAWS: Option<(u64, u64)> = Some((176, 234));
+pub(crate) const SHORT_DRAWS: Option<(u64, u64)> = Some((176, 234));
 
 /// SE-03: the recipient rotates at `t0`. The old queue is fetched until its `QUEUE_DEL`, which runs on its own one-shot
 /// link only after the end of the overlap `U[1 h, 24 h]`, after the sender stopped sending to it (an empty `FETCH`), and

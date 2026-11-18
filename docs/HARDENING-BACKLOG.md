@@ -43,5 +43,7 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-37 | When a settings save fails and the revert to Balanced or Low-bw is refused, the scheduler stays in the requested mode and the store keeps the old one until a restart; the user gets two `Notice::Refused` and an error, never `Done`. Not checked: what the next open does with a stored mode the queues no longer fit. | cross-review C-2g (C2g-5) | Open |
 | HB-38 | The default nextest profile has no `slow-timeout`/`terminate-after`: a blocking drain in SE-193 would show as a CI job timeout, not a red test. | cross-review C-2g (C2g-4) | Open |
 | HB-39 | Windows: `secmp-relay ref` and `keygen` write the access key (and the key file) with the directory's inherited ACL; no owner-only DACL (Unix: 0600). The relay host is Linux (docs/05). | M7-C2b (Q289) | Open |
+| HB-40 | `secmp-cli` has no history verb and a restart does not re-announce stored messages: a message committed but not yet printed when the process dies is in the store and never shown. E2-02 kills only after the victim printed all it was sent. | M7-C3 (Q291) | Open |
+| HB-41 | Each queued message is its own cell (`plan_message`: one `AppMessage` per `Batch`); `BatchBody` can carry several (spec §7.6). A burst of n short messages takes n × `P_q`. Packing is a product change (outbox, receipts, fragments) for a later unit. | M7-C3 (Q291) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

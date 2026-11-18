@@ -2206,3 +2206,24 @@ Commits: K1 `84aa8ac` (relay `ref`), K3 `5ebd24e` (`revert_step` doc), K4 docs (
 **Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK after the two fixes above; `step --strict policy` PASS; `nextest -p xtask` 330/330 (no new xtask test without F); harness scan tests 5/5; `step --strict hello` PASS; greps: `Instant::now`/`SystemTime::now` code only in `clock.rs`, `SECMP_PROPTEST_SEED` comments only; `secmp-relay --test cli` 9/9; `secmp-relay --features kat` 193/193; `secmp-proto --test fuzz_max_len` 2/2; `secmp-client-core --features kat -E 'test(runtime::)'` 10/10.
 
 **ci-fast (head `1041635`).** PASS: workspace nextest 1640/1640 (1639 + `ref_round_trips`), relay `kat` 193/193, harness 318/318, `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c2b-ci-fast.txt`. The harness shows 31 slow tests (no failure).
+
+## C-3 (BRIEF M7-C3; modell=claude-sonnet-5-5)
+
+Commits: K1 `test(harness)` (`m7_e2e.rs` + two `pub(crate)` tokens in `m6_driver.rs`), K2 docs (this section, Q291, HB-40, HB-41), K3 evidence (`docs/reviews/M07-evidence/c3-ci-fast.txt`). No product change.
+
+**Rows → tests** (harness `m7_e2e`, real `secmp-relay` + two `secmp-cli open --direct`; pre-run `target/fable/report/c3-e2e.txt`, 6/6):
+
+| Row | Test | Wall time |
+|---|---|---|
+| E2-01 (+E2-08) | `two_profiles_invite_by_uri_sas_match` | 124.3 s |
+| E2-04 (§7.7) | `key_change_blocks_until_reverified` | 209.5 s |
+| E2-03 (CLI part) | `rotation_with_overlap` | 843.6 s |
+| E2-02, E2-09/FO-01, E2-11 (run log) | `five_hundred_both_ways_with_restarts` | 1329.1 s |
+| E2-11 (source) | `cli_uses_no_wall_clock_for_schedule` | 0.01 s |
+| (C-1 smoke, unchanged) | `smoke_invite_and_message_both_ways` | 199.4 s |
+
+**N** = `E2_02_EACH_WAY` = 40 messages each way (Q291; the name `five_hundred_both_ways_with_restarts` is the TEST-SPEC name). Two seeded SIGKILLs per side, after the victim printed everything sent to it (HB-40). Every message once, in send order; `at_ms` monotone per process life; FO-01 scans (after the first kill and after the clean close, both profiles) without a hit. TEST-SPEC-M7 is not edited.
+
+**Q291, HB-40, HB-41** added (see `OPEN-M7-decided.md`, `HARDENING-BACKLOG.md`). Open for C-4: E2-02v (500 each way), `QUEUE_DEL` count of E2-03, FO-01a key material, PC-05.
+
+**Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK; `step --strict policy` PASS; `nextest -p xtask` 330/330 (unchanged); harness scan tests 6/6; greps: `Instant::now`/`SystemTime::now` only in comments outside `clock.rs`, no seed/`SystemTime` token in `m7_e2e.rs`; `step --strict hello` PASS.

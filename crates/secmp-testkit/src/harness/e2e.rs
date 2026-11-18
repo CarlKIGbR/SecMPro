@@ -274,6 +274,33 @@ impl E2eRelay {
         )
     }
 
+    /// The relay's direct TLS port: the upstream of E2-10's proxies (0 if the relay has no direct endpoint).
+    #[must_use]
+    pub fn direct_port(&self) -> u16 {
+        self.relay.direct.as_ref().map_or(0, |d| d.port.get())
+    }
+
+    /// A relay reference file (`relay-via-<port>.ref`) of the same relay and SPKI pin at `127.0.0.1:port`; TLS still ends
+    /// at the relay, so a TCP proxy on `port` sees only TLS records.
+    ///
+    /// # Panics
+    /// If `port` is 0 or the file cannot be written: a test failure.
+    #[must_use]
+    pub fn ref_path_via(&self, port: u16) -> PathBuf {
+        let mut relay = self.relay.clone();
+        if let Some(direct) = relay.direct.as_mut() {
+            direct.port = core::num::NonZeroU16::new(port).unwrap();
+        }
+        let text = format!(
+            "relay_ref = {}\naccess_key = {}\n",
+            hex(&relay.encode().unwrap()),
+            hex(self.access.expose_secret())
+        );
+        let path = self.dir.join(format!("relay-via-{port}.ref"));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
     /// Give the profile in `profile` (created by `profile new … --relay <ref_path>`) `n` spare queues, made on the relay too
     /// — what a profile has some time after its first open (spec §10.6 (3)): the seeds are drawn and stored with
     /// `SparePool::fill`, each queue is created with a `QUEUE_NEW` on a link of its own over the direct listener.

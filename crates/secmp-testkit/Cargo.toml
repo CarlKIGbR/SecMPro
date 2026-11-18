@@ -96,3 +96,8 @@ workspace = true
 [[example]]
 name = "ks_hour"
 required-features = ["harness"]
+
+# TEST-SPEC-M7 E2-10: two secmp-cli processes through recording proxies (build box; no dispatch job).
+[[example]]
+name = "ks_cli"
+required-features = ["harness"]

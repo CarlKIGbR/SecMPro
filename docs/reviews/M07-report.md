@@ -2107,3 +2107,29 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 - **D-B111 (FZ, recorded; estimate).** CI cost: locally the 120-s smoke of the target took 122 s wall with the build cached; the per-PR fuzz job gains ≈ 2–3 min (estimate, not measured on GitHub) of its 120 min; the nightly share per target drops from 211 s to 205 s.
 - **D-B112 (FZ, recorded; owner approval in chat, 2026-11-16).** Line 12 of `.github/workflows/fuzz-nightly.yml` (`#   35 targets x 205 s + 2 targets x 3600 s`) changes in the code commit, because `gates::tests::testkit_manifest_and_workflow_texts` compares it with the computed shares; folding the target into an existing one (no workflow edit) would have halved that target's smoke time and was rejected. Info for the owner: line 13 names `fuzz_executor_depth` as the check, which is `testkit_manifest_and_workflow_texts` (not changed).
 - **Recorded.** OPEN-M7-B-29 (2) closed (Q272–Q275); (1) unchanged. No real defect: the target's smoke, a 900-s run (13 081 646 runs) at the planner and three 120-s runs with other seeds at each verification found none.
+
+## C-1 and C-1b (BRIEF M7-C1, WEISUNG M7-C1b; modell=claude-sonnet-5-5)
+
+**C-1** (host runtime, pool bridge D4′, first usable `secmp-cli`): commits `8909fd4` (core, store, pool tests), `17e0d64` (cli, e2e helper, smoke, G7-21), `2839fa9` (CL-12, B-14, Q281–Q283, HB-17…20), `6509add` (ci-fast evidence, `docs/reviews/M07-evidence/c1-ci-fast.txt`, workspace nextest 1613). Tests: `api::tests::hub_is_send`; `hub::tests::pool_material_persisted_before_queue_new`, `harness::m7_pool::adopted_spares_fetched_at_pool_period_no_queue_new`, `harness::m7_pool::invitation_takes_named_spare_refill_delayed`; `cli_it::{profile_new_and_open, invite_create_prints_uri, invite_accept_uri, usage_errors, passphrase_input_rules, single_writer_lock}` (CL-01/02/03/10/11/13); `xtask::testscan::release_targets_have_no_kat` (CL-12); `xtask::expect::tests::cli_dependency_row` (G7-21); `harness::m7_e2e::smoke_invite_and_message_both_ways`. Deviations from the brief:
+- `Hub::new` unchanged; `Hub::bridge_pool()` returns the stored spares and the id floor (the bridge is opt-in).
+- Extra API: `Scheduler::floor_queue_ids`, `PoolStart`, `Hub::spares`, `runtime::{Caller, Notice, create_profile}`, `Answer::PoolEmpty`, `Error::Transport`, `api` re-exports.
+- `Event::ContactAdded` is raised by the loop for every new contact (invitee and inviter); `InviteFailed` by `HostControl`.
+- `invite accept` prints an immediate `{"type":"accepting"}` line.
+- Smoke deadline 10 min, not 4 (new send-queue links start `U[0, 3 min]` later, spec §10.6 (1)).
+- CL-02 runs with a relay reference without `direct` (the 332-character URI form); the tests send `invite accept` again on `error/invitation` (the inviter's `LINK_PUT` lands a moment after `invite create` answers).
+- Existing pins changed: `kat_argon2_params_only_with_kat` (normal edges), `normal_dependency_allow_m7` rows, the policy metadata fixture, AP-04 `PLUMBING`.
+
+**Cross-review of C-1: NO-PUSH.** Findings and their disposition:
+- C1-1 (§1.4, `Request::Export` on the loop) — fixed in C-1b (`runtime::tests::admitted_is_an_allowlist`, `harness::m7_runtime::export_through_call_core_is_refused`; Q284).
+- C1-2 (pending re-create of a removed queue) — fixed in C-1b (`harness::m6_control::removed_queue_drops_pending_recreate`, red without the fix).
+- C1-3 (§10.2: start view overwrote the hub's periods; `SetSettings` did not reach the scheduler; scheduler refusals dropped) — fixed in C-1b (`runtime::tests::start_view_keeps_hub_periods`, `runtime::tests::mode_change_refused_restores_settings`; `Notice::Refused`).
+- C1-4 (take capped at 600 tries, errors dropped) — fixed in C-1b (`runtime::tests::take_step_outcomes`).
+- C1-5 (plain `String` copies in the CLI) — HB-21.
+- C1-6 (expired message returned) — fixed in C-1b (`messages::tests::expired_message_not_returned`).
+- C1-7 (RUSTSEC-2026-0542 reason named the cli as not affected) — fixed in C-1b (`deny.toml`, `expect.rs`).
+- C1-8 (a stopped loop printed `closed`, exit 0) — fixed in C-1b (`Notice::Stopped`, `daemon::tests::stopped_session_exits_1`).
+- C1-9 (invitation consumed before stored) — HB-22; the usage text warns.
+- C1-10 (passphrase file: FIFO, replaced path) — fixed in C-1b (`passphrase::tests::fifo_is_refused`).
+
+**C-1b** (WEISUNG M7-C1b): K1 `fix(core,cli): Call::Core allowlist, …` (all code and tests; the pin of the RUSTSEC-2026-0542 reason in `expect::tests::audit_ignores_unchanged` follows the new text), K2 docs (Q284, HB-21, HB-22, this section), K3 evidence (`docs/reviews/M07-evidence/c1b-policy.txt`, `c1b-ci-fast.txt`).
+

@@ -24,5 +24,7 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-18 | CT-03 (TEST-SPEC-M7): informative unlock timing at the real Argon2 parameters (`PROFILE`), wrong passphrase against right, outside the gated CT targets. | M7-C1 plan (accepted) | Open |
 | HB-19 | E2-06 (TEST-SPEC-M7): the relay is killed and restarted mid-run; 100 messages arrive exactly once (8 min). | M7-C1 plan (accepted) | Open |
 | HB-20 | Windows: no ACL check of the passphrase file (`--passphrase-file`): the Unix `mode & 0o077` rule has no counterpart; add an owner-only ACL check before the file is read (Q282). | M7-C1 (D6) | Open |
+| HB-21 | The CLI keeps plain `String` copies of secrets and plaintext that are never zeroized: the stdin line, `send` text, `from_utf8_lossy` output and the JSON output lines (the invitation URI of `invite accept` is fixed in C-2). | cross-review C-1 (C1-5) | Open |
+| HB-22 | The relay consumes an invitation's link data before the client's `link_consumed` commits; a store error or `quit` in between loses the invitation (inherent to spec §9.7; warned in the CLI usage text). | cross-review C-1 (C1-9) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

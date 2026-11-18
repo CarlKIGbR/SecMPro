@@ -2227,3 +2227,5 @@ Commits: K1 `test(harness)` (`m7_e2e.rs` + two `pub(crate)` tokens in `m6_driver
 **Q291, HB-40, HB-41** added (see `OPEN-M7-decided.md`, `HARDENING-BACKLOG.md`). Open for C-4: E2-02v (500 each way), `QUEUE_DEL` count of E2-03, FO-01a key material, PC-05.
 
 **Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK; `step --strict policy` PASS; `nextest -p xtask` 330/330 (unchanged); harness scan tests 6/6; greps: `Instant::now`/`SystemTime::now` only in comments outside `clock.rs`, no seed/`SystemTime` token in `m7_e2e.rs`; `step --strict hello` PASS.
+
+**ci-fast (head `26c89b9`).** PASS: workspace nextest 1640/1640, harness 323/323 (harness step 1872 s), `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c3-ci-fast.txt`. No product change.

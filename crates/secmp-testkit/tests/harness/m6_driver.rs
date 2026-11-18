@@ -564,7 +564,7 @@ fn stream_provider_impls() {
 }
 
 /// The lines of `text` (outside `//` comments) that read a wall clock.
-fn wall_clock_reads(text: &str) -> Vec<usize> {
+pub(crate) fn wall_clock_reads(text: &str) -> Vec<usize> {
     text.lines()
         .enumerate()
         .filter(|(_, l)| {
@@ -581,7 +581,7 @@ fn wall_clock_reads(text: &str) -> Vec<usize> {
         .collect()
 }
 
-fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
         if path.is_dir() {

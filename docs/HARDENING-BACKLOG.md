@@ -33,5 +33,9 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-27 | (1) live-page test across identity rotations, (2) the 18 live SecretPages, (3) CS-3.1 names SQLCipher 4.17.0, bundled is 4.10.0 (owner text) | OPEN-M7-B-26 | Open |
 | HB-28 | D-B98 residuals of B17c; owner informed, not objected | OPEN-M7-B-31 | Open |
 | HB-29 | a hub job longer than P_min − ε (≈ 10 s) still costs ticks (B0 bound; with one KeyChange signature only at ≈ 10⁵ contacts or a very slow disk); measure in the hardening phase | INV4-CALLS (C-2 B0) | Open |
+| HB-30 | `pool_queue_ready` refusing a created spare (the 32-entry `FETCH_MULTI` limit) leaves it pending; the take retries silently and the pool never tops up; the fix re-dictates VD-M6-A-16; C-2b | review C-1b (C1b-2) | Open |
+| HB-31 | no limit on concurrent `Call::Export` through the API, each Argon2id at 256 MiB; the CLI is sequential | review C-2 (C2-4) | Open |
+| HB-32 | an export write can finish after `Closed` or `Stopped`; a `run_until` failure abandons the running hub job | review C-2 (C2-5) | Open |
+| HB-33 | `import` with a wrong passphrase, a corrupt file or a wrong version fails closed but leaves an empty profile in `<newdir>`; a retry answers `unavailable` | review C-2 (C2-6) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

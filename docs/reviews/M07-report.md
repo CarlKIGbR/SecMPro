@@ -2136,7 +2136,7 @@ DOCS1b @ 1a5c5ed (1ac1906 ADR-056 errata, spec rev 2.7.1; 795ad1d ADR-018 accept
 
 ## C-2 (BRIEF M7-C2; modell=claude-sonnet-5-5)
 
-Commits: K1 `25d56f6` (core, store, testkit), K2 `8d739e2` (cli), K3 docs (DOCS9 R7-3, Q285, HB-23…29, TEST-SPEC SE-189…191, this section), K4 evidence (`docs/reviews/M07-evidence/c2-ci-fast.txt`).
+Commits: K1 `25d56f6` (core, store, testkit), K2 `8d739e2` (cli), K3 docs (DOCS9 R7-3, Q285, HB-23…29, TEST-SPEC SE-189…191, this section), K4 evidence (`docs/reviews/M07-evidence/ci-fast-c2-1-red-36d3ff9.txt`).
 
 **Built.**
 - B0, hub work off the loop: `Engine::run` keeps the schedule (`run_until`, actions and operations, takes); `visit` and the calls that need only the hub run as ONE hub job on `spawn_blocking` (hub lock held there) while the chunks go on; the result is applied at the next chunk boundary and the next job starts when a call or a visit is due (order of calls kept; `SetSettings`, `Export`, `Quit` are handled on the loop when no job runs). `Profile::rotate_identity` signs one `KeyChange` and clones it per contact (spec §7.6).
@@ -2156,4 +2156,21 @@ Commits: K1 `25d56f6` (core, store, testkit), K2 `8d739e2` (cli), K3 docs (DOCS9
 
 **Open risks.** HB-29 (a hub job longer than P_min − ε still costs ticks). A call is answered at the next chunk boundary of the loop (≤ 1 s) as before.
 
-**ci-fast (`docs/reviews/M07-evidence/c2-ci-fast.txt`, head `36d3ff9`): FAIL, one step — STOP.** Every other gate and test is green (nextest 1634 of 1635 outside the harness; harness 318 of 318; kat 353 of 353). The one failure is `xtask testscan::scan::tests::pr_ci_runs_props_with_ci_run_seed`: `crates/secmp-cli/tests/cli_it.rs: names "SECMP_PROPTEST_SEED" itself; read it through crates/secmp-proto/tests/common/seed.rs`. CL-14 (`cli_it::stdin_commands_are_total`) reads the variable as the brief says, but the seed scan (`scan_seeds`, xtask) allows that literal only in the one helper of `secmp-proto`. Not retried (brief §6). Fix proposed, not applied: CL-14 uses a fixed seed constant (the ci-fast kat and harness steps remove the variable anyway, "DEFAULT_SEED only"), or an ADR'd extension of the scan to a CLI helper; either changes the dictated test or xtask, hence the reviewer's call.
+**ci-fast (`docs/reviews/M07-evidence/ci-fast-c2-1-red-36d3ff9.txt`, head `36d3ff9`): FAIL, one step — STOP.** Every other gate and test is green (nextest 1634 of 1635 outside the harness; harness 318 of 318; kat 353 of 353). The one failure is `xtask testscan::scan::tests::pr_ci_runs_props_with_ci_run_seed`: `crates/secmp-cli/tests/cli_it.rs: names "SECMP_PROPTEST_SEED" itself; read it through crates/secmp-proto/tests/common/seed.rs`. CL-14 (`cli_it::stdin_commands_are_total`) reads the variable as the brief says, but the seed scan (`scan_seeds`, xtask) allows that literal only in the one helper of `secmp-proto`. Not retried (brief §6). Fix proposed, not applied: CL-14 uses a fixed seed constant (the ci-fast kat and harness steps remove the variable anyway, "DEFAULT_SEED only"), or an ADR'd extension of the scan to a CLI helper; either changes the dictated test or xtask, hence the reviewer's call. Red run, kept; the green run is C-2f's (`c2f-ci-fast.txt`).
+
+## C-2f (WEISUNG M7-C2f; modell=claude-sonnet-5-5)
+
+Commits: K1 `582b9f3` (core, cli, testkit helper), K2 docs (this section, Q286, HB-30…33, SE-192/193, the red evidence renamed to `ci-fast-c2-1-red-36d3ff9.txt`), K3 evidence (`docs/reviews/M07-evidence/c2f-ci-fast.txt`).
+
+**CL-14 (the STOP of C-2).** The environment seed of the property tests is read by the one helper of `secmp-proto` (R-93, X-07; the seed scan is unchanged and `secmp-cli` is not a property package); TEST-SPEC-M7:423 does not ask for it and CI removes the variable for this crate, so the row runs on the fixed `CL14_SEED`; the row is unchanged. CL-14 drives 10 000 seeded lines; 60 reach the runtime with random arguments over all ten verbs (export answered by confirm_required, so no Argon2), plus one over-long and one invalid-UTF-8 line — the row's oracle holds (never panics, one JSON line per line, exit 0). Hits per verb index 0…9 on the fixed seed: 7, 7, 8, 4, 5, 6, 4, 10, 3, 6 (`identity rotate` is capped at 6). `CliProc::send_bytes` added to the testkit helper.
+
+**Findings.**
+- C2-1 (BLOCKER; the brief dictated the export placement): the snapshot read the whole history on the loop task. Fixed: `Call::Export` is a hub call; the snapshot is taken in the hub job under the lock it holds, the write is `spawn_blocking` and sends the reply (`runtime::tests::export_does_not_stall_the_loop`, extended: `hooks::CHUNKS` advances by at least 2 while the snapshot is held for 3 s).
+- C2-2 / C1b-1: `SetSettings` order is now: the loop sets the mode (try-lock source; a refusal is `Unsupported` and nothing is stored), the hub job saves, a failed save reverts the mode at the next boundary with one `Notice::Refused`. There is no restore transaction. Tests `runtime::tests::settings_save_failure_reverts_mode` (SE-192) and `mode_change_refused_restores_settings` (reordered: refused, nothing stored).
+- C2-3: CL-14 arguments (above).
+- C2-7: the line buffers of `next_line` are pre-sized (`LINE_MAX + 2`), so `read_until` never reallocates an unzeroized copy.
+- C2-8: the loop never waits on the hub lock: actions that call the cell source (`Remove`, `TakeSpare`), the takes and the mode step use `try_lock`; what cannot run is kept in order in a backlog and retried first at the next boundary (`runtime::tests::loop_side_hub_access_never_waits`, SE-193).
+- C2-4, C2-5, C2-6 → HB-31, HB-32, HB-33 (HB-33: the CLI usage text now tells to remove the directory of a failed import); C1b-2 → HB-30 (C-2b).
+- C2-10…C2-15: notes, no change.
+
+**Known gaps (C2-9).** A job's replies precede its ops by at most one chunk; a lost `LINK_PUT` is re-driven by the owner-status check, an accept is repeated.

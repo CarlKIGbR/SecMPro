@@ -95,6 +95,19 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
             "zeroize",
         ],
     ),
+    // M7 Phase C (G7-21, OPEN-M7-12 A): the headless client — the client core (its `api` runtime), `secmp-crypto` for
+    // `Zeroizing`, and `tokio` (ADR-051 Part 1.1; the runtime is built by hand, no `macros`); `secmp-proto` and
+    // `secmp-transport` stay allowed but the crate does not use them
+    (
+        "secmp-cli",
+        &[
+            "secmp-client-core",
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-transport",
+            "tokio",
+        ],
+    ),
 ];
 
 /// The targets over which that closure is taken and united: the `[graph] targets` of `deny.toml` (the two
@@ -2309,7 +2322,8 @@ fn normal_dependency_allow_m7() {
             "secmp-client-core",
             "secmp-testkit",
             "secmp-store",
-            "secmp-crypto"
+            "secmp-crypto",
+            "secmp-cli"
         ]
     );
 }
@@ -2317,6 +2331,45 @@ fn normal_dependency_allow_m7() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TEST-SPEC-M7 G7-21 (OPEN-M7-12 A, ADR-051 Am. 10 correction, M7-C1): the `secmp-cli` row of
+    /// `NORMAL_DEPENDENCY_ALLOW` is `secmp-client-core`, `secmp-crypto`, `secmp-proto`, `secmp-transport` and `tokio`, and
+    /// nothing else; its one third-party crate, `tokio`, is in the ADR-051 table of `docs/08` with `secmp-cli` among the
+    /// crates that use it.
+    #[test]
+    fn cli_dependency_row() -> Result<(), Box<dyn std::error::Error>> {
+        let row: Vec<&str> = NORMAL_DEPENDENCY_ALLOW
+            .iter()
+            .filter(|(k, _)| *k == "secmp-cli")
+            .flat_map(|(_, v)| v.iter().copied())
+            .collect();
+        assert_eq!(
+            row,
+            [
+                "secmp-client-core",
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-transport",
+                "tokio"
+            ]
+        );
+        assert_eq!(
+            NORMAL_DEPENDENCY_ALLOW
+                .iter()
+                .filter(|(k, _)| *k == "secmp-cli")
+                .count(),
+            1,
+            "one row"
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let docs = lf(&std::fs::read_to_string(root.join("docs/08-decisions.md"))?);
+        let tokio_row = docs
+            .lines()
+            .find(|l| l.starts_with("| `tokio` | `=1."))
+            .ok_or("the tokio row of the ADR-051 table")?;
+        assert!(tokio_row.contains("`secmp-cli`"), "{tokio_row}");
+        Ok(())
+    }
 
     /// Checked-out files may carry CRLF (Windows); multi-line needles match on the LF form.
     fn lf(s: &str) -> String {

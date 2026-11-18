@@ -3547,6 +3547,12 @@ dependencies = [
 [[package]]
 name = "secmp-cli"
 version = "0.0.0"
+dependencies = [
+ "secmp-client-core",
+ "secmp-crypto",
+ "secmp-testkit",
+ "tokio",
+]
 
 [[package]]
 name = "secmp-client-core"

@@ -15,6 +15,7 @@ mod clock;
 mod convo;
 mod direct;
 mod driver;
+pub mod e2e;
 mod entropy;
 mod mem;
 mod stream;

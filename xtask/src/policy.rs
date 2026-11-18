@@ -1713,6 +1713,7 @@ mod tests {
             "secmp-testkit",
             "secmp-store",
             "secmp-crypto",
+            "secmp-cli",
             "secmp-proto",
         ];
         let external = ["serde_json", "tokio"];
@@ -2455,6 +2456,7 @@ mod tests {
                 ],
             ),
             ("secmp-client-core", &["tokio"]),
+            ("secmp-cli", &["tokio"]),
             ("secmp-testkit", &["serde_json", "tokio"]),
             // ADR-055
             ("secmp-store", &["rusqlite"]),

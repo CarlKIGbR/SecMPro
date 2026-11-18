@@ -141,23 +141,41 @@ pub enum Notice {
 
 type Envelope = (Call, oneshot::Sender<Result<Answer, Error>>);
 
-/// The handle of a host: calls go to the runtime's loop, notices come back on a stream.
-pub struct Client {
-    calls: mpsc::UnboundedSender<Envelope>,
-    notices: mpsc::UnboundedReceiver<Notice>,
-}
+/// A cheap handle that sends calls to the runtime's loop (several tasks of a host may each hold one).
+#[derive(Clone)]
+pub struct Caller(mpsc::UnboundedSender<Envelope>);
 
-impl Client {
+impl Caller {
     /// Send a call and wait for its one answer (it comes between two chunks of the loop, at most [`CHUNK_MS`] later).
     ///
     /// # Errors
     /// The call's refusal; [`Error::Unavailable`] if the loop has ended.
     pub async fn call(&self, call: Call) -> Result<Answer, Error> {
         let (reply, answer) = oneshot::channel();
-        self.calls
-            .send((call, reply))
-            .map_err(|_| Error::Unavailable)?;
+        self.0.send((call, reply)).map_err(|_| Error::Unavailable)?;
         answer.await.map_err(|_| Error::Unavailable)?
+    }
+}
+
+/// The handle of a host: calls go to the runtime's loop, notices come back on a stream.
+pub struct Client {
+    calls: Caller,
+    notices: mpsc::UnboundedReceiver<Notice>,
+}
+
+impl Client {
+    /// Send a call and wait for its one answer (see [`Caller::call`]).
+    ///
+    /// # Errors
+    /// As [`Caller::call`].
+    pub async fn call(&self, call: Call) -> Result<Answer, Error> {
+        self.calls.call(call).await
+    }
+
+    /// A handle for sending calls from another task while this one waits for notices.
+    #[must_use]
+    pub fn caller(&self) -> Caller {
+        self.calls.clone()
     }
 
     /// The next notice, in the order the runtime raised them; `None` once the loop has ended and the stream is drained.
@@ -632,6 +650,8 @@ impl<P: Providers> Engine<P> {
                 Ok(Answer::Invitation { uri: issued.uri })
             }
             Call::InviteAccept { uri } => {
+                // a URI that does not parse is refused before anything else
+                crate::invitations::uri_link_data(&uri)?;
                 if hub.spares()? == 0 {
                     return Ok(Answer::PoolEmpty);
                 }
@@ -823,7 +843,13 @@ pub fn start(dir: &Path, passphrase: &[u8], cfg: RuntimeConfig) -> Result<(Clien
             channels,
         )?
     };
-    Ok((Client { calls, notices }, serve))
+    Ok((
+        Client {
+            calls: Caller(calls),
+            notices,
+        },
+        serve,
+    ))
 }
 
 #[cfg(test)]

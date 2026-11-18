@@ -40,6 +40,7 @@ mod m7_activity;
 mod m7_boundary;
 mod m7_crash;
 mod m7_drain;
+mod m7_e2e;
 mod m7_forensic;
 mod m7_links;
 mod m7_persist;

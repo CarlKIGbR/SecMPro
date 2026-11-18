@@ -9,5 +9,16 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# docs/02 §3: the client core and what it hands out (`secmp-crypto` for `Zeroizing`), and `tokio` for the runtime that carries the
+# core's driver (ADR-051 Part 1.1; no `macros`: the runtime is built by hand). G7-21 pins this list.
+[dependencies]
+secmp-client-core.workspace = true
+secmp-crypto.workspace = true
+tokio.workspace = true
+
+# The E2E helper (relay process, CLI process, JSON lines) of `cli_it` and the smoke test.
+[dev-dependencies]
+secmp-testkit = { workspace = true, features = ["harness"] }
+
 [lints]
 workspace = true

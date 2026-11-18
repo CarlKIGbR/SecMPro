@@ -411,7 +411,7 @@ fn kat_mod_declaration_matches_crlf() {
 /// crate's `src/` (all but `secmp-testkit`): `kat_small` is defined only under `cfg(feature = "kat")` (one site since
 /// A-4: `secmp-store` `wrap::Argon2Params::kat_small`); every line naming `TestKey`, `CrashAt` or `FailAt` is inside a
 /// `kat`-gated item, a test module, or `secmp-store/src/kat.rs`, which `lib.rs` declares under
-/// `cfg(any(test, feature = "kat"))`; at least one `TestKey` site exists; and `cargo tree -e features -p secmp-cli` shows no `kat` feature.
+/// `cfg(any(test, feature = "kat"))`; at least one `TestKey` site exists; and `cargo tree -e normal,features -p secmp-cli` shows no `kat` feature.
 #[cfg(test)]
 #[test]
 fn kat_argon2_params_only_with_kat() -> Result<()> {
@@ -454,8 +454,16 @@ fn kat_argon2_params_only_with_kat() -> Result<()> {
     assert!(bad.is_empty(), "outside a kat gate: {bad:?}");
     assert!(test_key_sites >= 1, "no TestKey site");
     assert_eq!(kat_small_sites, 1, "kat_small: one site (A-4, secmp-store)");
+    // the normal edges only: since Phase C `secmp-cli` dev-depends on the testkit (`harness`), which only its tests build
     let tree = Cmd::cargo()
-        .args(["tree", "--locked", "-e", "features", "-p", "secmp-cli"])
+        .args([
+            "tree",
+            "--locked",
+            "-e",
+            "normal,features",
+            "-p",
+            "secmp-cli",
+        ])
         .read()?;
     assert!(!tree.contains("feature \"kat\""), "{tree}");
     assert!(!tree.contains("feature \"harness\""));

@@ -2272,3 +2272,5 @@ PR run 44280920220 (head `5bd3d73`), job `windows-native` 134721555578, step `ha
 Change (test code only, one function): `built = Instant::now()` first; `started`, `end`, `left` are taken after `cli_bin`, with the note `relay and cli built`; doc line added (Q294). `DEADLINE`, assertions and later uses unchanged. Not demonstrable on Linux (builds are warm: note shows 0.6 s); the evidence for Q288 and Q294 is the next PR run's `windows-native` job, step `harness`.
 
 Gates: fmt OK; clippy `-p secmp-testkit --all-targets --features kat,harness` OK; `step --strict policy` PASS; source scans 14/14 (`m6_driver::`/`m6_scan`) and the six C-4 scan tests 6/6; no `SystemTime::now` in `m7_e2e.rs`; smoke PASS in 156.7 s (`relay and cli built` at 0.6 s, `both open` at 33.1 s).
+
+**ci-fast (head `31fa525`).** PASS: workspace nextest 1640/1640, harness 327/327 (harness step 1850 s), `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c4b-ci-fast.txt`.

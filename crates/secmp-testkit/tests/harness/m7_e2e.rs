@@ -356,14 +356,15 @@ fn pump(p: &mut CliProc, contact: u64, got: &mut Vec<String>, end: Instant) -> J
     line
 }
 
-/// E2-03, CLI part: 20 messages in flight while the receiver rotates the queue onto a spare (spec §10.6 (4)). Oracle: the
-/// printed texts, each exactly once, and the sender's `RoutesChanged`. Not evidenced: the old queue's `QUEUE_DEL` after 1–24 h
+/// E2-03, CLI part: 20 messages in flight while the receiver rotates the queue onto a spare (spec §10.6 (4)), then 5 more
+/// sent after the sender's `RoutesChanged` (C3-1: on the new route; they are required once each, no timing assumption).
+/// Oracle: the printed texts, each exactly once, and the sender's `RoutesChanged`. Not evidenced: the old queue's `QUEUE_DEL` after 1–24 h
 /// (C-4, virtual time).
 #[test]
 fn rotation_with_overlap() {
     let mut p = pair("e203", ["alice", "bob"], 3);
     let (a_of_b, b_of_a) = (p.a_of_b, p.b_of_a);
-    let sent: Vec<String> = (0..20).map(|n| format!("rotation-{n:02}")).collect();
+    let mut sent: Vec<String> = (0..20).map(|n| format!("rotation-{n:02}")).collect();
     for t in &sent {
         p.b.send_line(&format!("send {b_of_a} {t}"));
         expect(&mut p.b, ROW, "queued");
@@ -385,6 +386,13 @@ fn rotation_with_overlap() {
             && v.get("contact").and_then(Json::as_u64) == Some(b_of_a)
     });
     assert!(changed.is_some(), "no RoutesChanged; {}", p.b.stderr_text());
+    // C3-1: sent after RoutesChanged, so on the new route; their arrival needs no timing assumption
+    for n in 20..25 {
+        let t = format!("rotation-{n:02}");
+        p.b.send_line(&format!("send {b_of_a} {t}"));
+        expect(&mut p.b, ROW, "queued");
+        sent.push(t);
+    }
     while got.len() < sent.len() {
         pump(&mut p.a, a_of_b, &mut got, end);
     }
@@ -539,6 +547,7 @@ struct Side {
     sent: usize,
     got: Vec<String>,
     last_at: u64,
+    started: Instant,
 }
 
 impl Side {
@@ -589,8 +598,13 @@ impl Side {
     /// A process is killed only after it printed every message the peer has queued (HB-40), then message `i` is sent.
     fn step(&mut self, i: usize, peer_sent: usize, bin: &Path, needles: &[Vec<u8>], end: Instant) {
         if self.kills.contains(&i) {
+            note(
+                self.started,
+                &format!("kill point {i}: draining {peer_sent}"),
+            );
             self.drain(peer_sent, end);
             self.restart(bin, needles, end);
+            note(self.started, &format!("kill point {i}: reopened"));
         }
         let text_i = self.texts.get(i).unwrap().clone();
         self.p.send_line(&format!("send {} {text_i}", self.peer));
@@ -618,6 +632,7 @@ fn side(
     profile: &(String, String),
     name: &'static str,
     s: (Vec<String>, [usize; 2]),
+    started: Instant,
 ) -> Side {
     Side {
         p,
@@ -630,6 +645,7 @@ fn side(
         sent: 0,
         got: Vec::new(),
         last_at: 0,
+        started,
     }
 }
 
@@ -661,15 +677,17 @@ fn five_hundred_both_ways_with_restarts() {
         [&a_script.0, &b_script.0],
         &[names[0], names[1], &uri, &digits, "correct horse"],
     );
-    let mut alice = side(a, a_of_b, &a_profile, names[0], a_script);
-    let mut bob = side(b, b_of_a, &b_profile, names[1], b_script);
+    let mut alice = side(a, a_of_b, &a_profile, names[0], a_script, started);
+    let mut bob = side(b, b_of_a, &b_profile, names[1], b_script, started);
     note(started, "script ready");
     for i in 0..E2_02_EACH_WAY {
         alice.step(i, bob.sent, &bin, &needles, after(DRAIN));
         bob.step(i, alice.sent, &bin, &needles, after(DRAIN));
     }
     alice.drain(E2_02_EACH_WAY, after(DRAIN));
+    note(started, "alice drained");
     bob.drain(E2_02_EACH_WAY, after(DRAIN));
+    note(started, "bob drained");
     note(started, "all drained");
     alice.finish();
     bob.finish();
@@ -686,6 +704,16 @@ fn five_hundred_both_ways_with_restarts() {
     drop(bob);
     scan(&a_profile.0, &needles);
     scan(&b_profile.0, &needles);
+    // C3-2: the same scan over a planted canary must hit
+    let control = root.join("fo-control");
+    std::fs::create_dir_all(&control).unwrap();
+    std::fs::write(control.join("canary.bin"), needles.first().unwrap()).unwrap();
+    let refs: Vec<&[u8]> = needles.iter().map(Vec::as_slice).collect();
+    let (hits, _, _) = secmp_store::kat::scan_dir(&control, &refs, 8).unwrap();
+    assert!(
+        hits.iter().any(|h| h.needle == 0 && h.raw),
+        "the control scan missed the planted canary: {hits:?}"
+    );
     drop(relay);
     let _ = std::fs::remove_dir_all(&root);
     note(started, "done");

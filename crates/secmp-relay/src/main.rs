@@ -109,13 +109,16 @@ fn onion_of(text: &str) -> Option<Onion> {
 }
 
 /// The text of the client's relay reference file (`relay_ref`, `access_key`; spec §5.3). It holds the access key and
-/// lives only in a `Zeroizing` string; no error carries a value.
+/// lives only in a `Zeroizing` string; no error carries a value. It is built in one allocation of its exact length (no
+/// reallocation leaves an unwiped copy).
 fn ref_text(
     keys: &Path,
     onion: &str,
     direct: Option<(&str, &Path)>,
 ) -> Result<Zeroizing<String>, &'static str> {
     const KEYS: &str = "key file missing, unreadable or malformed";
+    const HEAD: &str = "# SecMPro relay reference (spec §5.3); it holds the relay's access key: keep it private\nrelay_ref = ";
+    const MID: &str = "\naccess_key = ";
     let ring = KeyFile::read(keys)
         .and_then(|f| f.ring())
         .map_err(|_| KEYS)?;
@@ -151,18 +154,26 @@ fn ref_text(
     }
     .encode()
     .map_err(|_| "the relay reference does not encode")?;
-    let mut text = Zeroizing::new(String::from(
-        "# SecMPro relay reference (spec §5.3); it holds the relay's access key: keep it private\nrelay_ref = ",
-    ));
+    let secret = access.expose_secret();
+    let cap = encoded
+        .len()
+        .checked_mul(2)
+        .and_then(|e| e.checked_add(HEAD.len()))
+        .and_then(|n| n.checked_add(MID.len()))
+        .and_then(|n| secret.len().checked_mul(2).and_then(|k| n.checked_add(k)))
+        .and_then(|n| n.checked_add(1))
+        .ok_or("the relay reference does not encode")?;
+    let mut text = Zeroizing::new(String::with_capacity(cap));
+    text.push_str(HEAD);
     hex_to(&mut text, &encoded);
-    text.push_str("\naccess_key = ");
-    hex_to(&mut text, access.expose_secret());
+    text.push_str(MID);
+    hex_to(&mut text, secret);
     text.push('\n');
     Ok(text)
 }
 
 /// A new file at `path`, never overwriting; mode 0600 on Unix. Windows: no mode, the file inherits the directory's
-/// ACL, exactly as the key file of `keygen` (HB-39).
+/// ACL, exactly as the key file of `keygen` (HB-39). A partial file is removed on a write or sync error.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -172,8 +183,12 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         options.mode(0o600);
     }
     let mut f = options.open(path)?;
-    f.write_all(bytes)?;
-    f.sync_all()
+    let written = f.write_all(bytes).and_then(|()| f.sync_all());
+    if written.is_err() {
+        drop(f);
+        let _ = std::fs::remove_file(path);
+    }
+    written
 }
 
 /// `ref`: the file `secmp-client-core`'s `read_relay_ref` reads. The only output is `ref written`.

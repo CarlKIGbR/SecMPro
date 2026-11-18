@@ -2394,4 +2394,4 @@ Docs only. The three one-departure connections of the E2-10 evidence are named i
 
 Cross-review verdicts: C-3 PUSH 0/0/2/8, C-4 PUSH 0/0/4/7, C-5 PUSH 0/0/2/5.
 
-Gates: `step --strict policy` and `nextest -p xtask` as in the return block; `ci-fast`: see below.
+Gates: `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nextest -p xtask` 330/330; `ci-fast` (head `6315386`) PASS: workspace nextest 1641/1641, harness 327/327 (harness step 1660 s); evidence `docs/reviews/M07-evidence/c5b-ci-fast.txt`.

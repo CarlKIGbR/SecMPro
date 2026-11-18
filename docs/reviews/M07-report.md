@@ -2204,3 +2204,5 @@ Commits: K1 `84aa8ac` (relay `ref`), K3 `5ebd24e` (`revert_step` doc), K4 docs (
 **Backlog.** C2g-5 → HB-37; C2g-4 → HB-38 (`.config/nextest.toml` unchanged); Windows ACL of `ref`/`keygen` → HB-39. HB-30 stays open.
 
 **Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK after the two fixes above; `step --strict policy` PASS; `nextest -p xtask` 330/330 (no new xtask test without F); harness scan tests 5/5; `step --strict hello` PASS; greps: `Instant::now`/`SystemTime::now` code only in `clock.rs`, `SECMP_PROPTEST_SEED` comments only; `secmp-relay --test cli` 9/9; `secmp-relay --features kat` 193/193; `secmp-proto --test fuzz_max_len` 2/2; `secmp-client-core --features kat -E 'test(runtime::)'` 10/10.
+
+**ci-fast (head `1041635`).** PASS: workspace nextest 1640/1640 (1639 + `ref_round_trips`), relay `kat` 193/193, harness 318/318, `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c2b-ci-fast.txt`. The harness shows 31 slow tests (no failure).

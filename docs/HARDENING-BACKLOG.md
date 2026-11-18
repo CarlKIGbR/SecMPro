@@ -45,5 +45,9 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-39 | Windows: `secmp-relay ref` and `keygen` write the access key (and the key file) with the directory's inherited ACL; no owner-only DACL (Unix: 0600). The relay host is Linux (docs/05). | M7-C2b (Q289) | Open |
 | HB-40 | `secmp-cli` has no history verb and a restart does not re-announce stored messages: a message committed but not yet printed when the process dies is in the store and never shown. E2-02 kills only after the victim printed all it was sent. | M7-C3 (Q291) | Open |
 | HB-41 | Each queued message is its own cell (`plan_message`: one `AppMessage` per `Batch`); `BatchBody` can carry several (spec §7.6). A burst of n short messages takes n × `P_q`. Packing is a product change (outbox, receipts, fragments) for a later unit. | M7-C3 (Q291) | Open |
+| HB-42 | No test feeds a file written by `secmp-relay ref` into the client's `read_relay_ref`; the format match rests on code reading (`cli.rs` `ref_round_trips` parses it itself; the relay may not depend on client-core). | M7-C2b review (C2b-3) | Open |
+| HB-43 | `secmp-relay ref` has no refusal tests for a 56-character lower-case onion with a wrong checksum or version byte, a bad `--direct` host or port, or a non-DER certificate. | M7-C2b review (C2b-4) | Open |
+| HB-44 | FO-01a/FO-02 run without Tor: `<profile>/tor` is never populated in the virtual run, so its contents are not scanned; a scan after a real Arti bootstrap needs network (E2-07, owner). | M7-C4 (Q292) | Open |
+| HB-45 | FO-01a's message-key canaries are `KDF_CK(ck)` of the chain keys read before each slot (mostly the keys then used), not a record of the last 16 sealing keys; an exact ring needs a kat accessor in the session actor. | M7-C4 (Q292) | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

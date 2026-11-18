@@ -2229,3 +2229,36 @@ Commits: K1 `test(harness)` (`m7_e2e.rs` + two `pub(crate)` tokens in `m6_driver
 **Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK; `step --strict policy` PASS; `nextest -p xtask` 330/330 (unchanged); harness scan tests 6/6; greps: `Instant::now`/`SystemTime::now` only in comments outside `clock.rs`, no seed/`SystemTime` token in `m7_e2e.rs`; `step --strict hello` PASS.
 
 **ci-fast (head `26c89b9`).** PASS: workspace nextest 1640/1640, harness 323/323 (harness step 1872 s), `fuzz-check` PASS; last line `ci-fast: PASS`. Evidence: `docs/reviews/M07-evidence/c3-ci-fast.txt`. No product change.
+
+## C-4 (BRIEF M7-C4; modell=claude-sonnet-5-5)
+
+Commits: K1 `a1856b8` `feat(core)` (`Hub::message_key_digests_kat`, `hub.rs` +13, feature `kat` only, no behaviour change); K2 `36a8a4e` `fix(relay)` (`main.rs` +24/−9: C2b-1 `ref_text` built in one `String::with_capacity` of its exact length, C2b-2 `write_private` removes the partial file on a write or sync error; output and error texts unchanged); K3 `5792e07` `test(harness)` (`m7_e2e_virt.rs` new, `m7_forensic.rs` +469/−4, `m7_rotation.rs` ten `pub(crate)` tokens, `main.rs` `mod m7_e2e_virt;`, `driver.rs` +8: `GateState::ff_max`, `ff_steps`, `SKIP_STEPS_KAT` reset before and read after `convs.deliver`); K4 docs (this section, Q292, HB-42…HB-45); K5 evidence (`docs/reviews/M07-evidence/c4-ci-fast.txt`).
+
+**Rows → tests** (pre-run `target/fable/report/c4-virt.txt`, harness binary, virtual driver, store-backed parties):
+
+| Row | Test | Wall time |
+|---|---|---|
+| E2-02v (O-17, PC-05 digests) | `m7_e2e_virt::five_hundred_single_cell_virtual` | 80.6 s |
+| E2-05 (O-16, F25) | `m7_e2e_virt::offline_24h_receives_every_real_message` | 187.6 s |
+| E2-03 (1–24 h wait) | `m7_e2e_virt::rotation_with_overlap_virtual` | 47.9 s |
+| FO-01a (O-01) + FO-02 | `m7_forensic::store_dir_has_no_plaintext` | 90.3 s |
+| SE-02/SE-03 (unchanged, `m7_rotation::*`) | 6 tests | all PASS |
+
+Pre-run: 9/10 (the 3 new E2 tests and the 6 SE-02/03 tests PASS; FO-01a red: its child failed at once). FO-01a's two failures were the test's own (below); after the fix it was run alone (child with `--no-capture`, then the real test): PASS, 90.3 s. The 10 were not re-run together.
+
+**Evidence texts** (`target/m6-evidence/`):
+
+- E2-02v: `500 messages each way, Balanced; kill points a [57, 391], b [142, 434]; virtual end 10820000 ms; message-key digests 2105 total, 2105 distinct`
+- E2-05: `evicted ids 8381; ff_max 7765 KDF_CK steps (the worst cell); ff_steps 8409; worst cell = 15530 HMAC-SHA-256 (two per KDF_CK, spec §7.4 note (a)); all 144 messages after 480 s of virtual time back online`
+- E2-03 virtual: `rotation at 600000 ms; overlap deadline 4457294 ms; QUEUE_DEL at 6229372 ms (quiet point 4864498 ms); 20 messages once each`
+- FO-01a (+FO-02): `needles 268`; abort image (WAL not checkpointed, `lock` not copied) host 4 files / 2 228 869 B (WAL 2 191 872 B), guest 4 files / 2 105 269 B (WAL 2 068 272 B); clean close host 3 files / 110 725 B, guest 3 files / 94 341 B; no hit; the eight `HOME`/`TMPDIR`/`TMP`/`TEMP`/`XDG_*` directories empty after the child; `tor::config` paths under the profile; profile directory removed.
+
+**Interpretations.** E2-02v: the 10 s `run_until` is taken after both sends of every iteration (a send per side per slot at the queue's 10 s period; virtual end 3 h with the drain); the digests of a side are appended at each kill and at the end. FO-01a: the 25 rounds are followed by 150 s and then 60 s steps until both sides hold 25 messages (cap 3 h): each side's receipts share its slots with its messages, so 150 s were not enough (counts 6/25 at 150 s).
+
+**Deviations (test code only, no spec or product change).** (1) FO-01a, message 7 is sent as its ASCII text, not as UTF-16LE: a kind-1 payload holds no U+0000 (ADR-054, `app_payload_ok`; the core answered `Unsupported`), so UTF-16LE of ASCII cannot be sent. The UTF-16LE form of every text (7 included) is a needle, and the UTF-16LE form of the names too. (2) The drain loop above.
+
+**Observation, not caused by this unit.** `cargo nextest run -p secmp-relay` (no features) has `config::tests::documented_listen_stanzas_parse` red (`direct_tls needs a relay built with feature direct-tls`); it is red at `6b42259` too (checked with the K2 change stashed), and green in the workspace run where feature unification enables `direct-tls` (`c3-ci-fast.txt`, 1640/1640). `ref_round_trips` PASS with and without `kat`; `-p secmp-relay --features kat` 193/193.
+
+**Q292, HB-42…HB-45** added (`OPEN-M7-decided.md`, `HARDENING-BACKLOG.md`). TEST-SPEC-M7 is not edited.
+
+**Scan gates before ci-fast.** fmt OK; clippy (workspace, all targets, all features, `-D warnings`) OK; `step --strict policy` PASS; `nextest -p xtask` 330/330; harness scan tests 6/6; `step --strict fuzz-check` PASS; `Instant::now`/`SystemTime::now` only in comments outside `clock.rs`; no seed/`SystemTime`/`Instant`/`set_var`/`mem::forget` token in `m7_e2e_virt.rs`, `m7_forensic.rs`, `driver.rs`; `-p secmp-client-core --features kat -E 'test(hub::)'` 73/73; `-p secmp-relay --features kat` 193/193.

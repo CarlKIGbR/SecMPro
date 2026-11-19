@@ -2528,6 +2528,6 @@ Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, ex
 3. harness `m7_owner`/`m6_control`/`m7_pool`/`m7_accept`: 31 run, 31 passed (2 slow), 303 skipped; `m6_control::control_op_retried_after_link_failure` among them, unchanged.
 4. `cargo xtask step --strict policy`: PASS.
 
-**ci-fast.** `<pending>`
+**ci-fast.** Run on 6394a4e: `ci-fast: PASS`; workspace nextest 1646/1646 (WS_BASE 1643 + 3: T1, T3, T4), harness 334/334 (HARNESS_BASE 333 + 1: T2; harness step 1722 s), 0 skipped; evidence `docs/reviews/M07-evidence/s3-ci-fast.txt`.
 
 Deviations: none.

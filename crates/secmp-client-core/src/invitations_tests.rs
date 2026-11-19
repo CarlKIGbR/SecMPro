@@ -2202,3 +2202,109 @@ fn stored_encode_reserves_exact_capacity() -> R {
     }
     Ok(())
 }
+
+/// The invitation of a fresh inviter: its fixture, entropy, invitations, issuance and link-data number.
+#[cfg(feature = "kat")]
+fn issued_for_put(
+    label: &str,
+    seed: u64,
+) -> Result<(Fixture, FixedEntropy, Invitations, Issuance, u32), E> {
+    let (fx, mut e) = inviter(label, seed, 1)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let n = link_data_n(&issued.invitation.ld_id);
+    Ok((fx, e, invitations, issued, n))
+}
+
+/// S2-1, Q298 (§9.7 (1), §5.2): the `LINK_PUT` arguments exist only for an invitation that is offered, before `expires`,
+/// whose link data was not seen consumed — checked when the operation runs. For an offered one they are `link_put_args`'
+/// bytes.
+#[cfg(feature = "kat")]
+#[test]
+fn put_args_only_for_an_offered_invitation() -> R {
+    // offered: the same bytes as `link_put_args`
+    let (fx, _e, invitations, _issued, n) = issued_for_put("s2b-offered", 71)?;
+    let gated = invitations.put_args(n, &fx.clock)?.ok_or("offered")?;
+    let plain = invitations.link_put_args(n)?;
+    assert_eq!(gated.ld_id, plain.ld_id);
+    assert_eq!(gated.owner_pk.as_bytes(), plain.owner_pk.as_bytes());
+    assert_eq!(
+        gated.owner_seed.expose_secret(),
+        plain.owner_seed.expose_secret()
+    );
+    assert_eq!(*gated.blob, *plain.blob);
+    assert_eq!(gated.expires, plain.expires);
+    // a link data no invitation has
+    assert!(invitations.put_args(n ^ 1, &fx.clock)?.is_none());
+
+    // consumed by the handshake (the row keeps its blob)
+    let (fx, mut e, invitations, issued, n) = issued_for_put("s2b-consumed", 51)?;
+    let (peer, mut pe) = invitee("s2b-consumed-peer", 53, 2)?;
+    let ld_id = issued.invitation.ld_id;
+    let on = crate::testutil::round_on(&invitations, &ld_id)?;
+    let cells = handshake(&peer, &mut pe, &issued)?;
+    let fetched: Vec<(u64, Cell)> = (1000..).zip(cells).collect();
+    let out = invitations.process_round(&ld_id, on, &fetched, &fx.clock, &mut e)?;
+    assert_eq!(out.accepted, Some(ContactId(1)));
+    assert!(invitations.link_put_args(n).is_ok(), "the blob is stored");
+    assert!(invitations.put_args(n, &fx.clock)?.is_none());
+
+    // `expires − 1`, `expires`, `expires + 1`
+    let (fx, _e, invitations, _issued, n) = issued_for_put("s2b-expiry", 74)?;
+    fx.clock.set_ms((10 * DAY - 1) * 1000);
+    assert!(invitations.put_args(n, &fx.clock)?.is_some());
+    fx.clock.set_ms(10 * DAY * 1000);
+    assert!(invitations.put_args(n, &fx.clock)?.is_none());
+    fx.clock.set_ms((10 * DAY + 1) * 1000);
+    assert!(invitations.put_args(n, &fx.clock)?.is_none());
+
+    // link data seen consumed by someone else
+    let (fx, _e, invitations, issued, n) = issued_for_put("s2b-seen", 75)?;
+    let seen = OwnerStatus {
+        present: false,
+        consumed: true,
+    };
+    invitations.on_owner_status(&issued.invitation.ld_id, seen, &fx.clock)?;
+    assert!(invitations.put_args(n, &fx.clock)?.is_none());
+
+    // retiring (expired, retired, the queue's `QUEUE_DEL` pending)
+    let (fx, _e, invitations, _issued, n) = issued_for_put("s2b-retiring", 76)?;
+    fx.at_day(11);
+    invitations.maintain(&fx.clock)?;
+    assert_eq!(invitations.retiring()?.len(), 1);
+    assert!(invitations.put_args(n, &fx.clock)?.is_none());
+    Ok(())
+}
+
+/// Q298 (§9.7 (1): before `expires`): an owner status `{0, 0}` queues the delayed re-put only when it can run before
+/// `expires` — `now + 60 min < expires`.
+#[cfg(feature = "kat")]
+#[test]
+fn no_reput_within_the_longest_delay_of_expires() -> R {
+    let (fx, _e, invitations, issued, n) = issued_for_put("s2b-near", 77)?;
+    let ld_id = issued.invitation.ld_id;
+    let gone = OwnerStatus {
+        present: false,
+        consumed: false,
+    };
+    let longest = 3_600;
+    fx.clock.set_ms((10 * DAY - longest - 1) * 1000);
+    let ops = invitations.on_owner_status(&ld_id, gone, &fx.clock)?;
+    let [op] = ops.as_slice() else {
+        return Err("one LINK_PUT".into());
+    };
+    assert_eq!((op.kind, op.when), (ControlKind::LinkPut(n), When::Delayed));
+    fx.clock.set_ms((10 * DAY - longest) * 1000);
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, gone, &fx.clock)?
+            .is_empty()
+    );
+    fx.clock.set_ms((10 * DAY - 1) * 1000);
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, gone, &fx.clock)?
+            .is_empty()
+    );
+    Ok(())
+}

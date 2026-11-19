@@ -5,7 +5,7 @@
 //! the schedule of the queries does not depend on the user's calls.
 
 use secmp_client_core::api::{ContactId, Event, Request, Response};
-use secmp_client_core::invitations::uri_link_data;
+use secmp_client_core::invitations::{OwnerStatus, uri_link_data};
 use secmp_client_core::scheduler::control::When;
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{ControlKind, RelayId};
@@ -309,4 +309,131 @@ fn owner_status_schedule_is_activity_independent() {
         .count();
     assert!(queries >= 2, "{queries} owner-status queries");
     assert_eq!(idle, active);
+}
+
+/// Four hours of virtual time, in milliseconds.
+const FOUR_HOURS_MS: u64 = 4 * 3_600_000;
+
+/// S2-1, Q298 (§9.7 (1), §11.3): the relay loses its link data, the owner-status answer `{0, 0}` queues the re-put, and the
+/// invitation is retired (identity rotation) before the re-put is due: no `LINK_PUT` command leaves, the operation completes
+/// after at most one control-link start (a failed one would be retried for ever, CO-06), and the query queued with it ends the chain.
+#[test]
+fn owner_reput_is_not_sent_for_a_retired_invitation() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s2d-host", 2, 27);
+    d.client(host.idx).opts.inspect = Inspect::Requests;
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 3_600)
+        .unwrap();
+    let (_, n) = uri_link_data(&issued.uri).unwrap();
+    d.run_until(30_000);
+    d.restart_relay();
+    let mut elapsed = d.now();
+    while !d
+        .client_ref(host.idx)
+        .link_status
+        .iter()
+        .any(|row| row.1 == n)
+    {
+        assert!(elapsed < 3 * MAX_MS, "no owner-status answer");
+        elapsed = elapsed.saturating_add(10_000);
+        d.run_until(elapsed);
+    }
+    let answer = d
+        .client_ref(host.idx)
+        .link_status
+        .iter()
+        .find(|row| row.1 == n)
+        .map(|row| (row.2, row.3));
+    assert_eq!(answer, Some((false, false)));
+    let puts_before = starts(&d, host.idx, ControlKind::LinkPut(n)).len();
+    let queries_before = starts(&d, host.idx, ControlKind::LinkGetOwner(n)).len();
+    let commands_before = put_fields(&d, host.idx).len();
+    assert_eq!(puts_before, 1, "the re-put is queued, not started");
+
+    // the invitation is retired before the re-put is due
+    let rotated = hub(&mut d, host.idx)
+        .core_mut()
+        .handle(Request::RotateIdentity)
+        .unwrap();
+    assert!(matches!(rotated, Response::IdentityRotated(_)));
+    let now = d.now();
+    d.run_until(now.saturating_add(FOUR_HOURS_MS));
+
+    assert_eq!(d.client_ref(host.idx).hub_errors, Vec::<String>::new());
+    assert_eq!(put_fields(&d, host.idx).len(), commands_before);
+    let puts_after = starts(&d, host.idx, ControlKind::LinkPut(n)).len();
+    assert!(
+        puts_after.saturating_sub(puts_before) <= 1,
+        "{} LinkPut starts after the retirement",
+        puts_after.saturating_sub(puts_before)
+    );
+    // the query queued with the re-put still runs once and ends without a command; its answer never reaches the hub, so the
+    // chain does not continue (HB-55)
+    let queries_after = starts(&d, host.idx, ControlKind::LinkGetOwner(n)).len();
+    assert!(
+        queries_after.saturating_sub(queries_before) <= 1,
+        "{} owner-status starts after the retirement",
+        queries_after.saturating_sub(queries_before)
+    );
+}
+
+/// S2-1, Q298 (§9.7 (1)): the owner-status answer `{0, 0}` (injected through the hub, as the host's operation delivers it)
+/// queues the re-put while the invitee's handshake is on its way; the handshake is accepted before the re-put is due (the
+/// row is consumed): no `LINK_PUT` command leaves for this link data after it, the re-put completes after at most one
+/// control-link start, and the contact exists on both sides.
+#[test]
+fn owner_reput_is_not_sent_after_the_handshake() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s2e-host", 2, 25);
+    let guest = add_party(&mut d, "s2e-guest", 2, 26);
+    d.client(host.idx).opts.inspect = Inspect::Requests;
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 3_600)
+        .unwrap();
+    d.run_until(30_000);
+    let (ld, n) = hub(&mut d, guest.idx).begin_accept(&issued.uri).unwrap();
+    d.client(guest.idx).links.insert(
+        n,
+        LinkMaterial {
+            ld_id: ld,
+            owner_seed: [0; 32],
+            blob: Vec::new(),
+            one_time: true,
+            expires_bucket: 0,
+        },
+    );
+    let now = d.now();
+    d.run_until(now.saturating_add(1_000));
+    let gone = OwnerStatus {
+        present: false,
+        consumed: false,
+    };
+    hub(&mut d, host.idx).owner_status(n, gone).unwrap();
+    let puts_before = starts(&d, host.idx, ControlKind::LinkPut(n)).len();
+    let commands_before = put_fields(&d, host.idx).len();
+    assert_eq!(puts_before, 1);
+    let mut elapsed = d.now();
+    while contact_ids(&mut d, host.idx).is_empty() {
+        assert!(elapsed < 3 * MAX_MS, "the handshake was not accepted");
+        elapsed = elapsed.saturating_add(10_000);
+        d.run_until(elapsed);
+    }
+    assert_eq!(
+        starts(&d, host.idx, ControlKind::LinkPut(n)).len(),
+        puts_before,
+        "the handshake is accepted before the re-put is due"
+    );
+    d.run_until(elapsed.saturating_add(FOUR_HOURS_MS));
+
+    assert_eq!(d.client_ref(host.idx).hub_errors, Vec::<String>::new());
+    assert_eq!(put_fields(&d, host.idx).len(), commands_before);
+    let puts_after = starts(&d, host.idx, ControlKind::LinkPut(n)).len();
+    assert!(
+        puts_after.saturating_sub(puts_before) <= 1,
+        "{} LinkPut starts after the handshake",
+        puts_after.saturating_sub(puts_before)
+    );
+    assert!(!contact_ids(&mut d, host.idx).is_empty());
+    assert!(!contact_ids(&mut d, guest.idx).is_empty());
 }

@@ -266,6 +266,11 @@ pub trait StoreHub: Source {
     fn actions(&mut self) -> Vec<Action>;
     /// The material of the `LINK_PUT` of link data `n`.
     fn link_put(&mut self, n: u32) -> Option<LinkMaterial>;
+    /// Whether the `LINK_PUT` of link data `n` may leave now: the hub's gate (Q298, S2-1).
+    ///
+    /// # Errors
+    /// The hub's failure to read it, as text.
+    fn put_allowed(&self, n: u32) -> Result<bool, String>;
     /// The seeds `(recipient, sender)` of `queue`.
     fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)>;
     /// The seeds `(recipient, sender)` of a spare queue the scheduler's pool is about to create (the pool bridge of the hub,
@@ -319,6 +324,12 @@ impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
             one_time: true,
             expires_bucket: u32::try_from(args.expires / 3600).ok()?,
         })
+    }
+
+    fn put_allowed(&self, n: u32) -> Result<bool, String> {
+        Hub::put_args(self, n)
+            .map(|args| args.is_some())
+            .map_err(|e| e.to_string())
     }
 
     fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
@@ -1438,6 +1449,13 @@ impl VirtualDriver {
             }
             ControlKind::LinkPut(n) => {
                 let client = self.clients.get_mut(idx).unwrap();
+                // Q298 (S2-1): a store-backed client's `LINK_PUT` is checked when it runs, as in the runtime: an invitation
+                // that is no longer offered ends the operation without a command
+                if let Some(hub) = client.hub.as_ref()
+                    && !hub.put_allowed(n).map_err(|_| TransportError::Invalid)?
+                {
+                    return Ok(());
+                }
                 let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
                 let blob = LinkBlob::decode(&m.blob).map_err(|_| TransportError::Invalid)?;
                 transport.put_link_data(

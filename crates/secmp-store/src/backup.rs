@@ -161,10 +161,7 @@ pub fn snapshot(store: &Store, confirm: bool, force: bool, path: &Path) -> Resul
     for (tag, s) in TAGS.iter().zip(&sections) {
         table.push((*tag, len_u32(s.len())?));
     }
-    let mut body = Zeroizing::new(Vec::new());
-    for s in &sections {
-        body.extend_from_slice(s);
-    }
+    let body = joined(&sections)?;
     Ok(Snapshot {
         target,
         table,
@@ -273,6 +270,29 @@ fn len_u32(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(|_| Error::Unavailable)
 }
 
+/// `start` plus every length of `lens`; [`Error::Unavailable`] on overflow (review L34-1: export buffers are sized before
+/// they are filled).
+fn total(start: usize, lens: impl IntoIterator<Item = usize>) -> Result<usize> {
+    lens.into_iter()
+        .try_fold(start, usize::checked_add)
+        .ok_or(Error::Unavailable)
+}
+
+/// An empty zeroizing buffer that holds `len` bytes without growing (CLAUDE.md §1.6, docs/04 CS-2.2; review L34-1, F1-3): a
+/// zeroizing vector that reallocates frees its earlier bytes unwiped.
+fn sized(len: usize) -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(Vec::with_capacity(len))
+}
+
+/// The sections concatenated in one buffer of exactly their total length (the backup body).
+fn joined(sections: &[Zeroizing<Vec<u8>>]) -> Result<Zeroizing<Vec<u8>>> {
+    let mut body = sized(total(0, sections.iter().map(|s| s.len()))?);
+    for s in sections {
+        body.extend_from_slice(s);
+    }
+    Ok(body)
+}
+
 impl Contents {
     /// The contents of `store`: its identity, contacts, settings and messages (no view-once).
     fn of(store: &Store) -> Result<Self> {
@@ -309,7 +329,14 @@ impl Contents {
 
     /// The four sections, encoded (ADR-053 Appendix).
     fn encode(&self) -> Result<[Zeroizing<Vec<u8>>; 4]> {
-        let mut contacts = Zeroizing::new(len_u32(self.contacts.len())?.to_be_bytes().to_vec());
+        let contacts_len = self.contacts.iter().try_fold(4_usize, |acc, c| {
+            total(
+                acc,
+                [c.iks.len(), 1, c.profile.len(), 1, c.local_name.len()],
+            )
+        })?;
+        let mut contacts = sized(contacts_len);
+        contacts.extend_from_slice(&len_u32(self.contacts.len())?.to_be_bytes());
         for c in &self.contacts {
             if c.iks.len() != secmp_proto::sizes::IKS_PUBLIC_LEN
                 || c.local_name.len() > LOCAL_NAME_MAX
@@ -323,7 +350,11 @@ impl Contents {
             contacts.extend_from_slice(c.local_name.as_bytes());
         }
         let n = u16::try_from(self.settings.len()).map_err(|_| Error::Unavailable)?;
-        let mut settings = Zeroizing::new(n.to_be_bytes().to_vec());
+        let settings_len = self.settings.iter().try_fold(2_usize, |acc, (key, val)| {
+            total(acc, [1, key.len(), 2, val.len()])
+        })?;
+        let mut settings = sized(settings_len);
+        settings.extend_from_slice(&n.to_be_bytes());
         for (key, val) in &self.settings {
             settings.push(u8::try_from(key.len()).map_err(|_| Error::Unavailable)?);
             settings.extend_from_slice(key.as_bytes());
@@ -331,17 +362,11 @@ impl Contents {
             settings.extend_from_slice(&len.to_be_bytes());
             settings.extend_from_slice(val);
         }
-        let mut messages = Zeroizing::new(len_u32(self.messages.len())?.to_be_bytes().to_vec());
+        let mut apps = Vec::with_capacity(self.messages.len());
         for m in &self.messages {
             if m.kind == KIND_VIEW_ONCE {
                 return Err(Error::Unsupported);
             }
-            messages.extend_from_slice(&m.contact_index.to_be_bytes());
-            messages.push(match m.direction {
-                Direction::In => 0,
-                Direction::Out => 1,
-            });
-            messages.extend_from_slice(&m.ts_ms.to_be_bytes());
             let kind = secmp_proto::wire::cell::AppKind::ALL
                 .into_iter()
                 .find(|k| k.byte() == m.kind)
@@ -352,7 +377,21 @@ impl Contents {
                 expire_after: m.expire_after,
                 payload: m.payload.clone(),
             };
-            messages.extend_from_slice(&app.encode().map_err(|_| Error::Unavailable)?);
+            apps.push(app.encode().map_err(|_| Error::Unavailable)?);
+        }
+        let messages_len = apps
+            .iter()
+            .try_fold(4_usize, |acc, a| total(acc, [4, 1, 8, a.len()]))?;
+        let mut messages = sized(messages_len);
+        messages.extend_from_slice(&len_u32(self.messages.len())?.to_be_bytes());
+        for (m, app) in self.messages.iter().zip(&apps) {
+            messages.extend_from_slice(&m.contact_index.to_be_bytes());
+            messages.push(match m.direction {
+                Direction::In => 0,
+                Direction::Out => 1,
+            });
+            messages.extend_from_slice(&m.ts_ms.to_be_bytes());
+            messages.extend_from_slice(app);
         }
         Ok([self.identity.clone(), contacts, settings, messages])
     }
@@ -802,11 +841,7 @@ pub fn seal_file_kat(passphrase: &[u8], table: &[(u8, u32)], body: &[u8]) -> Res
 /// [`Error::Unavailable`] if a value does not fit its field.
 #[cfg(feature = "kat")]
 pub fn encode_body_kat(contents: &Contents) -> Result<Zeroizing<Vec<u8>>> {
-    let mut body = Zeroizing::new(Vec::new());
-    for s in &contents.encode()? {
-        body.extend_from_slice(s);
-    }
-    Ok(body)
+    joined(&contents.encode()?)
 }
 
 /// The decrypted body of `file` (feature `kat`: BK-02 and the view-once row search it).
@@ -1183,6 +1218,24 @@ mod tests {
                 want((0, Direction::Out, 2_000, [2; 16]), 60, b"hello bob"),
             ]
         );
+        Ok(())
+    }
+
+    /// M7-S3 (L34-1, F1-3; CLAUDE.md §1.6, docs/04 CS-2.2): each section of a populated profile's export and the body are
+    /// one allocation of exactly their final length — no export buffer grew.
+    #[test]
+    fn export_buffers_are_sized_once() -> R {
+        let dir = TempDir::new("s3-sized")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        let sections = Contents::of(&store)?.encode()?;
+        for (tag, s) in TAGS.iter().zip(&sections) {
+            assert_eq!(s.capacity(), s.len(), "section {tag}");
+        }
+        let snap = snapshot(&store, true, true, &dir.path().join("sized.secmpbackup"))?;
+        let sum: usize = sections.iter().map(|s| s.len()).sum();
+        assert_eq!(snap.body.len(), sum);
+        assert_eq!(snap.body.capacity(), snap.body.len(), "the body");
         Ok(())
     }
 

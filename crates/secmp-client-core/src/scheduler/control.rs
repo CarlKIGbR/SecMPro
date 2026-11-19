@@ -36,9 +36,7 @@ struct Op {
     /// The correlation this operation belongs to (a queue, an invitation, a contact), chosen by the host.
     related: u64,
     due: u64,
-    /// The delay drawn for a [`When::Delayed`] operation, until it first starts: it never starts before the latest
-    /// related start plus this delay (spec §10.6 (2): `U[1 min, 60 min]` from any related operation, whenever that one
-    /// actually ran). `None` for an operation a user waits for or that has its own time, and once it has started.
+    /// The delay drawn for a [`When::Delayed`] operation (again at an answer, or at its empty `FETCH`): it never starts before the latest related start plus this delay (spec §10.6 (2): `U[1 min, 60 min]` from any related operation, whenever that one actually ran) — a retry after a link failure neither, its own failed start included (EXT3b-1 (i), Q304). `None` for an operation a user waits for or that has its own time.
     delay: Option<u64>,
     running: bool,
     failures: u32,
@@ -120,6 +118,20 @@ impl ControlOps {
         });
     }
 
+    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A `LINK_PUT` joins one that waits or runs (its outcome restores the link data, or it is queued again, or its invitation is no longer offered, Q298); an owner query joins one that waits only (the answer of a running one queues its successor, possibly before it is done). `None` for every other kind.
+    #[must_use]
+    pub fn coalesced(&self, kind: ControlKind, relay: RelayId) -> Option<OpId> {
+        let joins = |o: &Op| match kind {
+            ControlKind::LinkPut(_) => true,
+            ControlKind::LinkGetOwner(_) => !o.running,
+            _ => false,
+        };
+        self.ops
+            .iter()
+            .find(|o| o.kind == kind && o.relay == relay && joins(o))
+            .map(|o| o.id)
+    }
+
     /// What `id` runs, while it waits or runs.
     #[must_use]
     pub fn kind_of(&self, id: OpId) -> Option<ControlKind> {
@@ -139,6 +151,8 @@ impl ControlOps {
     /// Queue an operation. A delayed one starts `U[1 min, 60 min]` after `max(now, the latest start or due time of an
     /// operation with the same `related`)`: related operations never run within a minute of each other.
     ///
+    /// A `LINK_PUT` or owner-status `LINK_GET` that [`ControlOps::coalesced`] names is not queued (Q304).
+    ///
     /// # Errors
     /// [`Unavailable`] without randomness.
     pub fn schedule(
@@ -149,6 +163,10 @@ impl ControlOps {
         now: u64,
         spec: OpSpec,
     ) -> Result<(), Unavailable> {
+        // Q304 (EXT3b-4): one put chain and one owner-query chain per link data; joining draws nothing (Q301)
+        if self.coalesced(spec.kind, spec.relay).is_some() {
+            return Ok(());
+        }
         let OpSpec {
             kind,
             relay,
@@ -215,6 +233,10 @@ impl ControlOps {
     /// [`ControlOps::schedule`] of a [`When::Delayed`] operation whose delay `drawn` (`params.control_delay_ms`) the caller drew
     /// before it changed anything (Q301: a failed draw changes nothing); `spec.when` is not read. It cannot fail.
     pub fn schedule_drawn(&mut self, id: OpId, now: u64, spec: OpSpec, drawn: u64) {
+        // Q304 (EXT3b-4): one put chain and one owner-query chain per link data; joining draws nothing (Q301)
+        if self.coalesced(spec.kind, spec.relay).is_some() {
+            return;
+        }
         let started = self
             .last_start
             .iter()
@@ -366,8 +388,6 @@ impl ControlOps {
             });
             if let Some(op) = self.ops.get_mut(i) {
                 op.running = true;
-                // a retry after a failure follows the back-off, not the correlation delay
-                op.delay = None;
             }
             match self.last_start.iter_mut().find(|(r, _)| *r == related) {
                 Some((_, t)) => *t = (*t).max(now),
@@ -377,7 +397,7 @@ impl ControlOps {
         out
     }
 
-    /// The relay answered the operation's command with an `ERR` (Q300, EXT3-4): it waits again exactly as a fresh
+    /// The link was up and no answer was committed (Q300 phase rule, M7-S4d: a relay `ERR` of any code, an unfitting answer, the link closed, the timeout): it waits again exactly as a fresh
     /// [`When::Delayed`] operation of its correlation (the answered attempt is a related operation, spec §10.6 (2)), also
     /// when it first ran at once; the drawn delay is kept, so a later related start pushes it back. No cap, no growing
     /// back-off (HB-61).
@@ -411,7 +431,7 @@ impl ControlOps {
     }
 
     /// The operation's link failed before it could run: it is attempted again after the back-off of `closed_before`
-    /// consecutive closes before `RELAYINFO` (LR-03), never dropped (CO-06).
+    /// consecutive closes before `RELAYINFO` (LR-03), never dropped (CO-06); a delayed one keeps its drawn delay, so it also starts no earlier than the latest related start — its own failed one included — plus that delay (spec §10.6 (2), EXT3b-1 (i), Q304).
     ///
     /// # Errors
     /// [`Unavailable`] without randomness.
@@ -508,6 +528,137 @@ mod tests {
         Ok(())
     }
 
+    /// The least difference of consecutive start times of `starts` (in start order; `u64::MAX` for fewer than two).
+    fn min_gap(starts: &[(OpId, u64)]) -> u64 {
+        starts
+            .windows(2)
+            .filter_map(|w| {
+                w.get(1)
+                    .zip(w.first())
+                    .map(|(b, a)| b.1.saturating_sub(a.1))
+            })
+            .min()
+            .unwrap_or(u64::MAX)
+    }
+
+    /// A put and an owner query of link data 7, both due 60 000 ms after the latest related start or due (`schedule_drawn` at 0), the put started at 60 000 ms (T1, T2).
+    fn put_and_query() -> ControlOps {
+        let mut ops = ControlOps::new();
+        ops.schedule_drawn(
+            OpId(1),
+            0,
+            spec(ControlKind::LinkPut(7), 7, When::Delayed),
+            60_000,
+        );
+        ops.schedule_drawn(
+            OpId(2),
+            0,
+            spec(ControlKind::LinkGetOwner(7), 7, When::Delayed),
+            60_000,
+        );
+        let started = ops.take_due(60_000).len();
+        assert_eq!(started, 1);
+        ops
+    }
+
+    /// T1 — EXT3b-1 (i) (V-EXT3b-1 T1; spec §10.6 (2)): a delayed operation whose link failed before it was up keeps its drawn delay: its retry starts at least a minute after a related operation that started meanwhile (500 seeds).
+    #[test]
+    fn link_failed_retry_keeps_related_spacing() -> Result<(), Unavailable> {
+        let params = Params::default();
+        for seed in 0..500_u64 {
+            let (mut rng, mut ops) = (TimingRng::seeded(seed), put_and_query());
+            ops.failed(&params, &mut rng, OpId(1), 60_001, false)?;
+            let mut starts = Vec::new();
+            for _ in 0..20 {
+                let Some(t) = ops.next_due() else { break };
+                starts.extend(ops.take_due(t).into_iter().map(|d| (d.id, t)));
+            }
+            assert_eq!(starts.len(), 2, "seed {seed}: {starts:?}");
+            assert!(min_gap(&starts) >= 60_000, "seed {seed}: {starts:?}");
+        }
+        Ok(())
+    }
+
+    /// T2 — EXT3b-1 (i) (V-EXT3b-1 T2): as T1, the put's link closing before `RELAYINFO` twice (the back-off cap grows to 360 s): no two starts of the link data, its failed ones included, are less than a minute apart.
+    #[test]
+    fn link_failed_retries_keep_spacing_after_closes() -> Result<(), Unavailable> {
+        let params = Params::default();
+        for seed in 0..500_u64 {
+            let (mut rng, mut ops) = (TimingRng::seeded(seed), put_and_query());
+            ops.failed(&params, &mut rng, OpId(1), 60_001, true)?;
+            let mut starts = vec![(OpId(1), 60_000)];
+            for _ in 0..20 {
+                if starts.len() >= 4 {
+                    break;
+                }
+                let Some(t) = ops.next_due() else { break };
+                for d in ops.take_due(t) {
+                    starts.push((d.id, t));
+                    if d.id == OpId(1) && starts.iter().filter(|s| s.0 == OpId(1)).count() == 2 {
+                        ops.failed(&params, &mut rng, OpId(1), t.saturating_add(1), true)?;
+                    }
+                }
+            }
+            assert_eq!(starts.len(), 4, "seed {seed}: {starts:?}");
+            assert!(min_gap(&starts) >= 60_000, "seed {seed}: {starts:?}");
+        }
+        Ok(())
+    }
+
+    /// UA1 — Q304 (EXT3b-4; V-EXT3b-34 T4-1): a `LINK_PUT` of a link data that has one waiting or running joins it — nothing is queued and nothing is drawn (Q301), also without randomness; another link data's put is queued.
+    #[test]
+    fn link_put_joins_the_waiting_or_running_put() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let (mut rng, mut none, mut ops) = (
+            TimingRng::seeded(43),
+            TimingRng::failing(),
+            ControlOps::new(),
+        );
+        let put = |n: u32, when| spec(ControlKind::LinkPut(n), u64::from(n), when);
+        ops.schedule(&params, &mut rng, OpId(1), 0, put(7, When::Delayed))?;
+        let due = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+        assert_eq!(ops.take_due(due).len(), 1);
+        ops.answered(&params, &mut rng, OpId(1), due.saturating_add(1_000))?;
+        ops.schedule(
+            &params,
+            &mut none,
+            OpId(2),
+            due.saturating_add(2_000),
+            put(7, When::Delayed),
+        )?;
+        assert_eq!((ops.len(), ops.kind_of(OpId(2))), (1, None), "waiting");
+        let again = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+        assert_eq!(ops.take_due(again).len(), 1);
+        ops.schedule(&params, &mut none, OpId(3), again, put(7, When::Prompt))?;
+        assert_eq!((ops.len(), ops.kind_of(OpId(3))), (1, None), "running");
+        ops.schedule(&params, &mut rng, OpId(4), again, put(8, When::Delayed))?;
+        assert_eq!(ops.len(), 2, "another link data");
+        Ok(())
+    }
+
+    /// UA2 — Q304 (EXT3b-4; V-EXT3b-34 T4-2): with an owner query and a `LINK_PUT` of one link data waiting, ten more puts and a second query add nothing; a query that runs does not absorb its successor.
+    #[test]
+    fn owner_query_joins_only_a_waiting_query() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let (mut rng, mut ops) = (TimingRng::seeded(44), ControlOps::new());
+        let (query, put) = (
+            spec(ControlKind::LinkGetOwner(7), 7, When::Delayed),
+            spec(ControlKind::LinkPut(7), 7, When::Delayed),
+        );
+        ops.schedule(&params, &mut rng, OpId(1), 0, query)?;
+        for id in 2..=12_u64 {
+            ops.schedule(&params, &mut rng, OpId(id), 0, put)?;
+        }
+        ops.schedule(&params, &mut rng, OpId(13), 0, query)?;
+        assert_eq!(ops.len(), 2);
+        let at = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+        let started: Vec<OpId> = ops.take_due(at).iter().map(|o| o.id).collect();
+        assert_eq!(started, vec![OpId(1)]);
+        ops.schedule(&params, &mut rng, OpId(14), at, query)?;
+        assert_eq!(ops.len(), 3, "the successor of a running query is queued");
+        Ok(())
+    }
+
     /// Q301 sweep: `schedule_drawn` with the delay the caller drew queues exactly what `schedule` of a `When::Delayed`
     /// operation queues, also behind a waiting related operation and after the first one started.
     #[test]
@@ -525,6 +676,12 @@ mod tests {
         let d = a.due_of(OpId(1)).ok_or(Unavailable)?;
         assert_eq!(a.take_due(d), b.take_due(d));
         assert_eq!(a.due_of(OpId(2)), b.due_of(OpId(2)));
+        let d2 = a.due_of(OpId(2)).ok_or(Unavailable)?;
+        assert_eq!(a.take_due(d2), b.take_due(d2));
+        let s = spec(ControlKind::QueueNew(QueueId(1)), 7, When::Delayed);
+        a.schedule(&params, &mut by_rng, OpId(3), 0, s)?;
+        b.schedule_drawn(OpId(3), 0, s, drawn.uniform(lo, hi)?);
+        assert_eq!(a.due_of(OpId(3)), b.due_of(OpId(3)));
         Ok(())
     }
 

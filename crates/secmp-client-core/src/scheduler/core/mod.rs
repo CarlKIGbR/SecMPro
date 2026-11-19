@@ -297,6 +297,8 @@ struct World {
     next_frame: u64,
     next_key: u64,
     next_op: u64,
+    /// Created spares whose registration found no randomness (`Scheduler::pool_queue_ready`; EXT3b-3): still creations under way in the pool, registered at a later `work` pass, one attempt per pass, without a second `QUEUE_NEW`.
+    parked: Vec<(QueueId, RecvCap)>,
     overruns: u64,
     /// `frame_written` calls on an up link that named no handed-out frame or not the oldest one
     /// ([`Scheduler::unmatched_written`]).
@@ -1200,11 +1202,24 @@ impl World {
         Ok(true)
     }
 
-    fn top_up_pool(&mut self, now: u64) -> Result<(), SchedError> {
-        let missing = self.pool.missing();
-        let delays = self.draw_top_up(&missing)?;
-        self.apply_top_up(now, &missing, delays);
-        Ok(())
+    /// `missing` capped per relay by the entries its `FETCH_MULTI` link has left, in a mode with one (spec D.2: at most [`FETCH_MULTI_LIMIT`]; EXT3b-3, Q304): a created spare must be admitted (`Scheduler::check_balanced` counts every recv queue of the relay), so the creations under way count too. Strict mode has no such link: `missing` as it is.
+    fn room_for(&self, missing: Vec<(RelayId, usize)>) -> Vec<(RelayId, usize)> {
+        if self.params.slot_ms(self.effective_mode()).is_none() {
+            return missing;
+        }
+        missing
+            .into_iter()
+            .filter_map(|(relay, need)| {
+                let held = self
+                    .recvs
+                    .iter()
+                    .filter(|r| r.relay == relay)
+                    .count()
+                    .saturating_add(self.pool.pending_on(relay));
+                let need = need.min(FETCH_MULTI_LIMIT.saturating_sub(held));
+                (need > 0).then_some((relay, need))
+            })
+            .collect()
     }
 
     /// The refill's delays `U[1 min, 60 min]`, one per creation `missing` asks for, drawn before anything changes (Q301): the
@@ -1296,6 +1311,7 @@ impl Scheduler {
                 next_frame: 0,
                 next_key: 0,
                 next_op: 0,
+                parked: Vec::new(),
                 overruns: 0,
                 unmatched_written: 0,
                 last_now: 0,
@@ -1624,12 +1640,35 @@ impl Scheduler {
         period_ms: u64,
         pool: bool,
     ) -> Result<(), SchedError> {
+        let plan = self.plan_recv(id, relay, period_ms, pool)?;
+        self.push_recv(now, (id, relay, period_ms, pool), cap, plan);
+        Ok(())
+    }
+
+    /// The checks and the drawn link plan of the recv queue `id` about to be added (Q301: every draw before any change).
+    fn plan_recv(
+        &mut self,
+        id: QueueId,
+        relay: RelayId,
+        period_ms: u64,
+        pool: bool,
+    ) -> Result<Vec<(Spec, u64)>, SchedError> {
         if !self.world.params.period_valid(period_ms) {
             return Err(SchedError::BadPeriod);
         }
         let mode = self.world.effective_mode();
         self.check_balanced(relay, Some((period_ms, !pool)), mode)?;
-        let plan = self.missing_links(Some((id, relay, true)), None)?;
+        self.missing_links(Some((id, relay, true)), None)
+    }
+
+    /// Register the recv queue `id` with the links of a plan of [`Scheduler::plan_recv`]; cannot fail.
+    fn push_recv(
+        &mut self,
+        now: u64,
+        (id, relay, period_ms, pool): (QueueId, RelayId, u64, bool),
+        cap: RecvCap,
+        plan: Vec<(Spec, u64)>,
+    ) {
         self.world.recvs.push(RecvQ {
             id,
             relay,
@@ -1640,7 +1679,23 @@ impl Scheduler {
             recreating: false,
         });
         self.add_links(now, plan);
-        Ok(())
+    }
+
+    /// The created spares whose registration found no randomness, once more (EXT3b-3, Q304): one attempt each; one that fails again waits for the next pass. Nothing is sent: the queue exists on the relay.
+    fn register_parked(&mut self, now: u64) {
+        let period = self.world.params.p_pool_ms;
+        for (queue, cap) in core::mem::take(&mut self.world.parked) {
+            let Some(relay) = self.world.pool.pending_relay(queue) else {
+                continue;
+            };
+            match self.plan_recv(queue, relay, period, true) {
+                Ok(plan) => {
+                    self.push_recv(now, (queue, relay, period, true), cap, plan);
+                    self.world.pool.created(queue);
+                }
+                Err(_) => self.world.parked.push((queue, cap)),
+            }
+        }
     }
 
     /// Stop sending to / receiving on a queue; its link ends.
@@ -1925,8 +1980,12 @@ impl Scheduler {
     /// # Errors
     /// [`SchedError::Unavailable`].
     pub fn manage_pool(&mut self, now: u64, relay: RelayId) -> Result<(), SchedError> {
+        // Q301 (EXT3b-5, Q304): the refill is drawn before the relay is managed — a failed draw changes nothing — then applied through a path that cannot fail
+        let missing = self.world.room_for(self.world.pool.missing_with(relay));
+        let delays = self.world.draw_top_up(&missing)?;
         self.world.pool.manage(relay);
-        self.world.top_up_pool(now)
+        self.world.apply_top_up(now, &missing, delays);
+        Ok(())
     }
 
     /// Whether the pool still creates the spare `queue` (its `QUEUE_NEW` is scheduled or running).
@@ -1942,6 +2001,7 @@ impl Scheduler {
     }
 
     /// The host created the queue of a `QueueNew(queue)` operation: it is a spare, fetched at `P_POOL`.
+    /// Without randomness it stays a creation under way and is registered at a later `work` pass (EXT3b-3, Q304): `Ok`.
     ///
     /// # Errors
     /// [`SchedError::UnknownQueue`] if `queue` was not a pool creation; the add errors.
@@ -1958,7 +2018,16 @@ impl Scheduler {
             .ok_or(SchedError::UnknownQueue)?;
         let period = self.world.params.p_pool_ms;
         // admitted first: a refused queue (more than 32 entries) leaves the pool as it was
-        self.add_recv_with_id(now, queue, relay, cap, period, true)?;
+        let plan = match self.plan_recv(queue, relay, period, true) {
+            Ok(plan) => plan,
+            // EXT3b-3 (Q304): the queue exists on the relay; without randomness it waits for a later pass, never created twice
+            Err(SchedError::Unavailable) => {
+                self.world.parked.push((queue, cap));
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        self.push_recv(now, (queue, relay, period, true), cap, plan);
         self.world.pool.created(queue);
         Ok(())
     }
@@ -2043,7 +2112,9 @@ impl Scheduler {
             return Ok((None, Vec::new()));
         };
         let end = self.plan_recv_period(now, queue, announced_ms, true)?;
-        let missing = self.world.pool.missing_after_take(relay, queue);
+        let missing = self
+            .world
+            .room_for(self.world.pool.missing_after_take(relay, queue));
         let delays = self.world.draw_top_up(&missing)?;
         // nothing below can fail
         let handed = self.world.pool.take_named(relay, queue);
@@ -2056,7 +2127,14 @@ impl Scheduler {
         Ok((Some(queue), core::mem::take(&mut self.world.out)))
     }
 
+    /// The control operations' randomness, replaced (tests only; EXT3b-3: a schedule that finds none).
+    #[cfg(test)]
+    pub(crate) fn set_control_rng(&mut self, rng: TimingRng) {
+        self.world.ctl = rng;
+    }
+
     /// Queue a control operation (spec §10.6 (2)).
+    /// A `LINK_PUT` or owner-status `LINK_GET` that joins the operation already queued for its link data (Q304, `ControlOps::coalesced`) returns that operation's id; no id is taken and nothing is drawn.
     ///
     /// # Errors
     /// [`SchedError::Unavailable`].
@@ -2068,6 +2146,10 @@ impl Scheduler {
         related: u64,
         when: When,
     ) -> Result<OpId, SchedError> {
+        // Q304 (EXT3b-4): it joins the link data's waiting or running operation
+        if let Some(op) = self.world.control.coalesced(kind, relay) {
+            return Ok(op);
+        }
         let op = self.world.new_op_id();
         self.world.control.schedule(
             &self.world.params,
@@ -2120,7 +2202,7 @@ impl Scheduler {
         Ok(())
     }
 
-    /// The relay answered the operation's command with an `ERR` (Q300, EXT3-4): it is queued again as a fresh delayed
+    /// The link was up and no answer was committed (Q300 phase rule, M7-S4d): it is queued again as a fresh delayed
     /// operation (spec §10.6 (2)).
     ///
     /// # Errors
@@ -2192,6 +2274,8 @@ impl Scheduler {
     /// start. Nothing here writes a frame.
     fn work_pass<S: CellSource>(&mut self, now: u64, source: &mut S) -> Result<(), SchedError> {
         self.world.last_now = self.world.last_now.max(now);
+        // EXT3b-3 (Q304): a created spare that found no randomness, once per pass
+        self.register_parked(now);
         let (world, links) = (&mut self.world, &mut self.links);
         World::begin_work(links);
         let held = core::mem::take(&mut world.deferred);
@@ -3401,10 +3485,161 @@ mod tests {
         assert_eq!(sched.world.control.len(), 0);
         assert!(!sched.pool_pending(QueueId(0)));
         assert_eq!(sched.world.next_queue, 0);
+        assert!(
+            sched.world.pool.missing().is_empty(),
+            "the relay is not managed after a failed draw"
+        );
         sched.world.ctl = TimingRng::seeded(44);
         sched.manage_pool(0, RelayId(1)).map_err(|_| "retry")?;
         assert_eq!(sched.world.control.len(), 2);
         assert!(sched.pool_pending(QueueId(0)) && sched.pool_pending(QueueId(1)));
+        Ok(())
+    }
+
+    /// UA3 — Q304 (EXT3b-4): `schedule_control` and `owner_status` of a `LINK_PUT` whose link data has one waiting return that operation's id: no operation, no id and no draw is added.
+    #[test]
+    fn schedule_control_returns_the_waiting_link_put() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(46));
+        let first = sched
+            .schedule_control(0, ControlKind::LinkPut(7), RelayId(0), 7, When::Delayed)
+            .map_err(|_| "first")?;
+        let draws = sched.world.ctl.draws();
+        let again = sched
+            .schedule_control(1, ControlKind::LinkPut(7), RelayId(0), 7, When::Delayed)
+            .map_err(|_| "again")?;
+        let answer = sched
+            .owner_status(2, RelayId(0), 7, false, false, false)
+            .map_err(|_| "owner")?;
+        assert_eq!((again, answer), (first, Some(first)));
+        assert_eq!(
+            (
+                sched.world.control.len(),
+                sched.world.next_op,
+                sched.world.ctl.draws()
+            ),
+            (1, 1, draws)
+        );
+        Ok(())
+    }
+
+    /// The first `QueueNew` control output of `outs`: its operation and queue (T3-1, T3-2).
+    fn queue_new(outs: &[Output]) -> Result<(crate::scheduler::types::OpId, QueueId), Fail> {
+        outs.iter()
+            .find_map(|o| match o {
+                Output::Control {
+                    op,
+                    kind: ControlKind::QueueNew(q),
+                    ..
+                } => Some((*op, *q)),
+                _ => None,
+            })
+            .ok_or("no QueueNew")
+    }
+
+    /// T3-1 — EXT3b-3 (V-EXT3b-34 T3-1): a created spare whose registration finds no randomness stays a creation under way, nothing is registered, and a later pass with randomness registers it — one attempt per pass, no second `QUEUE_NEW`.
+    #[test]
+    fn pool_queue_ready_without_randomness_registers_at_a_later_pass() -> Result<(), Fail> {
+        const T: u64 = 3_600_000;
+        let params = Params {
+            phase_max_ms: 0,
+            pool_target: 1,
+            ..Params::default()
+        };
+        let (mut sched, mut src) = (
+            Scheduler::new(params, Mode::Strict, TimingRng::seeded(41)),
+            Dummies(0),
+        );
+        sched
+            .manage_pool(0, RelayId(1))
+            .map_err(|_| "manage pool")?;
+        let (op, spare) = queue_new(&sched.poll(T, &mut src).map_err(|_| "poll 1")?)?;
+        let cap = RecvCap::from_seed(&SecretBytes::from_slice(&[0x52; 32]).map_err(|_| "seed")?)
+            .map_err(|_| "cap")?;
+        sched.world.rng = TimingRng::failing();
+        assert_eq!(sched.pool_queue_ready(T, spare, cap), Ok(()));
+        assert!(!sched.has_queue(spare) && sched.pool_pending(spare));
+        sched.control_done(op);
+        sched
+            .poll(T.saturating_add(1), &mut src)
+            .map_err(|_| "poll without randomness")?;
+        assert!(
+            !sched.has_queue(spare) && sched.pool_pending(spare),
+            "one attempt per pass"
+        );
+        sched.world.rng = TimingRng::seeded(42);
+        sched
+            .poll(T.saturating_add(2), &mut src)
+            .map_err(|_| "poll 2")?;
+        assert!(sched.has_queue(spare) && !sched.pool_pending(spare));
+        assert_eq!(
+            (sched.pool_spares(RelayId(1)), sched.world.control.len()),
+            (1, 0),
+            "no second QUEUE_NEW"
+        );
+        let ids = connects(
+            &sched
+                .poll(T.saturating_add(3), &mut src)
+                .map_err(|_| "poll 3")?,
+        );
+        assert_eq!(ids.len(), 1, "the spare is fetched");
+        Ok(())
+    }
+
+    /// T3-2 — EXT3b-3 (V-EXT3b-34 T3-2; spec D.2): in Balanced the pool plans no creation the relay's `FETCH_MULTI` link has no entry for: 31 queues leave room for one spare, and handing it out (it stays an entry) plans no refill.
+    #[test]
+    fn pool_refill_respects_fetch_multi_entries() -> Result<(), Fail> {
+        const T: u64 = 3_600_000;
+        let (mut sched, mut src) = (
+            Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(45)),
+            Dummies(0),
+        );
+        let cap = |n: u8| -> Result<RecvCap, Fail> {
+            RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?)
+                .map_err(|_| "cap")
+        };
+        for n in 1..=31_u8 {
+            sched
+                .add_recv_queue(0, RelayId(1), cap(n)?, 80_000)
+                .map_err(|_| "queue")?;
+        }
+        sched
+            .manage_pool(0, RelayId(1))
+            .map_err(|_| "manage pool")?;
+        assert_eq!(sched.world.control.len(), 1, "room for one spare");
+        let (op, spare) = queue_new(&sched.poll(T, &mut src).map_err(|_| "poll")?)?;
+        sched
+            .pool_queue_ready(T, spare, cap(0x55)?)
+            .map_err(|_| "ready")?;
+        sched.control_done(op);
+        let (taken, _) = sched
+            .take_pool_queue_id(T.saturating_add(1), RelayId(1), spare, 80_000, &mut src)
+            .map_err(|_| "take")?;
+        assert_eq!(
+            (taken, sched.world.control.len()),
+            (Some(spare), 0),
+            "no refill beyond 32 entries"
+        );
+        Ok(())
+    }
+
+    /// S5-1 — Q301 (XREVIEW-M7-S5 S5-1): a queue add whose phase draw fails registers nothing — neither a recv queue nor a send queue, no link.
+    #[test]
+    fn add_without_randomness_registers_nothing() -> Result<(), Fail> {
+        let (mut sched, _src) = two_relays_up()?;
+        let before = sched.links();
+        let seed = SecretBytes::from_slice(&[0x54; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        sched.world.rng = TimingRng::failing();
+        assert_eq!(
+            sched.add_recv_queue(1, RelayId(3), cap, 10_000).err(),
+            Some(SchedError::Unavailable)
+        );
+        let added = sched.add_send_queue_route(1, QueueId(9), RelayId(3), ([5; 16], &seed), 10_000);
+        assert_eq!(added.err(), Some(SchedError::Unavailable));
+        assert!(!sched.has_queue(QueueId(2)) && !sched.has_queue(QueueId(9)));
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
         Ok(())
     }
 }

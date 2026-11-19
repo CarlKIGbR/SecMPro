@@ -1017,12 +1017,12 @@ fn creations(sched: &mut Scheduler, now: u64) -> Vec<(OpId, QueueId)> {
 }
 
 /// VD-M6-A-16 `pool_admission_respects_fetch_multi_limit`: a pool spare is an entry of the `FETCH_MULTI` like any queue
-/// (spec D.2: at most 32); only the rate sum leaves it out. With 32 ordinary queues the 33rd entry — a spare whose
+/// (spec D.2: at most 32); only the rate sum leaves it out. With 30 ordinary queues two spares are planned; two more fill the relay before they are created, and the 33rd entry — a spare whose
 /// creation completes — is refused, and the pool and the queues are as they were.
 #[test]
 fn pool_admission_respects_fetch_multi_limit() {
     let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(0x516));
-    for n in 0..32 {
+    for n in 0..30 {
         sched
             .add_recv_queue(0, RelayId(0), fresh_recv_cap(n), 80_000)
             .unwrap();
@@ -1030,6 +1030,12 @@ fn pool_admission_respects_fetch_multi_limit() {
     sched.manage_pool(0, RelayId(0)).unwrap();
     let made = creations(&mut sched, 10_000_000);
     assert_eq!(made.len(), 2);
+    // M7-S7 (EXT3b-3, Q304): the pool plans no creation beyond the 32 entries; two ordinary queues fill the relay after the creations were planned
+    for n in 30..32 {
+        sched
+            .add_recv_queue(10_000_000, RelayId(0), fresh_recv_cap(n), 80_000)
+            .unwrap();
+    }
     let links = sched.links().len();
     for (op, queue) in made {
         let refused = sched.pool_queue_ready(10_000_000, queue, fresh_recv_cap(1000 + queue.0));

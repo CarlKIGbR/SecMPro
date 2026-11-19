@@ -159,6 +159,25 @@ impl QueuePool {
         }
     }
 
+    /// Creations under way on `relay` (EXT3b-3: each will be an entry of its `FETCH_MULTI` link).
+    #[must_use]
+    pub fn pending_on(&self, relay: RelayId) -> usize {
+        self.relays
+            .iter()
+            .find(|r| r.relay == relay)
+            .map_or(0, |r| r.pending.len())
+    }
+
+    /// [`QueuePool::missing`] as it will be once `relay` is managed; nothing changes (Q301, EXT3b-5: the refill is drawn before the relay is managed). A relay not managed yet comes last, as [`QueuePool::manage`] adds it.
+    #[must_use]
+    pub fn missing_with(&self, relay: RelayId) -> Vec<(RelayId, usize)> {
+        let mut out = self.missing();
+        if self.target > 0 && !self.relays.iter().any(|r| r.relay == relay) {
+            out.push((relay, self.target));
+        }
+        out
+    }
+
     /// Spares on `relay`.
     #[must_use]
     pub fn spares(&self, relay: RelayId) -> usize {

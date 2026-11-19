@@ -843,7 +843,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.invitations.owner_query_args(n, &self.core.clock)
     }
 
-    /// The relay answered the consuming `LINK_GET` of link data `n` with an `ERR` (Q300, EXT3-4): the accept ends with
+    /// The consuming `LINK_GET` of link data `n` ended with no answer committed after its link was up — a relay `ERR` or any other end (Q300 phase rule, M7-S4d) — so the accept ends with
     /// `Event::InviteFailed(InviteReject::Invalid)`, as for link data that is gone, and is not retried.
     pub fn accept_failed(&mut self, n: u32) {
         self.waiting.remove(&n);

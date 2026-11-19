@@ -276,7 +276,7 @@ pub enum ControlResult {
     /// Done, also with nothing to do and no link opened; the effect goes to the scheduler.
     Done(ControlEffect),
     /// The attempt ended before the link was up (the host's prepare step, a local check of the material, the connect, the
-    /// handshake, the timeout before `RELAYINFO`): no command was sent; retried after the back-off (CO-06).
+    /// handshake, the timeout before the handshake is done): no command was sent; retried after the back-off (CO-06).
     LinkFailed {
         /// The link closed before `RELAYINFO` (LR-03).
         closed_before: bool,
@@ -1099,6 +1099,7 @@ where
                         match effect {
                             ControlEffect::None => {}
                             ControlEffect::PoolQueueReady(queue, cap) => {
+                                // EXT3b-3 (Q304): without randomness the scheduler keeps the spare and registers it at a later pass; another refusal (more than 32 entries) leaves it pending (HB-30)
                                 let _ = sched.pool_queue_ready(now, queue, cap);
                             }
                             ControlEffect::OwnerStatus {
@@ -1117,7 +1118,7 @@ where
                     ControlResult::LinkFailed { closed_before } => {
                         sched.control_failed(now, op, closed_before)?;
                     }
-                    // Q300 (EXT3-4): a fresh delayed operation, also when it first ran at once (spec §10.6 (2))
+                    // Q300 phase rule (M7-S4d): the link was up and no answer was committed — a fresh delayed operation, also when it first ran at once (spec §10.6 (2))
                     ControlResult::Answered => sched.control_answered(now, op)?,
                 }
                 Vec::new()

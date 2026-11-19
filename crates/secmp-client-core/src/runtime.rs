@@ -230,6 +230,23 @@ fn take_step(
     }
 }
 
+/// Queue `spec` on the scheduler (spec §10.6 (2)); without randomness nothing changed (Q301) and it is kept in `kept`, queued again at the next boundary (EXT3b-3, Q304; as a take, `TakeStep::Retry`). Any other refusal is returned.
+fn schedule_or_keep(
+    sched: &mut Scheduler,
+    now: u64,
+    spec: crate::scheduler::control::OpSpec,
+    kept: &mut Vec<crate::scheduler::control::OpSpec>,
+) -> Result<(), crate::scheduler::core::SchedError> {
+    match sched.schedule_control(now, spec.kind, spec.relay, spec.related, spec.when) {
+        Ok(_) => Ok(()),
+        Err(crate::scheduler::core::SchedError::Unavailable) => {
+            kept.push(spec);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// The scheduler view the core is left with at the start: what the hub keeps of the recv-queue periods (`Hub::sync_view`,
 /// the rate bound of a rotation, spec §10.2) and the transport the user chose.
 fn start_view<C: Clock, S: crate::sessions::actor::EntropySource>(
@@ -689,7 +706,7 @@ enum ControlAnswer {
     OwnerStatus(u32, crate::invitations::OwnerStatus),
     /// The link data `n` was consumed: its blob, `None` if it was gone.
     Consumed(u32, Option<Vec<u8>>),
-    /// The relay answered the consuming `LINK_GET` of link data `n` with an `ERR`: the accept ends.
+    /// The consuming `LINK_GET` of link data `n` ended with no answer committed after its link was up — a relay `ERR` or any other end (Q300 phase rule, M7-S4d; `ControlRunner::unanswered`): the accept ends.
     AcceptFailed(u32),
 }
 
@@ -896,6 +913,8 @@ struct Engine<P: Providers> {
     known: BTreeSet<i64>,
     direct: bool,
     takes: Vec<Take>,
+    /// Control operations the scheduler could not queue for want of randomness: queued again at the next boundary (EXT3b-3).
+    unscheduled: Vec<crate::scheduler::control::OpSpec>,
     /// What waits for the hub's lock ([`Backlog`]).
     backlog: Backlog<Pending>,
     /// The mode last set on the scheduler (a mode step or a revert that worked); a `SetSettings` steps from it.
@@ -1240,9 +1259,7 @@ impl<P: Providers> Engine<P> {
         match p {
             Pending::Action(action) => self.apply_action(action, hub),
             Pending::Op(op) => {
-                let _ = self
-                    .sched
-                    .schedule_control(now, op.kind, op.relay, op.related, op.when);
+                let _ = schedule_or_keep(&mut self.sched, now, op, &mut self.unscheduled);
             }
             Pending::Revert(previous) => {
                 if let Some(source) = hub
@@ -1287,10 +1304,9 @@ impl<P: Providers> Engine<P> {
             ) => self
                 .sched
                 .add_send_queue_route(now, queue, relay, (sid, &seed), period_ms),
-            (Action::Control(spec), _) => self
-                .sched
-                .schedule_control(now, spec.kind, spec.relay, spec.related, spec.when)
-                .map(|_| ()),
+            (Action::Control(spec), _) => {
+                schedule_or_keep(&mut self.sched, now, spec, &mut self.unscheduled)
+            }
             (Action::Remove { queue }, Some(source)) => self
                 .sched
                 .remove_queue(now, queue, source)
@@ -1334,6 +1350,14 @@ impl<P: Providers> Engine<P> {
             TakeStep::Refused => {
                 let _ = self.notices.send(Notice::Refused);
             }
+        }
+    }
+
+    /// The control operations the scheduler could not queue for want of randomness, once more (EXT3b-3, Q304); one attempt each per boundary.
+    fn retry_controls(&mut self) {
+        let now = self.clock.mono_ms();
+        for spec in core::mem::take(&mut self.unscheduled) {
+            let _ = schedule_or_keep(&mut self.sched, now, spec, &mut self.unscheduled);
         }
     }
 
@@ -1450,6 +1474,7 @@ impl<P: Providers> Engine<P> {
             if job.is_none() {
                 self.drain_backlog();
                 self.retry_takes();
+                self.retry_controls();
                 let settings = match self.loop_calls(&mut pending) {
                     LoopCall::Quit(reply) => {
                         let visit = self.visit();
@@ -1550,6 +1575,7 @@ fn engine<P: Providers>(
         known: BTreeSet::new(),
         direct,
         takes: Vec::new(),
+        unscheduled: Vec::new(),
         backlog: Backlog(VecDeque::new()),
         sched_mode: mode,
         inflight: None,
@@ -2601,6 +2627,35 @@ mod tests {
         );
         assert!(matches!(same, Some((Mode::Strict, Ok(v))) if v.is_empty()));
         assert_eq!(sched.effective_mode(), Mode::Strict);
+        Ok(())
+    }
+
+    /// T3-3 — EXT3b-3 (V-EXT3b-34 T3-3): a control operation the scheduler cannot queue for want of randomness is kept and nothing is queued; the next attempt with randomness queues it.
+    #[test]
+    fn unscheduled_control_op_is_kept_for_the_next_boundary()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::scheduler::control::{OpSpec, When};
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(7));
+        sched.set_control_rng(TimingRng::failing());
+        let spec = OpSpec {
+            kind: ControlKind::LinkGetOwner(5),
+            relay: RelayId(1),
+            related: 5,
+            when: When::Delayed,
+        };
+        let mut kept = Vec::new();
+        schedule_or_keep(&mut sched, 0, spec, &mut kept)?;
+        assert_eq!((kept.clone(), sched.next_deadline()), (vec![spec], None));
+        sched.set_control_rng(TimingRng::seeded(8));
+        for again in core::mem::take(&mut kept) {
+            schedule_or_keep(&mut sched, 1, again, &mut kept)?;
+        }
+        assert!(kept.is_empty());
+        assert!(
+            sched
+                .next_deadline()
+                .is_some_and(|t| (60_001..=3_600_001).contains(&t))
+        );
         Ok(())
     }
 

@@ -23,7 +23,7 @@ G7-15a, G7-16, G7-18, K7-02, K7-03, FZ-01, FZ-02.
 | A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
 | A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes with the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
 | B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC closed @ `923b9ee` (SC-01…SC-10, K7-03b; G7-15b opened); B-1…B-3 built (Q146); B-4 built @ `1318baa` (verifier: DO NOT PUSH, 3 B/16 M); B-4c built @ `ab72776` (ci-full `e80e11c`); Phase B closes on the reviewer's verdict |
-| C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) |
+| C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) — superseded: built in C-1…C-5, corrected by S-1, S-2, S-2b; see `## Phase C close (M7-C5)` and `## D-11` |
 
 ## 2. What was built
 
@@ -100,7 +100,7 @@ workspace builds without `kat` (`cargo build --workspace --all-targets`). The A-
 
 ## 3. Evidence per acceptance criterion
 
-Phase A, A-1 (numbers; raw files under `docs/reviews/M07-evidence/`). Phase B/C rows: not yet built; A-2…A-4 rows below.
+Phase A, A-1 (numbers; raw files under `docs/reviews/M07-evidence/`). Phase B/C rows: not yet built; A-2…A-4 rows below. (Superseded: the Phase B and C rows were built later; the Phase C rows and their evidence are in `## Phase C close (M7-C5)`, followed by `## S-1`, `## S-2`, `## S-2b` and `## D-11`.)
 
 | Row | Test / command | Result |
 |---|---|---|
@@ -525,7 +525,7 @@ is written only on `confirm`, never into a folder of `CLOUD_FOLDERS` without `fo
 
 **Waiting (owner).** A-2 needs "ADR-055 accepted" and the vet records (A0 §7: `argon2` 0.6.0, `blake2` 0.11.0 in the
 zero-exemption crypto closure; `openssl-sys` 0.9.117, `openssl-src` 300.6.1+3.6.3, `password-hash` 0.6.1, `phc` 0.6.1);
-A-4 needs "ADR-053 accepted".
+A-4 needs "ADR-053 accepted". (Superseded: ADR-055 and ADR-053 are accepted, `docs/08-decisions.md:1025` and `:919`; A-2 is done @ `bf54d98` and A-4 built @ `c3c1dcf`, §1; the owner items open at D-11 are listed in `## D-11`.)
 
 **Waiting (date).** G7-00: first commit after 2026-10-30 02:00 UTC; the cooldown gate is red from 2026-10-31 00:00 UTC
 until it lands.
@@ -2347,7 +2347,7 @@ One link per client (the connection with 360 departures, one every 10 s over the
 | CL-14 | C-2 (C-2f) | `cli_it::stdin_commands_are_total` (fixed seed `CL14_SEED`) | evidenced |
 | G7-21 | C-1 | `xtask::expect::tests::cli_dependency_row` | evidenced |
 | OPEN-M7-B-14 | C-1 | C-1 commit `2839fa9` (per §C-1) | evidenced |
-| D-B55 (g) | C-2 | `daemon::repeats` | evidenced |
+| D-B55 (g) | C-2 | `daemon::tests::removal_events_are_printed_once` (exercises `daemon::repeats`; `crates/secmp-cli/src/daemon.rs:627`; corrected in D-11 from `daemon::repeats`) | evidenced |
 | D4′ pool bridge | C-1 | `hub::tests::pool_material_persisted_before_queue_new`, `harness::m7_pool::adopted_spares_fetched_at_pool_period_no_queue_new`, `harness::m7_pool::invitation_takes_named_spare_refill_delayed` | evidenced |
 | E2-01 | C-3 | `m7_e2e::two_profiles_invite_by_uri_sas_match` | evidenced |
 | E2-08 | C-3 | same test (`--direct`: TLS group, version and ALPN refused otherwise on both ends) | evidenced |
@@ -2377,7 +2377,7 @@ One link per client (the connection with 360 departures, one every 10 s over the
 E2-02: 40 messages each way over the CLI (Q291); 500 in E2-02v.
 
 **(2) M7 acceptance (`docs/07`) against the evidence.**
-- "E2E green in CI": no CI run of the C-3…C-5 heads exists; the `harness` job is not required (G7-20, owner-pending). ci-fast was green on the heads of C-2b, C-3, C-4 and C-4b.
+- "E2E green in CI": no CI run of the C-3…C-5 heads exists (superseded: PR run 44313775321 on head `f73e2e0`, the C-4b evidence commit, ended job `harness` with success, see `## C-4b`; corrected in D-11); the `harness` job is not required (G7-20, owner-pending). ci-fast was green on the heads of C-2b, C-3, C-4 and C-4b.
 - "nightly ⚙ over Tor": E2-07, owner-pending (relay host, dispatch job).
 - "500 messages with restarts" over the CLI: 40 each way (Q291); 500 each way in virtual time (E2-02v).
 - Forensic: FO-01 (with the planted-canary control, C3-2) and FO-01a (HB-44 and HB-45 open).
@@ -2390,7 +2390,7 @@ E2-02: 40 messages each way over the CLI (Q291); 500 in E2-02v.
 
 ## C-5b (WEISUNG M7-C5b; modell=claude-sonnet-5-5)
 
-Docs only. The three one-departure connections of the E2-10 evidence are named in `## C-5` (spare-pool refills of the three spares taken during setup, all in the active phase by chance; Q295, HB-52); the Phase C close row of E2-10 says so; `## C-4b` gets the Windows evidence of PR run 44313775321 (Q288, Q294); HB-49…HB-52 (review items C4-1, C4-3, C4-4, C5-1) and Q295 are added. No code, no TEST-SPEC edit, no evidence file changed.
+Docs only. The three one-departure connections of the E2-10 evidence are named in `## C-5` (spare-pool refills of the three spares taken during setup, all in the active phase by chance — the reviewer's explanation, not measured, see Q295 as corrected in D-11; Q295, HB-52); the Phase C close row of E2-10 says so; `## C-4b` gets the Windows evidence of PR run 44313775321 (Q288, Q294); HB-49…HB-52 (review items C4-1, C4-3, C4-4, C5-1) and Q295 are added. No code, no TEST-SPEC edit, no evidence file changed.
 
 Cross-review verdicts: C-3 PUSH 0/0/2/8, C-4 PUSH 0/0/4/7, C-5 PUSH 0/0/2/5.
 
@@ -2410,7 +2410,7 @@ Gates: `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nexte
 
 **Docs.** Q296 (`OPEN-M7-decided.md`), HB-53 (`HARDENING-BACKLOG.md`). Commits: K1 `05b656f`.
 
-No Kani harness reaches `Scheduler`; the PR's `kani` job is the evidence.
+No Kani harness reaches `Scheduler` (`crates/secmp-client-core/src/kani_proofs.rs:224`), so Kani does not cover this change; the PR's `kani` job can show only that the existing harnesses are unaffected (corrected in D-11, XREVIEW-M7-S1 S1-5).
 
 Deviations: none (the lint-form changes above only).
 
@@ -2420,7 +2420,7 @@ Deviations: none (the lint-form changes above only).
 
 **Finding (review L1-2, V-L1-2).** No production code scheduled `ControlKind::LinkGetOwner`, and its answer (`ControlEffect::OwnerStatus`) reached only `Scheduler::owner_status`, never `Invitations::on_owner_status`. So a `LINK_PUT` lost with the relay was never re-driven (§9.7 (1)) and a link data consumed by someone else was never seen (§5.2).
 
-**Design (Q297).** A chain per open invitation: the first owner-status query `When::Delayed` (U[1 min, 60 min], §10.6 (2)) after the issue's prompt `LINK_PUT`, the next U[1 min, 60 min] after each answer (after a `{0, 0}` answer: after the re-put's due time, not after the answer), a fresh one at every open; none once the invitation is consumed, expired or retired, the link data was seen consumed, or `expires` is within 60 min. Relay-visible per invitation: one `LINK_PUT` at issue; one owner-status `LINK_GET` per U[1 min, 60 min] (mean 30.5 min) of online time until the handshake (a query already queued when it arrives still runs once), the consumption is seen or `expires` − 60 min; one delayed `LINK_PUT` per `{0, 0}`; each on its own one-shot link.
+**Design (Q297).** A chain per open invitation: the first owner-status query `When::Delayed` (U[1 min, 60 min], §10.6 (2)) after the issue's prompt `LINK_PUT`, the next U[1 min, 60 min] after each answer (after a `{0, 0}` answer: after the re-put's due time, not after the answer), a fresh one at every open; none once the invitation is consumed, expired or retired, the link data was seen consumed, or `expires` is within 60 min of the moment the query would be queued (`invitations.rs:877`); the query is then due U[1 min, 60 min] after the latest operation of its link data (`scheduler/control.rs:168-184`), after a `{0, 0}` answer up to 120 min after the answer, so a query can still run after `expires` (corrected in D-11, HB-58). Relay-visible per invitation: one `LINK_PUT` at issue; one owner-status `LINK_GET` per U[1 min, 60 min] (mean 30.5 min) of online time until the handshake (a query already queued when it arrives still runs once), the consumption is seen or `expires` − 60 min (a query queued before that cut can still run after `expires`, HB-58); one delayed `LINK_PUT` per `{0, 0}`; each on its own one-shot link.
 
 **Product change (numstat K1 `8120104`).** `invitations.rs` +84: `Invitations::owner_query`, `owner_queries`, `owner_answer`. `hub.rs` +30/−2: `Hub::new` queues the queries of the open invitations, `Hub::invite` the first one, new `Hub::owner_status`. `runtime.rs` +29/−14: the `LinkGetOwner` arm becomes `HostControl::link_get_owner`.
 
@@ -2458,7 +2458,7 @@ Deviations: none (the lint-form changes above only).
 
 **Orders driven.** The retired order with the relay's real loss (`restart_relay`). The handshake order with the answer injected through the hub instead of a relay loss: the virtual relay can only restart as a whole (`world.rs`, `restart_relay`: no state at all, queues included), which would also drop the invitation queue that the handshake needs.
 
-**Difference from the Weisung's text (flagged).** The retired test asserts "at most one further `LinkGetOwner(n)` start after the retirement", not "none": the query queued together with the re-put still runs once (the Weisung's own §3.2 says so). It ends without a command and its answer never reaches the hub, so the chain stops; the open link is HB-55 (S2-2). The unit tests live in `invitations_tests.rs`, the module file of `invitations.rs` (`#[path]`).
+**Difference from the Weisung's text (flagged).** The retired test asserts "at most one further `LinkGetOwner(n)` start after the retirement", not "none": the query queued together with the re-put still runs once (the Weisung's own §3.2 says so). In the runtime it ends without a command (`link_get_owner` takes `link_put_args`, which skips a RETIRING row: `crates/secmp-client-core/src/runtime.rs:734-739`, `invitations.rs:764-779`) and its answer never reaches the hub; in the virtual driver the `LINK_GET` is sent from the driver's cached material and the answer goes to `Hub::owner_status` (`crates/secmp-testkit/src/harness/driver.rs:1357-1385`), where `owner_answer` finds no open row and queues nothing (`invitations.rs:912-935`). The chain stops either way (corrected in D-11, XREVIEW-M7-S2b S2b-3); the open link is HB-55 (S2-2). The unit tests live in `invitations_tests.rs`, the module file of `invitations.rs` (`#[path]`).
 
 **Docs.** Q298, the wording of Q297 and of the S-2 design paragraph (after `{0, 0}` the next query is drawn after the re-put's due time; a query already queued at the handshake runs once), HB-55, HB-56 (S2-2, S2-3).
 
@@ -2467,3 +2467,29 @@ Deviations: none (the lint-form changes above only).
 Deviations: the assertion above (`<= 1` queries), the unit tests in `invitations_tests.rs`.
 
 **ci-fast** (head `b1f798b`): `ci-fast: PASS`; workspace nextest 1643/1643, harness 333/333 (harness step 1561 s), 0 skipped; evidence `docs/reviews/M07-evidence/s2b-ci-fast.txt`.
+
+## D-11 (WEISUNG M7-D11; modell=claude-sonnet-5-5)
+
+Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, existing evidence file, spec, threat model, `formal/` file, ADR status, gate or CI changed.
+
+**Backlog rows.** HB-54 (XREVIEW-M7-S1 S1-2, S1-6; between HB-53 and HB-55), HB-57 (XREVIEW-M7-S2b S2b-1), HB-58 (S2b-2), HB-59 (S2b-5), HB-60 (OPEN-M7-B-25, which had no row). HB-56's line reference corrected to `runtime.rs:1188` (S2b-4).
+
+**Wording corrections.** Q297 and the `## S-2` design paragraph (no query is queued within 60 min of `expires`, but one queued earlier can still run after it, HB-58); `## S-2b` (the query after the retirement ends without a command in the runtime only; in the virtual driver it is sent and answered; the chain stops either way, S2b-3); Q295 and `## C-5b` (the cause of the three extra E2-10 connections is the reviewer's explanation, not measured, review L6-2); Q296 (a link connecting at the take, a failed connect after it, an unchanged period; S1-1, S1-3, S1-7); `## S-1` (Kani does not cover the change, S1-5); stale lines: §1 row C, the §3 intro, §8 "Waiting (owner)", the D-B55 (g) row of the Phase C close (test name, review L6-3), "E2E green in CI" in Phase C close (2) (review L6-5); the `docs/07` M7 status line (cuts and fix units, review L6-5).
+
+**Carried to the milestone review** (listed, not decided here):
+- R7-6 (condition of the draft M7 review): cross-review the two CLAUDE.md §1.7 convention seams (handshake cells trusted as durable; `Delivered::Committed` from `CellSource`) and consider a witness type. Open; no document in `docs/` recorded it before this line.
+- ADR-058 (owner): `docs/08-decisions.md:1133` reads "Accepted (Reviewer, 2026-11-10, under the owner's delegation of 2026-11-10 …)", while §5 of this report says it awaits the owner's ratification, and `docs/03` §7.7 has no erratum (rev 2.7.1). `docs/08` is not changed here.
+- Mutation gate (review L5-4; owner decision): ADR-047 Amendment 14 (`docs/08-decisions.md:503`) runs `mutants-shard` and `mutants` only on the weekly schedule (`.github/workflows/ci.yml:371-372`, `:444-446`); the build-phase relaxation in `docs/06-engineering-standards.md:169` names M8–M10, not M7; HB-4 tracks the release-gate run. Whether M7 merges without a mutation run at its head is the owner's.
+- OPEN-M7-B-25 (HB-60; owner decision pending).
+- Review minors, each for the milestone review (C-n/F-n), not decided here:
+  - L5-3: `audit bin` passes every `expect::AUDIT_IGNORES` id for every binary (`xtask/src/sbom.rs:107-118`), also ids justified as lock-only or as not linked into that binary (OPEN-M7-B-14 (A)).
+  - L5-2: CL-12 checks each release package alone (`xtask/src/testscan.rs:487-512`), while the SBOM build is one joint `cargo auditable build` (`xtask/src/sbom.rs:166-173`); equivalent today, not by construction.
+  - L6-1: the E2-10 verdict uses KS on inter-departure gaps only; every read's length is replaced by `ks::FRAME` (`crates/secmp-testkit/examples/ks_cli.rs:559`), with no departure-count or bytes-per-departure check (low power).
+  - L34-1: the export body grows by `extend_from_slice` from an empty `Zeroizing` vector (`crates/secmp-store/src/backup.rs:164-167`); a reallocation leaves the earlier sections (the identity secret first) unwiped in freed heap.
+  - L34-2: `unhex` collects into a growing plain `Vec` (`crates/secmp-client-core/src/runtime.rs:426-442`) before the `Zeroizing` wrap (`:456`); the relay reference file is read by `read_text` (`crates/secmp-cli/src/daemon.rs:105-110`) without a size limit or a permission check.
+  - L34-3: `Hub::begin_accept` copies the invitation URI into `waiting: BTreeMap<u32, String>` (`crates/secmp-client-core/src/hub.rs:185`, `:856`), not zeroized.
+  - L1-3: `read_relay_ref` (`crates/secmp-client-core/src/runtime.rs:449-466`) does not check the reference's `akc` against the access key.
+
+**Gates.** `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nextest -p xtask` 330/330.
+
+**ci-fast**: pending (K2).

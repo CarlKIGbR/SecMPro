@@ -148,7 +148,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Obligation from the M4 review (F-M7, C-12).** The transactional store: `PrekeyStore::commit_accept` of the encrypted store stages the OPK deletion and the record's consumption in one store transaction, which the client commits together with the whole `hx::Accepted` (`state`, `peer`, `routes`, `profile`) before it acknowledges any cell of the invitation queue and before it retires that queue; a commit that cannot be made durable is `Error::Unavailable` and changes nothing (R-26). The client retains at most the newest 24 unclassified cells of an invitation queue between `accept` calls, and a complete group is spent after one `accept` (RT-1).
 
-**Status (2026-11-18).** Phases A and B closed; M7-RJ at `4e022a9`; Phase C (CLI, end to end, profile forensic) delivered in units C-1…C-5 except the owner-pending rows E2-07, G7-11, G7-20 and FZ-03 + G7-15c (report § Phase C close); ADR-062 governs the remaining units. Report: `docs/reviews/M07-report.md`.
+**Status (2026-11-18).** Phases A and B closed; M7-RJ at `4e022a9`; Phase C (CLI, end to end, profile forensic) delivered in units C-1…C-5 except the owner-pending rows E2-07, G7-11, G7-20 and FZ-03 + G7-15c (report § Phase C close); ADR-062 governs the remaining units. Added 2026-11-19 (D-11): cuts recorded in the report — E2-02 over the CLI runs 40 messages each way (Q291; 500 each way in virtual time, E2-02v), E2-10 covers direct mode, Balanced, one link per client (Q293); review fix units after Phase C: S-1 (Q296), S-2 (Q297), S-2b (Q298), head `56e86e3`. Report: `docs/reviews/M07-report.md`.
 
 ---
 

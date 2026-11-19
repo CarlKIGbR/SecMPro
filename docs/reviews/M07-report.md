@@ -2640,3 +2640,37 @@ Deviations:
 - The `Op` literal of `schedule_drawn` is `schedule`'s (the fields of `struct Op` are unchanged by S4); the `let base` anchor is the 8-space line in `delayed_due` (WEISUNG M7-S5b).
 - `git grep -c sync_links` prints nothing (zero matches).
 - `two_relays_up` names the send cap `out_cap` (clippy `similar_names`).
+
+## S-6 (BRIEF M7-S6; modell=claude-sonnet-5-5)
+
+**Finding.** EXT3-1 Repro A (external review M7C-EXT3, verified V-EXT3-1; blocker). The export (`runtime.rs` `export_in_job`, run by `hub_job` under the hub's lock) called `Core::export_snapshot` (also the store's lock) → `backup::snapshot` → `Contents::of` → `read_messages` (no limit): the whole history was read and copied while `SharedHub::prepare_cell`/`deliver` (hub lock, then store lock) waited. A hold ≳ `P_q` leaves the next frame unbuilt → `Overrun` → close of every affected send/Balanced link at a moment set by the user (spec §10.1, §10.6 (1); CLAUDE.md §1.4). Q285's "milliseconds" was never measured; the history has no cap.
+
+**Rule (Q302).** No hub job holds the hub's lock for work that grows with the history. Under the locks only the checks, the small tables and the start of one read transaction on a second, `query_only` connection of the store; the history is read in that transaction on the blocking pool. One point in time; byte-identical body; L34-1 kept.
+
+**Change.**
+- `crates/secmp-store/src/store.rs:171` `Store.reader` (declared before `conn`); `:328` the reader's open after the migration (same `open_connection`, then `query_only`); module doc "The reader".
+- `crates/secmp-store/src/backup.rs:259` `HISTORY_HOLD` (feature `kat`); `:563` its hook in `read_messages` (`:536`, now over a `&Connection`); `:383` `Head`, `:392` `Head::of`, `:424` `Head::with`; `:436` `Contents::of`; `snapshot`, `:153` `checked_target`, `:169` `assemble`; `:185` `PendingSnapshot`, `:198` `snapshot_begin`, `:232` `PendingSnapshot::finish`.
+- `crates/secmp-client-core/src/api.rs:807` `Core::export_snapshot` (returns the `PendingSnapshot`); `crates/secmp-client-core/src/runtime.rs:1037` `export_in_job` (the history, the key and the file on the blocking pool).
+
+**Tests.** Red first on the base (`target/fable/s6-red.txt`, `s6-red2.txt`, `s6-red3.txt`):
+- T1 `runtime::tests::export_snapshot_does_not_hold_the_hub_lock`: the cell source and the store answer within 500 ms while an export of 2 000 messages is held in its history read. Red: `Err(Timeout)`.
+- T2 `runtime::tests::send_link_survives_export_hold_longer_than_period`: three preparations 10 s apart, export held 25 s: 0 overruns, 0 late. Red: `[(0, 25011), (25011, 25011), (25011, 25011)]` — overruns 2 (ticks 0 and 1), late 2, 3 ticks. Real time 26.7 s.
+- T3 `runtime::tests::export_commit_during_history_read_is_out_and_imports`: a commit and a delete during the read neither wait nor change the snapshot (deleted row in, new row out); the file imports. Red: `Err(Timeout)`.
+- T4 `backup::tests::export_two_phase_is_the_snapshot`: table and body of `snapshot_begin` + `finish` equal `snapshot`'s byte for byte, the body is one allocation, a second begin is refused, the reader is back. Cannot be red at the base (new API).
+- `export_does_not_stall_the_loop` and `m7_runtime::loop_keeps_running_during_a_slow_call` unchanged and green.
+
+**Not in this unit.** The other hub-job residuals (HB-29, rewritten); Repro B is S-4.
+
+**Gates.**
+1. `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+2. `secmp-store --features kat`: 105 run, 105 passed, 0 skipped; `secmp-client-core --features kat`: 380 run, 380 passed, 0 skipped.
+3. harness `m7_runtime`/`m7_forensic`/`m7_crash`/`m7_restart`/`m7_persist`: 14 run, 14 passed (3 slow), 335 skipped.
+4. `cargo xtask step --strict policy`: PASS.
+
+**ci-fast.** <pending>
+
+Deviations:
+- T2's red numbers differ from the brief's: overruns 2 (tick 1, issued at 25 011 ms, was also late), not 1; the red is the same kind.
+- For the red run the call in `Contents::of` was `read_messages(&store.conn, &stored)` (the signature change of §3.2 (a) was needed to compile the hook); nothing else of the product change was in place.
+- Anchors were checked with `git grep -c -F -e '<anchor>' -- <file>` (same check, no anchor files); each printed `<file>:1`.
+- T4 passes `&mut *home.lock()…?` (the guard does not coerce through `?`); `cargo fmt` laid out the dictated code.

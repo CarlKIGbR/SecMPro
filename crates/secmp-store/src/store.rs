@@ -329,6 +329,13 @@ impl Store {
         reader
             .pragma_update(None, "query_only", true)
             .map_err(|_| Error::Unavailable)?;
+        // S6-3: read back; a reader that is not `query_only` is no reader
+        let q: i64 = reader
+            .query_row("PRAGMA query_only", [], |r| r.get(0))
+            .map_err(|_| Error::Unavailable)?;
+        if q != 1 {
+            return Err(Error::Unavailable);
+        }
         store.reader = Some(reader);
         #[cfg(any(test, feature = "kat"))]
         {

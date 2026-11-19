@@ -180,16 +180,19 @@ fn assemble(target: std::path::PathBuf, contents: &Contents) -> Result<Snapshot>
     })
 }
 
-/// The first half of the runtime's export (M7-S6, Q302): the checked target, the rows besides the history, and the store's
+/// The first half of the runtime's export (M7-S6, Q302): the target path, the rows besides the history, and the store's
 /// reader inside the read transaction [`snapshot_begin`] started. It holds no lock.
 pub struct PendingSnapshot {
-    target: std::path::PathBuf,
+    /// The target path as given; checked in `finish`.
+    path: std::path::PathBuf,
+    /// Overwrite an existing file, as `snapshot`.
+    force: bool,
     head: Head,
     reader: rusqlite::Connection,
 }
 
-/// The first half of an export in the runtime (M7-S6, Q302), while the caller holds `store` (and the hub): the checks of
-/// [`snapshot`], the rows besides the history and one read transaction on the store's reader, its snapshot fixed here by its
+/// The first half of an export in the runtime (M7-S6, Q302), while the caller holds `store` (and the hub): the confirmation,
+/// the rows besides the history and one read transaction on the store's reader, its snapshot fixed here by its
 /// first read (WAL). Every write goes through the store's own connection, which the caller's hold keeps out, so the history
 /// [`PendingSnapshot::finish`] reads is the history beside these rows (one point in time). Nothing here grows with the history.
 ///
@@ -201,7 +204,9 @@ pub fn snapshot_begin(
     force: bool,
     path: &Path,
 ) -> Result<PendingSnapshot> {
-    let target = checked_target(confirm, force, path)?;
+    if !confirm {
+        return Err(Error::ConfirmRequired);
+    }
     let head = Head::of(store)?;
     let reader = store.reader.take().ok_or(Error::Unavailable)?;
     let pinned = reader.execute_batch("BEGIN DEFERRED").and_then(|()| {
@@ -217,7 +222,8 @@ pub fn snapshot_begin(
         return Err(Error::Unavailable);
     }
     Ok(PendingSnapshot {
-        target,
+        path: path.to_path_buf(),
+        force,
         head,
         reader,
     })
@@ -229,13 +235,21 @@ impl PendingSnapshot {
     ///
     /// # Errors
     /// As [`snapshot`]; [`Error::Unavailable`] if the read transaction cannot be ended.
+    ///
+    /// The target's cloud-folder and existing-file refusals run here, off the locks and before the history read.
     pub fn finish(self, home: &std::sync::Mutex<Store>) -> Result<Snapshot> {
         let Self {
-            target,
+            path,
+            force,
             head,
             reader,
         } = self;
-        let messages = read_messages(&reader, &head.stored);
+        let target = checked_target(true, force, &path);
+        let messages = if target.is_ok() {
+            read_messages(&reader, &head.stored)
+        } else {
+            Ok(Vec::new())
+        };
         // the transaction ends before the reader goes back, so that a checkpoint passes it again
         let ended = reader.execute_batch("ROLLBACK").is_ok() && reader.is_autocommit();
         if ended && let Ok(mut store) = home.lock() {
@@ -244,6 +258,7 @@ impl PendingSnapshot {
         if !ended {
             return Err(Error::Unavailable);
         }
+        let target = target?;
         assemble(target, &head.with(messages?))
     }
 }
@@ -1367,6 +1382,13 @@ mod tests {
         let dir = TempDir::new("s6-two-phase")?;
         let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
         populate(&mut store)?;
+        let reader = store.reader.as_ref().ok_or("reader")?;
+        assert!(
+            reader
+                .execute("INSERT INTO settings (key, value) VALUES ('x', x'00')", [])
+                .is_err(),
+            "the reader refuses a write"
+        );
         let reference = snapshot(&store, true, true, &dir.path().join("one.secmpbackup"))?;
         let home = std::sync::Mutex::new(store);
         let pending = {
@@ -1397,6 +1419,33 @@ mod tests {
             again.finish(&home)?.body.as_slice(),
             reference.body.as_slice()
         );
+        Ok(())
+    }
+
+    /// S6-1 (Q302): the target's file-system checks run in `finish`, off the locks; a refused target gives the reader back.
+    #[test]
+    fn export_target_is_checked_off_the_locks() -> R {
+        let dir = TempDir::new("s6b-target")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        let path = dir.path().join("no-such-dir").join("x.secmpbackup");
+        let want = snapshot(&store, true, false, &path).err();
+        assert!(want.is_some(), "the one-step call refuses the target");
+        let home = std::sync::Mutex::new(store);
+        let pending = snapshot_begin(&mut *home.lock().map_err(|_| "lock")?, true, false, &path)
+            .map_err(|e| format!("snapshot_begin touched the target: {e:?}"))?;
+        assert_eq!(
+            pending.finish(&home).err(),
+            want,
+            "the same refusal, in finish"
+        );
+        let again = snapshot_begin(
+            &mut *home.lock().map_err(|_| "lock")?,
+            true,
+            false,
+            &dir.path().join("ok.secmpbackup"),
+        )?;
+        assert!(again.finish(&home).is_ok(), "the reader is back");
         Ok(())
     }
 

@@ -574,6 +574,30 @@ mod tests {
                 Some(OpId(2)),
                 "seed {seed}: the waiting query starts first"
             );
+            // M7-S4d (XREVIEW-M7-S4 S4-2 (ii)): the drawn delay is kept — a related start after the answer pushes the
+            // answered operation back
+            ops.schedule(
+                &params,
+                &mut rng,
+                OpId(3),
+                again.saturating_sub(1),
+                spec(ControlKind::LinkPut(8), 7, When::Prompt),
+            )?;
+            let first: Vec<OpId> = ops
+                .take_due(again.saturating_sub(1))
+                .iter()
+                .map(|o| o.id)
+                .collect();
+            assert_eq!(
+                first,
+                vec![OpId(3)],
+                "seed {seed}: the related prompt op starts"
+            );
+            let pushed = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+            assert!(
+                pushed > again,
+                "seed {seed}: pushed {pushed}, again {again}"
+            );
         }
         Ok(())
     }

@@ -663,10 +663,10 @@ impl HostControl {
 enum ControlPrepared {
     /// A queue to create: its id and its recipient and sender seeds.
     QueueNew(QueueId, SecretBytes<32>, SecretBytes<32>),
-    /// A queue to delete: its id and its recipient seed.
-    QueueDel(QueueId, SecretBytes<32>),
-    /// A `LINK_PUT`: its arguments.
-    LinkPut(crate::invitations::LinkPutArgs),
+    /// A queue to delete: its id and its recipient capability, derived before the link opens (M7-S4d).
+    QueueDel(QueueId, RecvCap),
+    /// A `LINK_PUT`: its arguments, its decoded blob and its expiry bucket, decoded before the link opens (M7-S4d).
+    LinkPut(crate::invitations::LinkPutArgs, LinkBlob, u32),
     /// An owner-status `LINK_GET`: the link-data number and the arguments.
     LinkGetOwner(u32, crate::invitations::LinkPutArgs),
     /// A consuming `LINK_GET`: the link-data number and its `ld_id`.
@@ -717,13 +717,22 @@ impl ControlRunner for HostControl {
                 let recv = self
                     .with_hub(move |hub| hub.queue_material(queue).map(|(recv, _)| recv))
                     .await?;
-                Ok(Some(ControlPrepared::QueueDel(queue, recv)))
+                // Q300 (M7-S4d, S4-3): the capability is derived before the link opens; a local failure opens no link
+                let cap = RecvCap::from_seed(&recv)?;
+                Ok(Some(ControlPrepared::QueueDel(queue, cap)))
             }
             ControlKind::LinkPut(n) => {
                 // Q298 (S2-1): checked when the operation runs; an invitation that is no longer offered ends it before a
                 // link opens (HB-55); a store error is retried
-                let args = self.with_hub(move |hub| hub.put_args(n).ok()).await?;
-                Ok(args.map(ControlPrepared::LinkPut))
+                let Some(args) = self.with_hub(move |hub| hub.put_args(n).ok()).await? else {
+                    return Ok(None);
+                };
+                // Q300 (M7-S4d, S4-3): the blob and the expiry bucket are decoded before the link opens; a local failure opens
+                // no link (link failed, CO-06's back-off; nothing reaches the relay)
+                let blob = LinkBlob::decode(&args.blob).map_err(|_| TransportError::Invalid)?;
+                let bucket =
+                    u32::try_from(args.expires / 3_600).map_err(|_| TransportError::Invalid)?;
+                Ok(Some(ControlPrepared::LinkPut(args, blob, bucket)))
             }
             ControlKind::LinkGetOwner(n) => {
                 // Q300 (EXT3-4): the put's gates again when the query runs; an ineligible query ends before a link opens
@@ -758,8 +767,7 @@ impl ControlRunner for HostControl {
                     queue, cap,
                 )))
             }
-            ControlPrepared::QueueDel(queue, recv) => {
-                let cap = RecvCap::from_seed(&recv)?;
+            ControlPrepared::QueueDel(queue, cap) => {
                 // a queue the relay does not have (the `QUEUE_DEL` ran, the host did not record it) is deleted all the same
                 match t.delete_queue(&cap).await {
                     Ok(()) | Err(TransportError::NoQueue) => {}
@@ -767,10 +775,7 @@ impl ControlRunner for HostControl {
                 }
                 Ok(ControlAnswer::QueueDeleted(queue))
             }
-            ControlPrepared::LinkPut(args) => {
-                let blob = LinkBlob::decode(&args.blob).map_err(|_| TransportError::Invalid)?;
-                let bucket =
-                    u32::try_from(args.expires / 3_600).map_err(|_| TransportError::Invalid)?;
+            ControlPrepared::LinkPut(args, blob, bucket) => {
                 // Q299 (F1-1; spec §9.4): `ERR_EXISTS` is done, never retried; the owner-status chain sees the real state
                 link_put_outcome(
                     t.put_link_data(args.ld_id, &args.owner_seed, &blob, true, bucket, access)
@@ -850,6 +855,17 @@ impl ControlRunner for HostControl {
                 .await?;
                 Ok(ControlEffect::None)
             }
+        }
+    }
+
+    async fn unanswered(&self, kind: ControlKind) -> bool {
+        match kind {
+            // Q300 (M7-S4d): the relay may have consumed — the accept ends, as for an answered consume, never retried (a
+            // consumption the client never saw is HB-22's window)
+            ControlKind::LinkGetConsume(n) => {
+                self.commit(ControlAnswer::AcceptFailed(n)).await.is_ok()
+            }
+            _ => false,
         }
     }
 }

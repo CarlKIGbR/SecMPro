@@ -1390,11 +1390,20 @@ impl VirtualDriver {
                 c.sched.control_done(op);
                 c.controls_done.push((t, kind));
             }
-            // Q300 (EXT3-4): the production classification
-            Err(e) if secmp_client_core::scheduler::run::relay_answered(e) => {
-                c.sched.control_answered(t, op).unwrap();
+            // Q300 phase rule (M7-S4d): the link was up — whatever ended the command (a relay `ERR` of any code, an unfitting
+            // answer, a local error after the handshake) it is answered, never a link failure; a consume ends the accept
+            // (`ControlRunner::unanswered`)
+            Err(_) => {
+                if let ControlKind::LinkGetConsume(n) = kind {
+                    if let Some(hub) = c.hub.as_mut() {
+                        hub.accept_failed(n);
+                    }
+                    c.sched.control_done(op);
+                    c.controls_done.push((t, kind));
+                } else {
+                    c.sched.control_answered(t, op).unwrap();
+                }
             }
-            Err(_) => c.sched.control_failed(t, op, false).unwrap(),
         }
         Vec::new()
     }
@@ -1583,16 +1592,39 @@ impl VirtualDriver {
     /// material, then the gates of Q298 (`LinkPut`) and Q300 (`LinkGetOwner`); `Ok(false)`: nothing to do, no link opens.
     fn prepare_control(&mut self, idx: usize, kind: ControlKind) -> Result<bool, TransportError> {
         self.hub_material(idx, kind);
-        let Some(hub) = self.clients.get(idx).unwrap().hub.as_ref() else {
-            return Ok(true);
-        };
-        match kind {
-            ControlKind::LinkPut(n) => hub.put_allowed(n).map_err(|_| TransportError::Invalid),
-            ControlKind::LinkGetOwner(n) => hub
-                .owner_query_allowed(n)
-                .map_err(|_| TransportError::Invalid),
-            _ => Ok(true),
+        let client = self.clients.get(idx).unwrap();
+        if let Some(hub) = client.hub.as_ref() {
+            let go = match kind {
+                ControlKind::LinkPut(n) => {
+                    hub.put_allowed(n).map_err(|_| TransportError::Invalid)?
+                }
+                ControlKind::LinkGetOwner(n) => hub
+                    .owner_query_allowed(n)
+                    .map_err(|_| TransportError::Invalid)?,
+                _ => true,
+            };
+            if !go {
+                return Ok(false);
+            }
         }
+        // Q300 (M7-S4d, S4-3): the command's local material is checked before any link opens, as the runtime's `prepare`; a
+        // failure opens no link and is retried after the back-off (CO-06), invisible to the relay
+        match kind {
+            ControlKind::LinkPut(n) => {
+                LinkBlob::decode(&client.links.get(&n).ok_or(TransportError::Invalid)?.blob)
+                    .map_err(|_| TransportError::Invalid)?;
+            }
+            ControlKind::QueueDel(queue) => {
+                let (recv, _) = *client
+                    .material
+                    .queues
+                    .get(&queue.0)
+                    .ok_or(TransportError::Invalid)?;
+                RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap())?;
+            }
+            _ => {}
+        }
+        Ok(true)
     }
 
     /// A store-backed client keeps the material of its control operations in the store: the queues' seeds, the link data.

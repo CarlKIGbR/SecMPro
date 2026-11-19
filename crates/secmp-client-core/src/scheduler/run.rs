@@ -250,6 +250,11 @@ pub trait ControlRunner: Send + Sync + 'static {
         &self,
         answer: Self::Answer,
     ) -> impl Future<Output = Result<ControlEffect, TransportError>> + Send;
+    /// The link was up but no answer of the relay was committed — a relay `ERR` of any code, an unfitting or garbled answer,
+    /// the link closed, or the timeout (Q300 phase rule, M7-S4d): the relay may have read the command. `true`: the operation
+    /// ends here (a consuming `LINK_GET` fails the accept, as for an answered consume); `false`: it is queued again as a fresh
+    /// delayed one (spec §10.6 (2)).
+    fn unanswered(&self, kind: ControlKind) -> impl Future<Output = bool> + Send;
 }
 
 /// The outcome of a `LINK_PUT` for its control operation (spec §9.4, §9.7 (1); Q299, review finding F1-1): `ERR_EXISTS` means
@@ -270,14 +275,14 @@ pub fn link_put_outcome(answer: Result<(), TransportError>) -> Result<(), Transp
 pub enum ControlResult {
     /// Done, also with nothing to do and no link opened; the effect goes to the scheduler.
     Done(ControlEffect),
-    /// No answer of the relay (the host's prepare step, the link, a local error, the timeout): retried after the back-off
-    /// (CO-06).
+    /// The attempt ended before the link was up (the host's prepare step, a local check of the material, the connect, the
+    /// handshake, the timeout before `RELAYINFO`): no command was sent; retried after the back-off (CO-06).
     LinkFailed {
         /// The link closed before `RELAYINFO` (LR-03).
         closed_before: bool,
     },
-    /// The relay answered the command with an `ERR`, or its answer could not be committed: a related operation ran, so it
-    /// is queued again as a fresh delayed one (spec §10.6 (2)).
+    /// The link was up and no answer was committed, whatever ended it (Q300 phase rule, M7-S4d), or the answer could not be
+    /// committed: a related operation ran, so it is queued again as a fresh delayed one (spec §10.6 (2)).
     Answered,
 }
 
@@ -1329,6 +1334,8 @@ where
                     closed_before: false,
                 },
                 Ok(Some(prepared)) => {
+                    // Q300 phase rule (M7-S4d): set once the handshake is done — from then on the relay may have read the command
+                    let mut up = false;
                     let attempt = async {
                         let relay_ref = directory.relay(relay).ok_or(false)?;
                         let stream = providers
@@ -1351,22 +1358,35 @@ where
                             AsyncConnectOutcome::Failed(_) => return Err(false),
                         };
                         let mut t = AsyncRelayQueueTransport::new(session);
+                        up = true;
                         let answer = runner.run(prepared, &mut t).await;
                         // the one-shot link closes here, before the host commits the answer (Q300; spec §10.1)
                         drop(t);
                         Ok(answer)
                     };
                     // the link's life under the connect timeout: a hanging relay fails it, never stalls it
-                    match tokio::time::timeout(limit, attempt).await {
+                    let outcome = tokio::time::timeout(limit, attempt).await;
+                    match outcome {
                         Ok(Ok(Ok(answer))) => match runner.commit(answer).await {
                             Ok(effect) => ControlResult::Done(effect),
                             Err(_) => ControlResult::Answered,
                         },
-                        Ok(Ok(Err(e))) if relay_answered(e) => ControlResult::Answered,
-                        Ok(Ok(Err(_))) | Err(_) => ControlResult::LinkFailed {
+                        Ok(Err(closed_before)) => ControlResult::LinkFailed { closed_before },
+                        // the timeout before the link was up: no command was written
+                        Err(_) if !up => ControlResult::LinkFailed {
                             closed_before: false,
                         },
-                        Ok(Err(closed_before)) => ControlResult::LinkFailed { closed_before },
+                        // Q300 phase rule (M7-S4d, XREVIEW-M7-S4 S4-1): once the link is up the relay may have read the command;
+                        // whatever ended the attempt — a relay `ERR` of any code, an unfitting or garbled answer, the link
+                        // closed, the timeout — it is a related operation (spec §10.6 (2)), never a link failure, so a hostile
+                        // relay cannot choose the fast retry
+                        Ok(Ok(Err(_))) | Err(_) => {
+                            if runner.unanswered(kind).await {
+                                ControlResult::Done(ControlEffect::None)
+                            } else {
+                                ControlResult::Answered
+                            }
+                        }
                     }
                 }
             };

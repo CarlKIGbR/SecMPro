@@ -23,7 +23,7 @@ G7-15a, G7-16, G7-18, K7-02, K7-03, FZ-01, FZ-02.
 | A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
 | A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes with the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
 | B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC closed @ `923b9ee` (SC-01…SC-10, K7-03b; G7-15b opened); B-1…B-3 built (Q146); B-4 built @ `1318baa` (verifier: DO NOT PUSH, 3 B/16 M); B-4c built @ `ab72776` (ci-full `e80e11c`); Phase B closes on the reviewer's verdict |
-| C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) — superseded: built in C-1…C-5, corrected by S-1, S-2, S-2b; see `## Phase C close (M7-C5)` and `## D-11` |
+| C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) — superseded: built in C-1…C-5 except the OWNER-PENDING and OWNER-OPERATED rows of Phase C close, corrected by S-1, S-2, S-2b; see `## Phase C close (M7-C5)` and `## D-11` |
 
 ## 2. What was built
 
@@ -525,7 +525,7 @@ is written only on `confirm`, never into a folder of `CLOUD_FOLDERS` without `fo
 
 **Waiting (owner).** A-2 needs "ADR-055 accepted" and the vet records (A0 §7: `argon2` 0.6.0, `blake2` 0.11.0 in the
 zero-exemption crypto closure; `openssl-sys` 0.9.117, `openssl-src` 300.6.1+3.6.3, `password-hash` 0.6.1, `phc` 0.6.1);
-A-4 needs "ADR-053 accepted". (Superseded: ADR-055 and ADR-053 are accepted, `docs/08-decisions.md:1025` and `:919`; A-2 is done @ `bf54d98` and A-4 built @ `c3c1dcf`, §1; the owner items open at D-11 are listed in `## D-11`.)
+A-4 needs "ADR-053 accepted". (Superseded: ADR-055 and ADR-053 are accepted, `docs/08-decisions.md:1025` and `:919`; A-2 is done @ `bf54d98` and A-4 built @ `c3c1dcf`, §1; the owner items open at D-11 are the OWNER-PENDING and OWNER-OPERATED rows of `## Phase C close (M7-C5)`, the cadence of the owner-status query (Q297), and the items carried in `## D-11`.)
 
 **Waiting (date).** G7-00: first commit after 2026-10-30 02:00 UTC; the cooldown gate is red from 2026-10-31 00:00 UTC
 until it lands.
@@ -2361,7 +2361,7 @@ One link per client (the connection with 360 departures, one every 10 s over the
 | FO-02 | C-4 | `m7_forensic::store_dir_has_no_plaintext` (the same run, empty `HOME`/`TMPDIR`/`XDG_*`) | evidenced |
 | E2-11 | C-3 | `m7_e2e::cli_uses_no_wall_clock_for_schedule` and the `at_ms` check inside E2-02 | evidenced |
 | C-T1 | C-5 | `tor::tests::onion_key_must_be_a_point` | evidenced |
-| E2-10 | C-5 | `ks_cli`, `e2e-10-f176553.txt` (MET) | evidenced for the one link per client; three setup-triggered pool refills fell into the active phase (Q295); extra connections are not judged by the criterion (HB-52) |
+| E2-10 | C-5 | `ks_cli`, `e2e-10-f176553.txt` (MET) | evidenced for the one link per client; three further connections fell into the active phase; by the reviewer's explanation from a code trace they are setup-triggered pool refills — not measured (Q295); extra connections are not judged by the criterion (HB-52) |
 | E2-07 | — | TEST-SPEC: `m7_e2e::e2e_over_tor_nightly` | OWNER-PENDING (owner relay and the dispatch job, D13) |
 | G7-11 | — | TEST-SPEC: `xtask::sbom::tests::sbom_embedded_names_match_lock` | OWNER-PENDING (the `miniz_oxide` vet record; `supply-chain/config.toml` is still an exemption) |
 | G7-20 | — | TEST-SPEC: `xtask::gates::tests::optional_jobs_are_not_required` | OWNER-PENDING (the ruleset, then `REQUIRED_JOBS` += `harness`) |
@@ -2493,3 +2493,5 @@ Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, ex
 **Gates.** `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nextest -p xtask` 330/330.
 
 **ci-fast** (head `83b66c6`): `ci-fast: PASS`; workspace nextest 1643/1643, harness 333/333 (harness step 1795 s), 0 skipped; evidence `docs/reviews/M07-evidence/d11-ci-fast.txt`.
+
+**D-11b (WEISUNG M7-D11b).** Four wording fixes from the cross-review of D-11 (D11-1…D11-4): the list of open owner items in §8 names all three places; §1 row C excepts the OWNER-PENDING and OWNER-OPERATED rows; the E2-10 row of Phase C close marks the refill explanation as not measured; HB-60 says it is not a deferral. Docs only; gates: policy and the xtask tests; no ci-fast of its own (no file outside docs/ since D-11's run on 83b66c6).

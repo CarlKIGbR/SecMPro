@@ -2667,7 +2667,7 @@ Deviations:
 3. harness `m7_runtime`/`m7_forensic`/`m7_crash`/`m7_restart`/`m7_persist`: 14 run, 14 passed (3 slow), 335 skipped.
 4. `cargo xtask step --strict policy`: PASS.
 
-**ci-fast.** <pending>
+**ci-fast.** Run on a727eb6: `ci-fast: PASS`; workspace nextest 1666/1666 (WS_BASE 1662 + 4: T1–T4), harness 349/349 (HARNESS_BASE 349 + 0; harness step 1665 s), 0 skipped; bases from the reviewer's override (S-4d paragraph in `## S-4`); evidence `docs/reviews/M07-evidence/s6-ci-fast.txt`.
 
 Deviations:
 - T2's red numbers differ from the brief's: overruns 2 (tick 1, issued at 25 011 ms, was also late), not 1; the red is the same kind.

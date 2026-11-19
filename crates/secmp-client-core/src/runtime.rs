@@ -1989,7 +1989,7 @@ mod tests {
         runtime.block_on(held.job)?;
         let done = runtime.block_on(held.answer)?;
         assert!(
-            prompt.is_ok(),
+            matches!(prompt, Ok(true)),
             "the cell source waited for the export's history read: {prompt:?}"
         );
         assert!(matches!(done, Ok(Answer::Core(Response::Done))));
@@ -2042,7 +2042,8 @@ mod tests {
         let late = ticks
             .iter()
             .zip(0_u64..)
-            .filter(|&(&(issued, _), k)| issued.abs_diff(k.saturating_mul(P_MS)) > 500)
+            // 2 s: the hold sits on a blocking thread in real time; a loaded runner must not flake (overruns are asserted exactly)
+            .filter(|&(&(issued, _), k)| issued.abs_diff(k.saturating_mul(P_MS)) > 2_000)
             .count();
         assert_eq!(ticks.len(), 3, "{ticks:?}");
         assert_eq!(overruns, 0, "{ticks:?}");

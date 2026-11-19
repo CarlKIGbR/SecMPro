@@ -763,7 +763,12 @@ impl ControlRunner for HostControl {
             ControlKind::QueueNew(queue) => self.queue_new(queue, access, t).await,
             ControlKind::QueueDel(queue) => self.queue_del(queue, t).await,
             ControlKind::LinkPut(n) => {
-                let args = self.with_hub(move |hub| hub.link_put_args(n).ok()).await?;
+                // Q298 (S2-1): checked when the operation runs; an invitation that is no longer offered ends it without a
+                // command (a failed one would be retried for ever, CO-06); a store error is retried
+                let args = self.with_hub(move |hub| hub.put_args(n).ok()).await?;
+                let Some(args) = args else {
+                    return Ok(ControlEffect::None);
+                };
                 let blob = LinkBlob::decode(&args.blob).map_err(|_| TransportError::Invalid)?;
                 let bucket =
                     u32::try_from(args.expires / 3_600).map_err(|_| TransportError::Invalid)?;

@@ -825,6 +825,15 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.invitations.link_put_args(n)
     }
 
+    /// The `LINK_PUT` arguments of link data `n` when the operation runs (spec §9.7 (1), §5.2; S2-1, Q298): `None` for an
+    /// invitation that is not offered, is past `expires` or whose link data was seen consumed.
+    ///
+    /// # Errors
+    /// As [`Invitations::put_args`].
+    pub fn put_args(&self, n: u32) -> Result<Option<LinkPutArgs>, Error> {
+        self.invitations.put_args(n, &self.core.clock)
+    }
+
     /// The answer of the owner-status `LINK_GET` of link data `n` (spec §9.4; Q297): as [`Invitations::owner_answer`]; the
     /// re-put (§9.7 (1)) and the next query go to the scheduler.
     ///

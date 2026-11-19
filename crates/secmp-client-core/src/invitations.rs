@@ -531,6 +531,27 @@ pub(crate) fn take_oldest(store: &Store, relay: RelayId) -> Result<Option<Taken>
     Ok(Some((queue, rest)))
 }
 
+/// The `LINK_PUT` arguments of an opened record (§9.3): the sealed record's own fields, no new key material.
+fn put_args_of(loaded: &Loaded, ld_id: Id) -> Result<LinkPutArgs, Error> {
+    let blob = loaded.stored.blob.clone().ok_or(Error::Unavailable)?;
+    Ok(LinkPutArgs {
+        ld_id,
+        owner_pk: loaded.stored.record.owner_pk()?,
+        owner_seed: SecretBytes::from_slice(loaded.stored.record.owner_seed.expose_secret())?,
+        blob,
+        expires: loaded.stored.record.expires,
+    })
+}
+
+/// The longest delay of a control operation (§10.6 (2)), in whole seconds: an operation queued within it of `expires` could
+/// only run after `expires` (Q297, Q298).
+fn longest_delay_secs() -> u64 {
+    crate::scheduler::params::Params::default()
+        .control_delay_ms
+        .1
+        .div_ceil(1_000)
+}
+
 /// The scheduler's id of the link data of `ld_id`: its first four bytes (`ControlKind::LinkPut(n)`); a collision with
 /// another invitation is refused at issue (2⁻³² per pair).
 fn link_data_n(ld_id: &Id) -> u32 {
@@ -752,18 +773,39 @@ impl Invitations {
                 continue;
             }
             let loaded = load(&store, &ld_id)?.ok_or(Error::Unavailable)?;
-            let blob = loaded.stored.blob.clone().ok_or(Error::Unavailable)?;
-            return Ok(LinkPutArgs {
-                ld_id,
-                owner_pk: loaded.stored.record.owner_pk()?,
-                owner_seed: SecretBytes::from_slice(
-                    loaded.stored.record.owner_seed.expose_secret(),
-                )?,
-                blob,
-                expires: loaded.stored.record.expires,
-            });
+            return put_args_of(&loaded, ld_id);
         }
         Err(Error::Unavailable)
+    }
+
+    /// The arguments of the `LINK_PUT` of link data `n` at the moment the operation runs (spec §9.7 (1), §5.2; S2-1, Q298):
+    /// the bytes of [`Invitations::link_put_args`], and only for an invitation that is offered, before `expires`, whose link
+    /// data was not seen consumed. `None` — the operation is done without a command and is not retried — for link data no
+    /// invitation has and for an invitation that is consumed, expired, retired or retiring, or whose link data was seen
+    /// consumed.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or a record does not open.
+    pub fn put_args(&self, n: u32, clock: &impl Clock) -> Result<Option<LinkPutArgs>, Error> {
+        let now = clock.unix_secs();
+        let store = self.lock()?;
+        for row in store.invitations()? {
+            let ld_id = ld_id_of(&row.ld_id)?;
+            if link_data_n(&ld_id) != n {
+                continue;
+            }
+            if offer_state(&store, &ld_id, None, now)? != OfferState::Offered {
+                return Ok(None);
+            }
+            let Some(loaded) = load(&store, &ld_id)? else {
+                return Ok(None);
+            };
+            if loaded.stored.flags & FLAG_CONSUMED_SEEN != 0 {
+                return Ok(None);
+            }
+            return put_args_of(&loaded, ld_id).map(Some);
+        }
+        Ok(None)
     }
 
     /// The owner status of the link data of `ld_id` (§9.4, §9.7 (1)): `present = 0, consumed = 0` before `expires` means the
@@ -800,6 +842,10 @@ impl Invitations {
         if status.present {
             return Ok(Vec::new());
         }
+        // Q298: no re-put that could only run after expires (spec §9.7 (1): before `expires`)
+        if now.saturating_add(longest_delay_secs()) >= loaded.stored.record.expires {
+            return Ok(Vec::new());
+        }
         let n = link_data_n(ld_id);
         Ok(vec![OpSpec {
             kind: ControlKind::LinkPut(n),
@@ -827,12 +873,8 @@ impl Invitations {
             return Ok(None);
         };
         // Q297: no query that could only run after expires
-        let longest = crate::scheduler::params::Params::default()
-            .control_delay_ms
-            .1
-            .div_ceil(1_000);
         if loaded.stored.flags & FLAG_CONSUMED_SEEN != 0
-            || now.saturating_add(longest) >= loaded.stored.record.expires
+            || now.saturating_add(longest_delay_secs()) >= loaded.stored.record.expires
         {
             return Ok(None);
         }

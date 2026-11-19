@@ -688,3 +688,38 @@ fn answered_consume_fails_the_accept_once() {
     assert_eq!(failed, 1, "{events:?}");
     assert!(contact_ids(&mut d, guest.idx).is_empty());
 }
+
+/// Q304 (EXT3b-4; V-EXT3b-34 T4-3): the relay answers every `LINK_PUT` of an invitation `ERR_FULL` from the issue on, so every owner-status answer is `{0, 0}`: over 24 h the put stays one operation (one chain), the owner query keeps running, and no two starts of the link data are less than a minute apart.
+#[test]
+fn absent_answers_keep_one_put_chain() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s7a-host", 2, 37);
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 86_400)
+        .unwrap();
+    let (_, n) = uri_link_data(&issued.uri).unwrap();
+    d.client(host.idx).opts.answer_err = Some((ControlKind::LinkPut(n), TransportError::Full));
+    let start = d.now();
+    d.run_until(start.saturating_add(24 * 3_600_000));
+    let c = d.client_ref(host.idx);
+    assert_eq!(c.hub_errors, Vec::<String>::new());
+    let ops: std::collections::BTreeSet<u64> = c
+        .controls_started
+        .iter()
+        .filter(|(_, _, k)| *k == ControlKind::LinkPut(n))
+        .map(|(_, op, _)| op.0)
+        .collect();
+    assert_eq!(ops.len(), 1, "{} put operations", ops.len());
+    let queries = starts(&d, host.idx, ControlKind::LinkGetOwner(n));
+    assert!(
+        queries.len() >= 16,
+        "{} owner-status queries in 24 h",
+        queries.len()
+    );
+    let all: Vec<u64> = starts(&d, host.idx, ControlKind::LinkPut(n))
+        .into_iter()
+        .chain(queries)
+        .collect();
+    let gap = min_gap(&all);
+    assert!(gap >= MIN_MS, "min_gap {gap} ms over {} starts", all.len());
+}

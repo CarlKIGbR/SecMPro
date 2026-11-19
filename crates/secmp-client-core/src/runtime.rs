@@ -1031,8 +1031,9 @@ fn hub_job(
     (visit, outcome)
 }
 
-/// An export (C2-1): the rows under the hub's lock, which the job holds; the key derivation and the file on the blocking pool,
-/// which sends the reply — the loop never runs any of it (CLAUDE.md §1.4).
+/// An export (C2-1; M7-S6, Q302): under the hub's lock, which the job holds, only `Core::export_snapshot`; the history, the key
+/// derivation and the file on the blocking pool, which sends the reply — neither the loop nor `SharedHub::prepare_cell` or
+/// `SharedHub::deliver` waits for the history (CLAUDE.md §1.4).
 fn export_in_job(
     hub: &RtHub,
     (path, passphrase, confirm, force): (std::path::PathBuf, Zeroizing<Vec<u8>>, bool, bool),
@@ -1044,13 +1045,16 @@ fn export_in_job(
         Err(e) => {
             let _ = reply.send(Err(e));
         }
-        Ok(snapshot) => {
+        Ok(pending) => {
+            let store = hub.profile_store();
             drop(tokio::task::spawn_blocking(move || {
-                let answer =
-                    match snapshot.write(&passphrase, secmp_store::wrap::Argon2Params::PROFILE) {
-                        Ok(()) => Ok(Answer::Core(Response::Done)),
-                        Err(e) => Err(Error::from(e)),
-                    };
+                let written = pending.finish(&store).and_then(|snapshot| {
+                    snapshot.write(&passphrase, secmp_store::wrap::Argon2Params::PROFILE)
+                });
+                let answer = match written {
+                    Ok(()) => Ok(Answer::Core(Response::Done)),
+                    Err(e) => Err(Error::from(e)),
+                };
                 let _ = reply.send(answer);
             }));
         }
@@ -1838,6 +1842,294 @@ mod tests {
                 0o600
             );
         }
+        Ok(())
+    }
+
+    /// M7-S6: the `msg_id` of history row `i` of [`held_export`].
+    #[cfg(feature = "kat")]
+    fn history_id(i: u16) -> [u8; 16] {
+        let [hi, lo] = i.to_be_bytes();
+        [hi, lo, 0x5e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    }
+
+    /// M7-S6: what [`held_export`] started.
+    #[cfg(feature = "kat")]
+    struct HeldExport {
+        hub: Arc<Mutex<RtHub>>,
+        barrier: Arc<std::sync::Barrier>,
+        answer: oneshot::Receiver<Result<Answer, Error>>,
+        target: std::path::PathBuf,
+        job: tokio::task::JoinHandle<()>,
+        dir: secmp_store::kat::TempDir,
+    }
+
+    /// M7-S6 (Q302): contact 1 and `n` received messages, the hub behind the runtime's lock, and an export run as the runtime runs it
+    /// (`hub_job` on the blocking pool), held inside its history read (`HISTORY_HOLD`); one more `barrier.wait()` releases it.
+    #[cfg(feature = "kat")]
+    fn held_export(
+        runtime: &tokio::runtime::Runtime,
+        label: &str,
+        n: u16,
+    ) -> Result<HeldExport, Box<dyn std::error::Error>> {
+        use secmp_proto::Encode as _;
+        let dir = secmp_store::kat::TempDir::new(label)?;
+        let profile = dir.path().join("profile");
+        std::fs::create_dir_all(&profile)?;
+        create_profile(&profile, b"correct horse", None)?;
+        let clock = TokioClock::new(SystemClock::new().unix_secs());
+        let core = Core::open(&profile, b"correct horse", clock, OsSource::default)?;
+        let config = HubConfig {
+            relay: RelayId(1),
+            inv_period: Period::S10,
+            reply_period: Period::S10,
+            profile: WireProfile::new("rt-s6", None)?,
+        };
+        let hub = Hub::new(core, config)?;
+        let sig = secmp_crypto::HybridSigningKey::from_seeds(&[1; 32], &[2; 32])?;
+        let peer = secmp_proto::prekeys::IdentityKeys::from_parts(
+            sig,
+            secmp_proto::prekeys::IkDhSecret::from_bytes(&[3; 32])?,
+        )?;
+        let iks = peer.public().encode()?.to_vec();
+        let bob = WireProfile::new("Bob", None)?.encode()?;
+        hub.profile_store().lock().map_err(|_| "store")?.txn(|tx| {
+            let contact = secmp_store::contacts::Contact {
+                id: 1,
+                iks: &iks,
+                fingerprint: b"peer fingerprint",
+                display_name: Some("Bob"),
+                verified: false,
+                routes: None,
+                queues: None,
+                state: secmp_store::contacts::STATE_ACTIVE,
+                profile: Some(bob.as_slice()),
+            };
+            secmp_store::contacts::put_contact(tx, &contact)?;
+            for i in 0..n {
+                secmp_store::sessions::insert_delivered(
+                    tx,
+                    1,
+                    &history_id(i),
+                    1,
+                    b"a row of the history",
+                    1_000,
+                    0,
+                )?;
+            }
+            Ok(())
+        })?;
+        let (hub, barrier) = (
+            Arc::new(Mutex::new(hub)),
+            Arc::new(std::sync::Barrier::new(2)),
+        );
+        *secmp_store::backup::HISTORY_HOLD
+            .lock()
+            .map_err(|_| "hold")? = Some(Arc::clone(&barrier));
+        let (target, (reply, answer), (notices, _)) = (
+            dir.path().join("backup.smpb"),
+            oneshot::channel(),
+            mpsc::unbounded_channel(),
+        );
+        let ctx = JobCtx {
+            status: (Mode::Strict, false, 0),
+            consuming: Arc::new(Mutex::new(BTreeMap::new())),
+            clock,
+            notices,
+        };
+        let export = Call::Export {
+            path: target.clone(),
+            passphrase: Zeroizing::new(b"backup horse".to_vec()),
+            confirm: true,
+            force: true,
+        };
+        let work = JobWork {
+            settings: None,
+            calls: vec![(export, reply)],
+        };
+        let shared = Arc::clone(&hub);
+        let job = runtime.spawn_blocking(move || {
+            let _ = hub_job(&shared, &ctx, work, &mut BTreeSet::new());
+        });
+        barrier.wait(); // the export is inside the history read
+        Ok(HeldExport {
+            hub,
+            barrier,
+            answer,
+            target,
+            job,
+            dir,
+        })
+    }
+
+    /// M7-S6 (EXT3-1 Repro A; Q302; CLAUDE.md §1.4): while an export of 2 000 messages is held inside its history read, the
+    /// worker's cell source and the store answer within 500 ms.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn export_snapshot_does_not_hold_the_hub_lock() -> Result<(), Box<dyn std::error::Error>> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let held = {
+            let _enter = runtime.enter();
+            held_export(&runtime, "s6-lock", 2_000)?
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hub = Arc::clone(&held.hub);
+        let probe = std::thread::spawn(move || {
+            let _ = SharedHub(Arc::clone(&hub)).prepare_cell(QueueId(1), 0);
+            let store = hub.lock().map(|h| h.profile_store());
+            let found = store
+                .ok()
+                .and_then(|s| s.lock().ok().map(|s| s.has_message(1, &[0xee; 16]).is_ok()));
+            let _ = tx.send(found == Some(true));
+        });
+        let prompt = rx.recv_timeout(std::time::Duration::from_millis(500));
+        held.barrier.wait();
+        let _ = probe.join();
+        runtime.block_on(held.job)?;
+        let done = runtime.block_on(held.answer)?;
+        assert!(
+            prompt.is_ok(),
+            "the cell source waited for the export's history read: {prompt:?}"
+        );
+        assert!(matches!(done, Ok(Answer::Core(Response::Done))));
+        assert!(held.target.exists());
+        Ok(())
+    }
+
+    /// M7-S6 (EXT3-1 Repro A; Q302; CLAUDE.md §1.4): a Strict send link of `P_q` = 10 s asks for its next cell right after each
+    /// tick; with the export held 25 s (> 2 `P_q`) in its history read, three preparations 10 s apart each finish before the
+    /// next tick (else `Overrun`, `World::tick`, OPEN-M6-13): 0 overruns.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn send_link_survives_export_hold_longer_than_period() -> Result<(), Box<dyn std::error::Error>>
+    {
+        const P_MS: u64 = 10_000;
+        const HOLD_MS: u64 = 25_000;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let held = {
+            let _enter = runtime.enter();
+            held_export(&runtime, "s6-period", 2_000)?
+        };
+        let clock = SystemClock::new();
+        let mut cells = SharedHub(Arc::clone(&held.hub));
+        let ticker = std::thread::spawn(move || {
+            let mut ticks = Vec::new();
+            for k in 0..3_u64 {
+                let at = k.saturating_mul(P_MS);
+                while clock.mono_ms() < at {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                let issued = clock.mono_ms();
+                let _ = cells.prepare_cell(QueueId(1), issued);
+                ticks.push((issued, clock.mono_ms()));
+            }
+            ticks
+        });
+        std::thread::sleep(std::time::Duration::from_millis(HOLD_MS));
+        held.barrier.wait();
+        let ticks = ticker.join().map_err(|_| "ticker")?;
+        runtime.block_on(held.job)?;
+        let done = runtime.block_on(held.answer)?;
+        assert!(matches!(done, Ok(Answer::Core(Response::Done))));
+        let overruns = ticks
+            .iter()
+            .zip(0_u64..)
+            .filter(|&(&(_, ready), k)| ready > k.saturating_add(1).saturating_mul(P_MS))
+            .count();
+        let late = ticks
+            .iter()
+            .zip(0_u64..)
+            .filter(|&(&(issued, _), k)| issued.abs_diff(k.saturating_mul(P_MS)) > 500)
+            .count();
+        assert_eq!(ticks.len(), 3, "{ticks:?}");
+        assert_eq!(overruns, 0, "{ticks:?}");
+        assert_eq!(late, 0, "{ticks:?}");
+        Ok(())
+    }
+
+    /// M7-S6 (EXT3-1 Repro A; Q302; CLAUDE.md §1.4): a message committed and one deleted while the export reads its history
+    /// neither wait nor change the snapshot — the history at the export's start (deleted row in, new row out) — and the file
+    /// imports.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn export_commit_during_history_read_is_out_and_imports()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let held = {
+            let _enter = runtime.enter();
+            held_export(&runtime, "s6-point", 3)?
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hub = Arc::clone(&held.hub);
+        let writer = std::thread::spawn(move || {
+            let ok = hub
+                .lock()
+                .ok()
+                .and_then(|h| {
+                    let store = h.profile_store();
+                    let mut s = store.lock().ok()?;
+                    let put = s.txn(|tx| {
+                        secmp_store::sessions::insert_delivered(
+                            tx,
+                            1,
+                            &[0xc0; 16],
+                            1,
+                            b"during",
+                            1_000,
+                            0,
+                        )
+                    });
+                    let del = s.delete_message(1, &history_id(0));
+                    Some(put.is_ok() && del.is_ok())
+                })
+                .unwrap_or(false);
+            let _ = tx.send(ok);
+        });
+        let prompt = rx.recv_timeout(std::time::Duration::from_millis(500));
+        held.barrier.wait();
+        let _ = writer.join();
+        runtime.block_on(held.job)?;
+        let done = runtime.block_on(held.answer)?;
+        assert!(
+            matches!(prompt, Ok(true)),
+            "the commit waited for the export's history read: {prompt:?}"
+        );
+        assert!(matches!(done, Ok(Answer::Core(Response::Done))));
+        let live = held.hub.lock().map_err(|_| "hub")?.profile_store();
+        let rows = live
+            .lock()
+            .map_err(|_| "store")?
+            .connection_kat()
+            .query_row("SELECT count(*) FROM messages", [], |r| r.get::<_, i64>(0))?;
+        assert_eq!(rows, 3);
+        let restored = held.dir.path().join("restored");
+        std::fs::create_dir_all(&restored)?;
+        let core = Core::restore(
+            &restored,
+            b"restored horse",
+            &held.target,
+            b"backup horse",
+            SystemClock::new(),
+            OsSource::default,
+        )?;
+        let store = core.profile_store();
+        let store = store.lock().map_err(|_| "store")?;
+        let count = |sql: &str, id: Option<&[u8]>| -> Result<i64, Box<dyn std::error::Error>> {
+            let conn = store.connection_kat();
+            Ok(match id {
+                None => conn.query_row(sql, [], |r| r.get::<_, i64>(0))?,
+                Some(id) => conn.query_row(sql, [id], |r| r.get::<_, i64>(0))?,
+            })
+        };
+        assert_eq!(count("SELECT count(*) FROM messages", None)?, 3);
+        let sql = "SELECT count(*) FROM messages WHERE msg_id = ?1";
+        assert_eq!(count(sql, Some(history_id(0).as_slice()))?, 1);
+        assert_eq!(count(sql, Some([0xc0_u8; 16].as_slice()))?, 0);
         Ok(())
     }
 

@@ -798,19 +798,22 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         })
     }
 
-    /// The first half of an export (milliseconds, under the store's lock): the confirmation, the cloud-folder refusal and
-    /// the rows. The host runs [`secmp_store::backup::Snapshot::write`] elsewhere (M7-C2; CLAUDE.md §1.4).
+    /// The first half of an export, under the store's lock (and the hub's): the checks, the rows besides the history and the
+    /// start of the reader's read transaction — nothing that grows with the history (Q302, M7-S6). The host reads the history
+    /// and writes the file elsewhere ([`secmp_store::backup::PendingSnapshot::finish`]; M7-C2, CLAUDE.md §1.4).
     ///
     /// # Errors
-    /// As [`Request::Export`].
+    /// As [`Request::Export`]; [`Error::Unavailable`] also while another export reads its history.
     pub(crate) fn export_snapshot(
         &self,
         confirm: bool,
         force: bool,
         path: &std::path::Path,
-    ) -> Result<secmp_store::backup::Snapshot, Error> {
-        let store = self.store.lock().map_err(|_| Error::Unavailable)?;
-        Ok(secmp_store::backup::snapshot(&store, confirm, force, path)?)
+    ) -> Result<secmp_store::backup::PendingSnapshot, Error> {
+        let mut store = self.store.lock().map_err(|_| Error::Unavailable)?;
+        Ok(secmp_store::backup::snapshot_begin(
+            &mut store, confirm, force, path,
+        )?)
     }
 
     /// Answer one request; the events it raised follow in [`Core::take_events`].

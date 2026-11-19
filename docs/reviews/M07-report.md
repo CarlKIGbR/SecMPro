@@ -2576,7 +2576,7 @@ Deviations: none.
 3. harness `m7_owner`/`m6_control`/`m6_driver_fix`/`m6_driver`/`m6_mut`/`m7_pool`/`m7_accept`: 109 run, 109 passed (2 slow), 233 skipped; `m6_control::control_op_retried_after_link_failure` and `m6_mut::control_failed_makes_the_operation_due_again` among them, unchanged.
 4. `cargo xtask step --strict policy`: PASS.
 
-**ci-fast.** <pending>
+**ci-fast.** Run on 6d10372: `ci-fast: PASS`; workspace nextest 1648/1648 (WS_BASE 1646 + 2: U1, U2), harness 342/342 (HARNESS_BASE 334 + 8: H1–H8; harness step 1725 s), 0 skipped; evidence `docs/reviews/M07-evidence/s4-ci-fast.txt`.
 
 Deviations:
 - `run.rs` handler: rustfmt put the `LinkFailed` arm in a block, so clippy (`semicolon_if_nothing_returned`) asks for `;` after `sched.control_failed(now, op, closed_before)?`; same semantics.

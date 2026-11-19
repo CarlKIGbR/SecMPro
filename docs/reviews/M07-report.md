@@ -2435,3 +2435,5 @@ Deviations: none (the lint-form changes above only).
 **Gates (before the commits).** fmt --check clean; clippy `-D warnings` clean; `step --strict policy` PASS; `nextest -p xtask` 330/330; the 6 scans 6/6; `fuzz-check` PASS; `Instant::now`/`SystemTime::now` only in doc comments outside `clock.rs`; nothing seeded in `m7_owner.rs`. Pre-run A: `nextest -p secmp-client-core --features kat` 357/357.
 
 Deviations: none (the lint-form changes above only).
+
+**ci-fast** (head `7538df3`): `ci-fast: PASS`; workspace nextest 1641/1641, harness 331/331 (harness step 1654 s); evidence `docs/reviews/M07-evidence/s2-ci-fast.txt`.

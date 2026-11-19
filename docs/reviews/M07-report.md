@@ -2485,9 +2485,9 @@ Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, ex
   - L5-3: `audit bin` passes every `expect::AUDIT_IGNORES` id for every binary (`xtask/src/sbom.rs:107-118`), also ids justified as lock-only or as not linked into that binary (OPEN-M7-B-14 (A)).
   - L5-2: CL-12 checks each release package alone (`xtask/src/testscan.rs:487-512`), while the SBOM build is one joint `cargo auditable build` (`xtask/src/sbom.rs:166-173`); equivalent today, not by construction.
   - L6-1: the E2-10 verdict uses KS on inter-departure gaps only; every read's length is replaced by `ks::FRAME` (`crates/secmp-testkit/examples/ks_cli.rs:559`), with no departure-count or bytes-per-departure check (low power).
-  - L34-1: the export body grows by `extend_from_slice` from an empty `Zeroizing` vector (`crates/secmp-store/src/backup.rs:164-167`); a reallocation leaves the earlier sections (the identity secret first) unwiped in freed heap.
-  - L34-2: `unhex` collects into a growing plain `Vec` (`crates/secmp-client-core/src/runtime.rs:426-442`) before the `Zeroizing` wrap (`:456`); the relay reference file is read by `read_text` (`crates/secmp-cli/src/daemon.rs:105-110`) without a size limit or a permission check.
-  - L34-3: `Hub::begin_accept` copies the invitation URI into `waiting: BTreeMap<u32, String>` (`crates/secmp-client-core/src/hub.rs:185`, `:856`), not zeroized.
+  - L34-1: the export body grows by `extend_from_slice` from an empty `Zeroizing` vector (`crates/secmp-store/src/backup.rs:164-167`); a reallocation leaves the earlier sections (the identity secret first) unwiped in freed heap. Fixed by S-3 (`## S-3`).
+  - L34-2: `unhex` collects into a growing plain `Vec` (`crates/secmp-client-core/src/runtime.rs:426-442`) before the `Zeroizing` wrap (`:456`); the relay reference file is read by `read_text` (`crates/secmp-cli/src/daemon.rs:105-110`) without a size limit or a permission check. (a) fixed by S-3 (`## S-3`); (b) open.
+  - L34-3: `Hub::begin_accept` copies the invitation URI into `waiting: BTreeMap<u32, String>` (`crates/secmp-client-core/src/hub.rs:185`, `:856`), not zeroized. Fixed by S-3 (`## S-3`).
   - L1-3: `read_relay_ref` (`crates/secmp-client-core/src/runtime.rs:449-466`) does not check the reference's `akc` against the access key.
 
 **Gates.** `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nextest -p xtask` 330/330.
@@ -2495,3 +2495,39 @@ Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, ex
 **ci-fast** (head `83b66c6`): `ci-fast: PASS`; workspace nextest 1643/1643, harness 333/333 (harness step 1795 s), 0 skipped; evidence `docs/reviews/M07-evidence/d11-ci-fast.txt`.
 
 **D-11b (WEISUNG M7-D11b).** Four wording fixes from the cross-review of D-11 (D11-1…D11-4): the list of open owner items in §8 names all three places; §1 row C excepts the OWNER-PENDING and OWNER-OPERATED rows; the E2-10 row of Phase C close marks the refill explanation as not measured; HB-60 says it is not a deferral. Docs only; gates: policy and the xtask tests; no ci-fast of its own (no file outside docs/ since D-11's run on 83b66c6).
+
+## S-3 (BRIEF M7-S3; modell=claude-sonnet-5-5)
+
+**Findings.**
+- F1-1 (red team of the M07 review; minor): every relay `ERR` answer to a `LINK_PUT` was a transport `Err`, and `ControlOps::failed` re-dued it at now + U[0, 180 s] with no cap; `ERR_EXISTS` is permanent while the relay holds the `ld_id`'s link data or consumption marker (spec §9.4), so the client sent about 960 one-shot `LINK_PUT`s a day on one `ld_id`, a relay-visible beacon.
+- L34-1 = F1-3 (re-rated major): the export body and `Contents::encode` built their buffers by `extend_from_slice` from an empty `Zeroizing` vector; every growth freed the old block unwiped, identity seeds first (CLAUDE.md §1.6, docs/04 CS-2.2).
+- L34-2 (a) (minor): `unhex` collected the relay access key (spec §9.6 "secret") into a growing plain `Vec` before the `Zeroizing` wrap.
+- L34-3 (minor): `Hub::begin_accept` kept the invitation URI (it carries the link key) in `waiting` as a plain `String`.
+
+**Rule (Q299).** A `LINK_PUT` answered `ERR_EXISTS` is done: the operation completes as if answered `OK` and is never retried. Every other answer is unchanged (HB-61). CO-06 is untouched.
+
+**Change.**
+- `crates/secmp-client-core/src/scheduler/run.rs:241` — `link_put_outcome`.
+- `crates/secmp-client-core/src/runtime.rs:780` — the executor's `LinkPut` arm calls it; `:429` `unhex` (one zeroizing allocation of exactly the decoded length); `:460` `read_relay_ref` takes its result directly.
+- `crates/secmp-client-core/src/hub.rs:185` — `waiting: BTreeMap<u32, Zeroizing<String>>`; `:856` the insert.
+- `crates/secmp-store/src/backup.rs:275` `total`, `:283` `sized`, `:288` `joined`; `:164` `snapshot`; `:844` `encode_body_kat`; `Contents::encode` contacts `:338`, settings `:356`, messages `:385` (the `AppMessage` encodings are made first so the section's length is known; same checks, same bytes, same order).
+- `crates/secmp-testkit/src/harness/driver.rs:1462` — the virtual driver's `LinkPut` arm applies the same rule.
+
+**Tests.** Red first on the current code (`target/fable/s3-red.txt`):
+- T1 `scheduler::run::tests::link_put_exists_is_done`: pins the rule (`Ok`, `Exists` → `Ok`; the 15 other variants unchanged) for the runtime call site; kills the `Ok(())`/identity mutants. Cannot be red on the old code (the function is new).
+- T2 `harness::m7_owner::owner_reput_answered_exists_is_not_retried`: a `{0, 0}` answer queues the identical re-put, the relay answers `ERR_EXISTS`; one re-put start, completed, identical `LINK_PUT`, owner-status answers all `(true, false)`. Red: `LinkPut(n)` starts 105, expected 2.
+- T3 `backup::tests::export_buffers_are_sized_once`: every section and the body have capacity == length. Red: section 2 capacity 8084, length 4091.
+- T4 `runtime::tests::unhex_is_one_exact_allocation`: capacity == length for 1, 31, 32, 33, 100 bytes; odd length and non-hex refused. Red: capacity 8, length 1.
+- The runtime call site of `link_put_outcome` (`HostControl::run`) is covered by reading only (HB-59, HB-61).
+
+**Not in this unit.** The other `ERR` answers (HB-61); L34-2 (b) (`secmp-cli` `read_text`); no test for L34-3 (the type only, checked by the compiler).
+
+**Gates.**
+1. `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+2. `secmp-client-core --features kat`: 361 run, 361 passed, 0 skipped; `secmp-store --features kat`: 104 run, 104 passed, 0 skipped.
+3. harness `m7_owner`/`m6_control`/`m7_pool`/`m7_accept`: 31 run, 31 passed (2 slow), 303 skipped; `m6_control::control_op_retried_after_link_failure` among them, unchanged.
+4. `cargo xtask step --strict policy`: PASS.
+
+**ci-fast.** `<pending>`
+
+Deviations: none.

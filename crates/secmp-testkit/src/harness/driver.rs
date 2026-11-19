@@ -1458,14 +1458,15 @@ impl VirtualDriver {
                 }
                 let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
                 let blob = LinkBlob::decode(&m.blob).map_err(|_| TransportError::Invalid)?;
-                transport.put_link_data(
+                // Q299 (F1-1): the production outcome rule — `ERR_EXISTS` completes the operation
+                secmp_client_core::scheduler::run::link_put_outcome(transport.put_link_data(
                     m.ld_id,
                     &SecretBytes::from_slice(&m.owner_seed).unwrap(),
                     &blob,
                     m.one_time,
                     m.expires_bucket,
                     access,
-                )
+                ))
             }
             ControlKind::LinkGetOwner(n) => self.owner_status_query(idx, transport, n, now),
             ControlKind::LinkGetConsume(n) => {

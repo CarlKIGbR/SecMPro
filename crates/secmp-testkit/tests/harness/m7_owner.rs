@@ -437,3 +437,75 @@ fn owner_reput_is_not_sent_after_the_handshake() {
     assert!(!contact_ids(&mut d, host.idx).is_empty());
     assert!(!contact_ids(&mut d, guest.idx).is_empty());
 }
+
+/// Q299 (F1-1; spec §9.4, §9.7 (1)): the relay still holds the link data when an owner-status answer `{0, 0}` (injected
+/// through the hub, as the host's operation delivers it; the order of F1-1 (a)/(b)) queues the identical re-put; the relay
+/// answers it `ERR_EXISTS`; the re-put completes once and is never retried over 4 h.
+#[test]
+fn owner_reput_answered_exists_is_not_retried() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s3a-host", 2, 29);
+    d.client(host.idx).opts.inspect = Inspect::Requests;
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 3_600)
+        .unwrap();
+    let (_, n) = uri_link_data(&issued.uri).unwrap();
+    d.run_until(30_000);
+    assert_eq!(
+        starts(&d, host.idx, ControlKind::LinkPut(n)).len(),
+        1,
+        "the prompt put"
+    );
+    let done = |d: &VirtualDriver| {
+        d.client_ref(host.idx)
+            .controls_done
+            .iter()
+            .filter(|(_, k)| *k == ControlKind::LinkPut(n))
+            .count()
+    };
+    assert_eq!(
+        done(&d),
+        1,
+        "the prompt put completed: the relay holds the link data"
+    );
+    let gone = OwnerStatus {
+        present: false,
+        consumed: false,
+    };
+    hub(&mut d, host.idx).owner_status(n, gone).unwrap();
+    let answers_before = d
+        .client_ref(host.idx)
+        .link_status
+        .iter()
+        .filter(|row| row.1 == n)
+        .count();
+    let now = d.now();
+    d.run_until(now.saturating_add(FOUR_HOURS_MS));
+
+    assert_eq!(d.client_ref(host.idx).hub_errors, Vec::<String>::new());
+    assert_eq!(
+        starts(&d, host.idx, ControlKind::LinkPut(n)).len(),
+        2,
+        "one re-put start, not retried"
+    );
+    assert_eq!(done(&d), 2, "the re-put answered ERR_EXISTS completed");
+    let fields = put_fields(&d, host.idx);
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields.first(), fields.get(1), "the identical LINK_PUT");
+    let answers: Vec<(u64, u32, bool, bool)> = d
+        .client_ref(host.idx)
+        .link_status
+        .iter()
+        .filter(|row| row.1 == n)
+        .skip(answers_before)
+        .copied()
+        .collect();
+    assert!(
+        !answers.is_empty(),
+        "no owner-status answer after the injection"
+    );
+    assert!(
+        answers.iter().all(|row| row.2 && !row.3),
+        "{answers:?}: the relay still holds the link data"
+    );
+}

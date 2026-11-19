@@ -2173,7 +2173,7 @@ Commits: K1 `582b9f3` (core, cli, testkit helper), K2 docs (this section, Q286, 
 - C2-4, C2-5, C2-6 → HB-31, HB-32, HB-33 (HB-33: the CLI usage text now tells to remove the directory of a failed import); C1b-2 → HB-30 (C-2b).
 - C2-10…C2-15: notes, no change.
 
-**Known gaps (C2-9).** A job's replies precede its ops by at most one chunk; a lost `LINK_PUT` is re-driven by the owner-status check, an accept is repeated.
+**Known gaps (C2-9).** A job's replies precede its ops by at most one chunk; a lost `LINK_PUT` was not re-driven at `b2f5e0d` — no owner-status query was ever scheduled and its answer reached only the scheduler (review finding L1-2); since S-2 the owner-status chain (Q297) re-puts it, also after a restart; an accept is repeated.
 
 **ci-fast (`ci-fast-c2f-1-red-582b9f3.txt`, head `582b9f3`): FAIL, one harness test (`m6_driver::driver_has_no_wall_clock`: SE-193 read `Instant::now`) — STOP.** Workspace nextest outside the harness 1637 of 1637; harness stopped at 57 of 318.
 
@@ -2415,3 +2415,23 @@ No Kani harness reaches `Scheduler`; the PR's `kani` job is the evidence.
 Deviations: none (the lint-form changes above only).
 
 **ci-fast** (head `cfc0fb0`): `ci-fast: PASS`; workspace nextest 1641/1641, harness 328/328 (harness step 1735 s); evidence `docs/reviews/M07-evidence/s1-ci-fast.txt`.
+
+## S-2 (BRIEF M7-S2; modell=claude-sonnet-5-5)
+
+**Finding (review L1-2, V-L1-2).** No production code scheduled `ControlKind::LinkGetOwner`, and its answer (`ControlEffect::OwnerStatus`) reached only `Scheduler::owner_status`, never `Invitations::on_owner_status`. So a `LINK_PUT` lost with the relay was never re-driven (§9.7 (1)) and a link data consumed by someone else was never seen (§5.2).
+
+**Design (Q297).** A chain per open invitation: the first owner-status query `When::Delayed` (U[1 min, 60 min], §10.6 (2)) after the issue's prompt `LINK_PUT`, the next U[1 min, 60 min] after each answer, a fresh one at every open; none once the invitation is consumed, expired or retired, the link data was seen consumed, or `expires` is within 60 min. Relay-visible per invitation: one `LINK_PUT` at issue; one owner-status `LINK_GET` per U[1 min, 60 min] (mean 30.5 min) of online time until the handshake, the consumption is seen or `expires` − 60 min; one delayed `LINK_PUT` per `{0, 0}`; each on its own one-shot link.
+
+**Product change (numstat K1 `8120104`).** `invitations.rs` +84: `Invitations::owner_query`, `owner_queries`, `owner_answer`. `hub.rs` +30/−2: `Hub::new` queues the queries of the open invitations, `Hub::invite` the first one, new `Hub::owner_status`. `runtime.rs` +29/−14: the `LinkGetOwner` arm becomes `HostControl::link_get_owner`.
+
+**Routing.** `with_hub` runs after the transport call; the hub commits `FLAG_CONSUMED_SEEN` before the operation is done (CLAUDE.md §1.7); link data the hub no longer holds is done without a command (CO-06). `Scheduler::owner_status`'s own re-put stays only for hub-less drivers (CO-05).
+
+**Tests.** IN-18/IN-19 end to end: `harness::m7_owner::owner_status_detects_foreign_consumption` (2 queries, `{0, 1}` seen, no re-put, one `InvitationUsedElsewhere` at `expires`), `…::owner_status_reputs_after_relay_loss` (one query, then the identical `LINK_PUT`, which the invitee consumes), activity independence `…::owner_status_schedule_is_activity_independent` (idle = active, ≥ 2 queries, 102 calls). The unit tests of `invitations.rs` are unchanged; TEST-SPEC-M7 is not edited. `hub::tests::step_invite` gained the issue's delayed `LinkGetOwner` action (§2.4 of the brief). Pre-run B: 38/38 (`m7_owner::` walls 2.377 s, 1.863 s, 216.034 s).
+
+**Lint-form changes outside the dictated text** (testkit only, same behaviour): `driver.rs` — the body of the `LinkGetOwner` arm moved to `owner_status_query` (`too_many_lines`, 110/100) and the catch-all arm of `hub_material` named `LinkGetConsume(_)` (`match_wildcard_for_single_variants`); `m7_owner.rs` — local names (`many_single_char_names`), `saturating_add` for the call count.
+
+**Open to the owner:** the cadence (Q297; alternative in the Q297 row, needs a §10.6 (2) erratum). **Note for E2-10:** a re-run now also shows the owner queries of the setup invitation until its handshake.
+
+**Gates (before the commits).** fmt --check clean; clippy `-D warnings` clean; `step --strict policy` PASS; `nextest -p xtask` 330/330; the 6 scans 6/6; `fuzz-check` PASS; `Instant::now`/`SystemTime::now` only in doc comments outside `clock.rs`; nothing seeded in `m7_owner.rs`. Pre-run A: `nextest -p secmp-client-core --features kat` 357/357.
+
+Deviations: none (the lint-form changes above only).

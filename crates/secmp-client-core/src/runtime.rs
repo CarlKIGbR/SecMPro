@@ -57,6 +57,11 @@ pub const CHUNK_MS: u64 = 1_000;
 /// The relay rows a profile may hold that the runtime looks for.
 const RELAY_ROWS: u32 = 16;
 
+/// The most queued calls one hub job answers in one hold of the hub's lock (M7-S8, Q303; EXT3b-2 (a)); the rest stay queued, in
+/// order, for the next job, at most one chunk later. The CLI sends at most 2 calls per job (one `input` line, one
+/// `event_line`); 8 leaves a library host room and bounds a hold to 8 calls' cost — a `Request::Send` is ≈ 2 fsyncs.
+const MAX_JOB_CALLS: usize = 8;
+
 /// What the host chose.
 pub struct RuntimeConfig {
     /// Direct TLS instead of Tor: only on the user's explicit request (spec §5.3, §8.1). Implies Balanced.
@@ -1073,6 +1078,16 @@ const fn is_hub_call(call: &Call) -> bool {
     }
 }
 
+/// The calls at the front of `pending` that need only the hub, in their order, at most [`MAX_JOB_CALLS`] (M7-S8, Q303).
+fn job_calls(pending: &mut VecDeque<Envelope>) -> Vec<Envelope> {
+    let mut calls = Vec::new();
+    while calls.len() < MAX_JOB_CALLS && pending.front().is_some_and(|(call, _)| is_hub_call(call))
+    {
+        calls.extend(pending.pop_front());
+    }
+    calls
+}
+
 /// One call of a hub job, under the hub's lock.
 fn answer_hub(hub: &mut RtHub, ctx: &JobCtx, call: Call) -> Result<Answer, Error> {
     match call {
@@ -1144,16 +1159,13 @@ impl<P: Providers> Engine<P> {
     }
 
     /// Start the hub job: the settings write, if the mode step of a `SetSettings` was done, and the calls at the front of
-    /// `pending` that need only the hub, in their order.
+    /// `pending` that need only the hub, in their order, at most [`MAX_JOB_CALLS`] (Q303).
     fn start_job(
         &mut self,
         pending: &mut VecDeque<Envelope>,
         settings: Option<SettingsJob>,
     ) -> Job {
-        let mut calls = Vec::new();
-        while pending.front().is_some_and(|(call, _)| is_hub_call(call)) {
-            calls.extend(pending.pop_front());
-        }
+        let calls = job_calls(pending);
         self.inflight = settings.as_ref().map(|s| (s.previous, s.new.mode));
         let ctx = JobCtx {
             status: (
@@ -1997,9 +2009,12 @@ mod tests {
         Ok(())
     }
 
-    /// M7-S6 (EXT3-1 Repro A; Q302; CLAUDE.md §1.4): a Strict send link of `P_q` = 10 s asks for its next cell right after each
-    /// tick; with the export held 25 s (> 2 `P_q`) in its history read, three preparations 10 s apart each finish before the
-    /// next tick (else `Overrun`, `World::tick`, OPEN-M6-13): 0 overruns.
+    /// M7-S6 (EXT3-1 Repro A; Q302; CLAUDE.md §1.4); wording M7-S8 (EXT3b-6). No session, link or scheduler is set up and
+    /// `prepare_cell(QueueId(1), …)` returns no cell: the test proves the responsiveness of the cell source's lock while an
+    /// export is held 25 s (> 2 `P_q`) in its history read — three `SharedHub::prepare_cell` calls issued at the deadlines of a
+    /// `P_q` = 10 s period each return before the next deadline (counted by hand: a later return would be an `Overrun` of a
+    /// send link, `World::tick`, OPEN-M6-13) and are issued on time: 0 overruns, 0 late. That a Strict send link survives
+    /// follows only together with the scheduler's prepare-after-tick order (spec §10.1), which this test does not run.
     #[cfg(feature = "kat")]
     #[test]
     fn send_link_survives_export_hold_longer_than_period() -> Result<(), Box<dyn std::error::Error>>
@@ -2131,6 +2146,124 @@ mod tests {
         let sql = "SELECT count(*) FROM messages WHERE msg_id = ?1";
         assert_eq!(count(sql, Some(history_id(0).as_slice()))?, 1);
         assert_eq!(count(sql, Some([0xc0_u8; 16].as_slice()))?, 0);
+        Ok(())
+    }
+
+    /// M7-S8: what [`job_hub`] builds — the profile's directory, the hub behind the runtime's lock, and the clock.
+    #[cfg(feature = "kat")]
+    type JobHub = (secmp_store::kat::TempDir, Arc<Mutex<RtHub>>, TokioClock);
+
+    /// M7-S8: a profile with no contact, its hub behind the runtime's lock, and its clock (built as [`held_export`] builds them).
+    #[cfg(feature = "kat")]
+    fn job_hub(label: &str) -> Result<JobHub, Box<dyn std::error::Error>> {
+        let dir = secmp_store::kat::TempDir::new(label)?;
+        let profile = dir.path().join("profile");
+        std::fs::create_dir_all(&profile)?;
+        create_profile(&profile, b"correct horse", None)?;
+        let clock = TokioClock::new(SystemClock::new().unix_secs());
+        let core = Core::open(&profile, b"correct horse", clock, OsSource::default)?;
+        let config = HubConfig {
+            relay: RelayId(1),
+            inv_period: Period::S10,
+            reply_period: Period::S10,
+            profile: WireProfile::new("rt-s8", None)?,
+        };
+        let hub = Hub::new(core, config)?;
+        Ok((dir, Arc::new(Mutex::new(hub)), clock))
+    }
+
+    /// M7-S8 (EXT3b-2 (a); Q303; CLAUDE.md §1.4): of `MAX_JOB_CALLS` + 2 queued hub calls one job takes and answers
+    /// `MAX_JOB_CALLS`; the other 2 stay queued, in order and unanswered, while the cell source takes the hub's lock between
+    /// the two jobs; the next job answers them.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn hub_job_answers_at_most_max_job_calls() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::Ordering;
+        use tokio::sync::oneshot::error::TryRecvError;
+        const EXTRA: usize = 2;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let (_dir, hub, clock) = {
+            let _enter = runtime.enter();
+            job_hub("s8-cap")?
+        };
+        let ctx = || JobCtx {
+            status: (Mode::Strict, false, 0),
+            consuming: Arc::new(Mutex::new(BTreeMap::new())),
+            clock,
+            notices: mpsc::unbounded_channel().0,
+        };
+        let mut pending: VecDeque<Envelope> = VecDeque::new();
+        let mut answers = Vec::new();
+        for _ in 0..MAX_JOB_CALLS.saturating_add(EXTRA) {
+            let (reply, answer) = oneshot::channel();
+            pending.push_back((Call::Core(Request::Contacts), reply));
+            answers.push(answer);
+        }
+        let first = job_calls(&mut pending);
+        assert_eq!((first.len(), pending.len()), (MAX_JOB_CALLS, EXTRA));
+        // the first call of the first job is held 2 s; the job holds the hub's lock meanwhile
+        hooks::HOLD_HANDLE_MS.store(2_000, Ordering::SeqCst);
+        let (shared, job_ctx) = (Arc::clone(&hub), ctx());
+        let job1 = runtime.spawn_blocking(move || {
+            let work = JobWork {
+                settings: None,
+                calls: first,
+            };
+            let _ = hub_job(&shared, &job_ctx, work, &mut BTreeSet::new());
+        });
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let probe_hub = Arc::clone(&hub);
+        let probe = std::thread::spawn(move || {
+            let _ = SharedHub(probe_hub).prepare_cell(QueueId(1), 0);
+            let _ = tx.send(());
+        });
+        runtime.block_on(job1)?;
+        // between the jobs
+        let between = rx.recv_timeout(std::time::Duration::from_millis(5_000));
+        probe.join().map_err(|_| "probe")?;
+        assert!(
+            between.is_ok(),
+            "the cell source did not get the lock between the jobs: {between:?}"
+        );
+        for (i, answer) in answers.iter_mut().enumerate() {
+            if i < MAX_JOB_CALLS {
+                assert!(
+                    matches!(
+                        answer.try_recv(),
+                        Ok(Ok(Answer::Core(Response::Contacts(_))))
+                    ),
+                    "call {i}: answered by the first job"
+                );
+            } else {
+                assert!(
+                    matches!(answer.try_recv(), Err(TryRecvError::Empty)),
+                    "call {i}: still queued"
+                );
+            }
+        }
+        let second = job_calls(&mut pending);
+        assert_eq!((second.len(), pending.len()), (EXTRA, 0));
+        let (shared, job_ctx) = (Arc::clone(&hub), ctx());
+        let job2 = runtime.spawn_blocking(move || {
+            let work = JobWork {
+                settings: None,
+                calls: second,
+            };
+            let _ = hub_job(&shared, &job_ctx, work, &mut BTreeSet::new());
+        });
+        runtime.block_on(job2)?;
+        for (i, answer) in answers.iter_mut().enumerate().skip(MAX_JOB_CALLS) {
+            assert!(
+                matches!(
+                    answer.try_recv(),
+                    Ok(Ok(Answer::Core(Response::Contacts(_))))
+                ),
+                "call {i}: answered by the second job"
+            );
+        }
         Ok(())
     }
 

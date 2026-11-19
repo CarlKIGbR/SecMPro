@@ -206,7 +206,7 @@ enum TakeStep {
     /// Handed out.
     Done,
     /// The spare's `QUEUE_NEW` is still running: its registration follows, the hand-out then (no cap: it ends with the
-    /// creation).
+    /// creation). Or the scheduler had no randomness (Q301): nothing changed, tried again.
     Retry,
     /// The scheduler refused, or does not hold the queue and is not creating it: nobody is waiting for it any more.
     Refused,
@@ -219,6 +219,8 @@ fn take_step(
     match result {
         Ok(Some(_)) => TakeStep::Done,
         Ok(None) if pending => TakeStep::Retry,
+        // Q301: a failed draw changed nothing (the spare is still in the pool): the hand-out is tried again at the next boundary
+        Err(crate::scheduler::core::SchedError::Unavailable) => TakeStep::Retry,
         Ok(None) | Err(_) => TakeStep::Refused,
     }
 }
@@ -233,7 +235,8 @@ fn start_view<C: Clock, S: crate::sessions::actor::EntropySource>(
 }
 
 /// Step 1 of a `SetSettings` (C2-2; spec §10.2): a changed mode is set on the scheduler first, before anything is stored. A
-/// refusal (the recv-queues do not fit the mode) is the call's error and nothing is stored, nothing changed.
+/// refusal (the recv-queues do not fit the mode) is the call's error `Unsupported`, a failed draw `Unavailable` (Q301), and
+/// nothing is stored, nothing changed.
 fn mode_step<S: CellSource>(
     sched: &mut Scheduler,
     (now, source): (u64, &mut S),
@@ -243,9 +246,11 @@ fn mode_step<S: CellSource>(
     if previous == new {
         return Ok(Vec::new());
     }
-    sched
-        .set_mode(now, new, source)
-        .map_err(|_| Error::Unsupported)
+    sched.set_mode(now, new, source).map_err(|e| match e {
+        // Q301: no randomness — nothing changed, and not a refusal of the mode
+        crate::scheduler::core::SchedError::Unavailable => Error::Unavailable,
+        _ => Error::Unsupported,
+    })
 }
 
 /// Step 3: the save of the settings (the hub job) failed: one `Notice::Refused`, and the mode to go back to (`None` if the
@@ -274,7 +279,9 @@ fn apply_revert<S: CellSource>(
 
 /// Step 1 of a `SetSettings` from the scheduler's own mode (C2f-1): `None` while the backlog is not empty (a revert may be
 /// waiting: nothing is touched and the call stays where it is); else the mode the scheduler was in and the result of
-/// [`mode_step`] — `sched_mode` becomes `new` when the step worked.
+/// [`mode_step`] — `sched_mode` is re-read from [`Scheduler::mode`] after the step.
+/// **Invariant (Q301):** after every [`settings_step`] and [`revert_step`], `sched_mode == sched.mode()`; a failed draw
+/// changes nothing.
 fn settings_step<S: CellSource>(
     sched: &mut Scheduler,
     sched_mode: &mut Mode,
@@ -287,9 +294,8 @@ fn settings_step<S: CellSource>(
     }
     let previous = *sched_mode;
     let result = mode_step(sched, (now, source), previous, new);
-    if result.is_ok() && previous != new {
-        *sched_mode = new;
-    }
+    // Q301 (invariant): `sched_mode` is the scheduler's own mode after every step — set, refused or failed
+    *sched_mode = sched.mode();
     Some((previous, result))
 }
 
@@ -303,8 +309,10 @@ fn revert_step<S: CellSource>(
     previous: Mode,
     notices: &mpsc::UnboundedSender<Notice>,
 ) -> Result<Vec<Output>, ()> {
-    if let Ok(outs) = apply_revert(sched, (now, source), previous) {
-        *sched_mode = previous;
+    let result = apply_revert(sched, (now, source), previous);
+    // Q301 (invariant): as in `settings_step`
+    *sched_mode = sched.mode();
+    if let Ok(outs) = result {
         Ok(outs)
     } else {
         let _ = notices.send(Notice::Refused);
@@ -1837,6 +1845,25 @@ mod tests {
         assert_eq!(take_step(Ok(None), false), TakeStep::Refused);
     }
 
+    /// Q301 sweep (EXT3-2): a take whose scheduler draw failed changed nothing and is tried again; a refusal is not.
+    #[test]
+    fn take_step_retries_a_failed_draw() {
+        use crate::scheduler::core::SchedError;
+
+        assert_eq!(
+            take_step(Err(SchedError::Unavailable), false),
+            TakeStep::Retry
+        );
+        assert_eq!(
+            take_step(Err(SchedError::Unavailable), true),
+            TakeStep::Retry
+        );
+        assert_eq!(
+            take_step(Err(SchedError::BadPeriod), false),
+            TakeStep::Refused
+        );
+    }
+
     #[cfg(feature = "kat")]
     type TestCore = Core<crate::clock::ManualClock, crate::testutil::Fixed>;
 
@@ -2084,6 +2111,53 @@ mod tests {
             Mode::Strict,
         );
         assert!(matches!(next, Some((Mode::Balanced, Ok(_)))));
+        assert_eq!(sched.effective_mode(), Mode::Strict);
+        Ok(())
+    }
+
+    /// Q301 (EXT3-2): a mode step whose phase draw fails is `Unavailable` (not a refusal of the mode) and changes nothing —
+    /// the scheduler, `sched_mode` and the links stay on the old mode, and the same request, with randomness, works.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn settings_step_failed_draw_then_old_mode_keeps_scheduler_in_step()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::scheduler::core::LinkKind;
+
+        let mut sched = Scheduler::new(
+            Params::default(),
+            Mode::Strict,
+            TimingRng::failing_after(5, 2),
+        );
+        for n in 1..=2_u8 {
+            let cap = RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32])?)?;
+            sched.add_recv_queue(0, RelayId(1), cap, 10_000)?;
+        }
+        let mut sched_mode = Mode::Strict;
+        let failed = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            true,
+            (0, &mut NoCells),
+            Mode::Balanced,
+        );
+        assert!(matches!(
+            failed,
+            Some((Mode::Strict, Err(Error::Unavailable)))
+        ));
+        assert_eq!(
+            (sched.effective_mode(), sched.mode(), sched_mode),
+            (Mode::Strict, Mode::Strict, Mode::Strict)
+        );
+        let kinds: Vec<LinkKind> = sched.links().iter().map(|l| l.kind).collect();
+        assert_eq!(kinds, [LinkKind::Recv, LinkKind::Recv]);
+        let same = settings_step(
+            &mut sched,
+            &mut sched_mode,
+            true,
+            (0, &mut NoCells),
+            Mode::Strict,
+        );
+        assert!(matches!(same, Some((Mode::Strict, Ok(v))) if v.is_empty()));
         assert_eq!(sched.effective_mode(), Mode::Strict);
         Ok(())
     }

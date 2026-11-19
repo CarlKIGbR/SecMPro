@@ -337,3 +337,182 @@ fn driver_control_with_nothing_to_do_opens_no_link() {
         assert!(!x.control.lock().unwrap().done.contains(&kind));
     });
 }
+
+/// The least difference of consecutive start times (`u64::MAX` for fewer than two).
+fn min_gap(starts: &[u64]) -> u64 {
+    let mut sorted = starts.to_vec();
+    sorted.sort_unstable();
+    sorted
+        .windows(2)
+        .filter_map(|w| w.get(1).zip(w.first()).map(|(b, a)| b.saturating_sub(*a)))
+        .min()
+        .unwrap_or(u64::MAX)
+}
+
+/// What the product `Driver::control` did with one control operation over 30 min of virtual time (M7-S4d, Q300 phase rule):
+/// its start times, its due time `first_ms` after the start, what the runner reported, and the provider connects with its
+/// keys.
+struct PhaseRun {
+    starts: Vec<u64>,
+    due: Option<u64>,
+    unanswered: Vec<secmp_client_core::scheduler::types::ControlKind>,
+    done: Vec<secmp_client_core::scheduler::types::ControlKind>,
+    connects: usize,
+}
+
+/// Run `kind` (related `related`, on `relay`) at once through the product driver with the runner hooks `hook`.
+fn phase_run(
+    seed: u64,
+    kind: secmp_client_core::scheduler::types::ControlKind,
+    relay: secmp_client_core::scheduler::types::RelayId,
+    related: u64,
+    first_ms: u64,
+    hook: impl FnOnce(&mut secmp_testkit::harness::ControlMaterial),
+) -> PhaseRun {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::Purpose;
+    use secmp_testkit::harness::Costs;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut x = TClient::new(
+            &setup,
+            Mode::Strict,
+            Params::default(),
+            seed,
+            Costs::default(),
+            0,
+        );
+        let t0 = setup.now();
+        hook(&mut x.control.lock().unwrap());
+        let op = x
+            .sched
+            .schedule_control(t0, kind, relay, related, When::Prompt)
+            .unwrap();
+        x.run_until(t0.saturating_add(first_ms)).await;
+        let due = x.sched.control_due(op);
+        x.run_until(t0.saturating_add(1_800_000)).await;
+        let runs: Vec<_> = x
+            .driver
+            .log()
+            .unwrap()
+            .connects
+            .iter()
+            .filter(|(_, p, _)| matches!(p, Purpose::Control(o) if *o == op))
+            .map(|(t, _, i)| (*t, *i))
+            .collect();
+        let connects = setup
+            .provider
+            .connects()
+            .iter()
+            .filter(|(_, i)| runs.iter().any(|(_, r)| r == i))
+            .count();
+        let m = x.control.lock().unwrap();
+        PhaseRun {
+            starts: runs.iter().map(|(t, _)| *t).collect(),
+            due,
+            unanswered: m.unanswered.clone(),
+            done: m.done.clone(),
+            connects,
+        }
+    })
+}
+
+/// The answered class: ≤ 5 runs in 30 min, none within a minute of another; due U[1 min, 60 min] after the end of the first
+/// attempt (which ends between `lo_ms` and `first_ms` after the start); the link was opened.
+fn assert_answered(r: &PhaseRun, lo_ms: u64, first_ms: u64) {
+    let (n, gap) = (r.starts.len(), min_gap(&r.starts));
+    assert!(
+        n <= 5 && gap >= 60_000,
+        "answered, spaced like a delayed operation: {n} runs, min_gap {gap} ms"
+    );
+    let (start, due) = (r.starts.first().copied().unwrap(), r.due.unwrap());
+    assert!(
+        due >= start.saturating_add(lo_ms).saturating_add(60_000)
+            && due <= start.saturating_add(first_ms).saturating_add(3_600_000),
+        "due {} ms after the start",
+        due.saturating_sub(start)
+    );
+    assert!(r.connects >= 1, "the link was opened");
+}
+
+/// Q300 phase rule (M7-S4d; XREVIEW-M7-S4 S4-1, S4-2): a relay `ERR` is answered, through the product `Driver::control`.
+#[test]
+fn driver_control_relay_err_is_answered() {
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_transport::Error as TransportError;
+    let kind = ControlKind::LinkPut(1);
+    let r = phase_run(44, kind, RelayId(0), 1, 5_000, |m| {
+        m.answer = Some((kind, TransportError::Rate));
+    });
+    assert_answered(&r, 0, 5_000);
+}
+
+/// Q300 phase rule (M7-S4d; XREVIEW-M7-S4 S4-1, S4-2): a link closed after the command is answered, through the product
+/// `Driver::control`.
+#[test]
+fn driver_control_close_after_the_command_is_answered() {
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_transport::Error as TransportError;
+    let kind = ControlKind::LinkPut(2);
+    let r = phase_run(45, kind, RelayId(0), 2, 5_000, |m| {
+        m.answer = Some((kind, TransportError::Closed));
+    });
+    assert_answered(&r, 0, 5_000);
+}
+
+/// Q300 phase rule (M7-S4d; XREVIEW-M7-S4 S4-1, S4-2): an unfitting or garbled answer is answered, through the product
+/// `Driver::control`.
+#[test]
+fn driver_control_unfitting_answer_is_answered() {
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_transport::Error as TransportError;
+    let kind = ControlKind::LinkGetOwner(3);
+    let r = phase_run(46, kind, RelayId(0), 3, 5_000, |m| {
+        m.answer = Some((kind, TransportError::Rejected));
+    });
+    assert_answered(&r, 0, 5_000);
+}
+
+/// Q300 phase rule (M7-S4d; XREVIEW-M7-S4 S4-1, S4-2): a relay that never answers, until the timeout, is answered, through
+/// the product `Driver::control`.
+#[test]
+fn driver_control_stall_until_the_timeout_is_answered() {
+    use secmp_client_core::scheduler::run::CONNECT_TIMEOUT_MS;
+    use secmp_client_core::scheduler::types::{ControlKind, QueueId, RelayId};
+    let kind = ControlKind::QueueNew(QueueId(904));
+    let first = CONNECT_TIMEOUT_MS.saturating_add(5_000);
+    let r = phase_run(47, kind, RelayId(0), 904, first, |m| m.hang.push(kind));
+    assert_answered(&r, CONNECT_TIMEOUT_MS, first);
+}
+
+/// Q300 phase rule (M7-S4d; XREVIEW-M7-S4 S4-1, S4-2): a failure before the link is up stays link failed (CO-06), through
+/// the product `Driver::control`.
+#[test]
+fn driver_control_failure_before_the_link_is_up_stays_link_failed() {
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    let kind = ControlKind::LinkPut(6);
+    let r = phase_run(48, kind, RelayId(1), 6, 5_000, |_| {});
+    assert_eq!(r.connects, 0);
+    assert!(r.unanswered.is_empty());
+    assert!(
+        r.starts.len() >= 8,
+        "retried after the back-off (CO-06): {} runs",
+        r.starts.len()
+    );
+}
+
+/// Q300 phase rule (M7-S4d; XREVIEW-M7-S4 S4-1, S4-2): a consuming `LINK_GET` lost after the handshake ends once, through
+/// the product `Driver::control`.
+#[test]
+fn driver_control_consume_lost_after_the_handshake_ends_once() {
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_transport::Error as TransportError;
+    let kind = ControlKind::LinkGetConsume(5);
+    let r = phase_run(49, kind, RelayId(0), 5, 5_000, |m| {
+        m.answer = Some((kind, TransportError::Closed));
+    });
+    assert_eq!(r.starts.len(), 1, "terminal");
+    assert_eq!(r.due, None);
+    assert_eq!(r.unanswered, vec![kind]);
+    assert!(!r.done.contains(&kind));
+}

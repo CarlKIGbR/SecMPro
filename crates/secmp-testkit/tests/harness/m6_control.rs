@@ -478,6 +478,49 @@ fn answered_queue_new_auth_is_spaced_not_terminal() {
     );
 }
 
+/// Q300 (M7-S4d, XREVIEW-M7-S4 S4-3): link data whose stored blob does not decode is caught in the prepare step — no link
+/// opens, no command is sent; the operation stays link failed (CO-06's back-off), local only.
+#[test]
+fn corrupt_link_material_opens_no_link() {
+    let mut sim = driver();
+    let alice = client(&mut sim, Mode::Strict, 93);
+    sim.client(alice).links.insert(
+        1,
+        LinkMaterial {
+            ld_id: [1; 16],
+            owner_seed: [2; 32],
+            blob: vec![0; 3],
+            one_time: true,
+            expires_bucket: 488_988,
+        },
+    );
+    sim.run_until(1_000);
+    let t = sim.now();
+    let kind = ControlKind::LinkPut(1);
+    let op = sim
+        .client(alice)
+        .sched
+        .schedule_control(t, kind, RelayId(0), 1, When::Prompt)
+        .unwrap();
+    sim.run_until(t.saturating_add(1_800_000));
+    let slot = CONTROL_SLOT_BASE.saturating_add(op.0);
+    let c = sim.client_ref(alice);
+    let traced = c.trace.iter().filter(|e| e.slot == slot).count();
+    let sent = c
+        .control_requests
+        .iter()
+        .filter(|(_, o, _)| *o == op)
+        .count();
+    assert_eq!(
+        (traced, sent),
+        (0, 0),
+        "trace entries and command records of the operation"
+    );
+    let runs = starts_of(&sim, alice, kind).len();
+    assert!(runs >= 8, "retried after the back-off (CO-06): {runs} runs");
+    assert!(!c.controls_done.iter().any(|(_, k)| *k == kind));
+}
+
 /// CO-07: control operations leave the scheduled traces unchanged; the only extra units are the one-shot links'.
 #[test]
 fn control_ops_leave_scheduled_traces_unchanged() {

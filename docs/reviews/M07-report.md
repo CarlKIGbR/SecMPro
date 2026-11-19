@@ -2420,7 +2420,7 @@ Deviations: none (the lint-form changes above only).
 
 **Finding (review L1-2, V-L1-2).** No production code scheduled `ControlKind::LinkGetOwner`, and its answer (`ControlEffect::OwnerStatus`) reached only `Scheduler::owner_status`, never `Invitations::on_owner_status`. So a `LINK_PUT` lost with the relay was never re-driven (§9.7 (1)) and a link data consumed by someone else was never seen (§5.2).
 
-**Design (Q297).** A chain per open invitation: the first owner-status query `When::Delayed` (U[1 min, 60 min], §10.6 (2)) after the issue's prompt `LINK_PUT`, the next U[1 min, 60 min] after each answer, a fresh one at every open; none once the invitation is consumed, expired or retired, the link data was seen consumed, or `expires` is within 60 min. Relay-visible per invitation: one `LINK_PUT` at issue; one owner-status `LINK_GET` per U[1 min, 60 min] (mean 30.5 min) of online time until the handshake, the consumption is seen or `expires` − 60 min; one delayed `LINK_PUT` per `{0, 0}`; each on its own one-shot link.
+**Design (Q297).** A chain per open invitation: the first owner-status query `When::Delayed` (U[1 min, 60 min], §10.6 (2)) after the issue's prompt `LINK_PUT`, the next U[1 min, 60 min] after each answer (after a `{0, 0}` answer: after the re-put's due time, not after the answer), a fresh one at every open; none once the invitation is consumed, expired or retired, the link data was seen consumed, or `expires` is within 60 min. Relay-visible per invitation: one `LINK_PUT` at issue; one owner-status `LINK_GET` per U[1 min, 60 min] (mean 30.5 min) of online time until the handshake (a query already queued when it arrives still runs once), the consumption is seen or `expires` − 60 min; one delayed `LINK_PUT` per `{0, 0}`; each on its own one-shot link.
 
 **Product change (numstat K1 `8120104`).** `invitations.rs` +84: `Invitations::owner_query`, `owner_queries`, `owner_answer`. `hub.rs` +30/−2: `Hub::new` queues the queries of the open invitations, `Hub::invite` the first one, new `Hub::owner_status`. `runtime.rs` +29/−14: the `LinkGetOwner` arm becomes `HostControl::link_get_owner`.
 
@@ -2437,3 +2437,31 @@ Deviations: none (the lint-form changes above only).
 Deviations: none (the lint-form changes above only).
 
 **ci-fast** (head `7538df3`): `ci-fast: PASS`; workspace nextest 1641/1641, harness 331/331 (harness step 1654 s); evidence `docs/reviews/M07-evidence/s2-ci-fast.txt`.
+
+## S-2b (WEISUNG M7-S2b; modell=claude-sonnet-5-5)
+
+**Finding (XREVIEW-M7-S2, S2-1, MAJOR).** The delayed re-put queued by `on_owner_status` was not checked again when it ran: the executor took its arguments from `link_put_args`, which skips only RETIRING rows. (a) A put that ran after the row was retiring or gone failed, was retried by `control_failed` every U[0, 3 min] for ever, and every retry opened a one-shot link without a command (a relay-visible beacon, invariant 1, §11.3). (b) A put that ran after the handshake published the link data of a consumed invitation again (§9.7 (1) allows the re-put only for an offered invitation before `expires`).
+
+**Rule (Q298).** A `LINK_PUT` leaves the process only for an invitation that is Offered, before `expires`, and without `FLAG_CONSUMED_SEEN`, checked at the moment the operation runs; otherwise the operation completes without a command and is never retried. Every `ControlKind::LinkPut`, the issue's prompt put included.
+
+**Change (K1 `a0dead7`).**
+- `invitations.rs`: `Invitations::put_args` (the gate, line 789: `offer_state` at the injected clock, then the flag, then the bytes of `link_put_args` through the shared `put_args_of`); `on_owner_status` queues no re-put when `now + longest >= expires` (line 845); `longest_delay_secs` is the one helper of this site and of `owner_query`. `link_put_args` stays for the owner-status query, unchanged.
+- `hub.rs`: `Hub::put_args` (line 833), with the hub's injected clock.
+- `runtime.rs`: the `LinkPut` arm of `HostControl::run` takes its arguments from `Hub::put_args` (line 766 ff.); `None` ends the operation with `ControlEffect::None` without a command; a store error stays an error and is retried.
+- Test side, K2 `5e4adac`: `driver.rs` — `StoreHub::put_allowed` and its use in the `LinkPut` arm of `run_control` (18 lines), so the virtual driver applies the production gate; yes, the driver changed.
+
+**Tests.**
+- `invitations::tests::put_args_only_for_an_offered_invitation`: `Some`, field for field equal to `link_put_args`; `None` for an unknown `n`, a consumed row (by a real accepted handshake; its blob is still stored), `expires` and `expires + 1` (`Some` at `expires − 1`), `FLAG_CONSUMED_SEEN` (through `on_owner_status({0, 1})`) and a RETIRING row. It would catch any gate branch that is missing or has the wrong boundary.
+- `invitations::tests::no_reput_within_the_longest_delay_of_expires`: one delayed `LinkPut` at `expires − 3 601 s`, none at `expires − 3 600 s` and `expires − 1 s`. It would catch a missing or off-by-one cut.
+- `harness::m7_owner::owner_reput_is_not_sent_for_a_retired_invitation`: relay loss → `{0, 0}` answer → identity rotation before the re-put is due → 4 h: no new `LINK_PUT` command, at most one `LinkPut(n)` start after the retirement (the assertion that fails on the retry loop), at most one further `LinkGetOwner(n)` start.
+- `harness::m7_owner::owner_reput_is_not_sent_after_the_handshake`: invitee consumes, the answer `{0, 0}` is injected into the host's hub (`Hub::owner_status`, the call the host's operation makes), the handshake is accepted before the re-put is due (asserted: no `LinkPut` start yet), 4 h: no new `LINK_PUT` command, at most one `LinkPut(n)` start after the handshake, contact on both sides.
+
+**Orders driven.** The retired order with the relay's real loss (`restart_relay`). The handshake order with the answer injected through the hub instead of a relay loss: the virtual relay can only restart as a whole (`world.rs`, `restart_relay`: no state at all, queues included), which would also drop the invitation queue that the handshake needs.
+
+**Difference from the Weisung's text (flagged).** The retired test asserts "at most one further `LinkGetOwner(n)` start after the retirement", not "none": the query queued together with the re-put still runs once (the Weisung's own §3.2 says so). It ends without a command and its answer never reaches the hub, so the chain stops; the open link is HB-55 (S2-2). The unit tests live in `invitations_tests.rs`, the module file of `invitations.rs` (`#[path]`).
+
+**Docs.** Q298, the wording of Q297 and of the S-2 design paragraph (after `{0, 0}` the next query is drawn after the re-put's due time; a query already queued at the handshake runs once), HB-55, HB-56 (S2-2, S2-3).
+
+**Gates.** `cargo nextest run -p secmp-client-core --features kat`: 359/359 (without `kat`: 56/56). `cargo nextest run -p secmp-testkit --features kat --test harness`: 333/333 (1759 s; the four new tests PASS). `cargo xtask step --strict policy`: PASS. fmt and clippy `-D warnings` clean.
+
+Deviations: the assertion above (`<= 1` queries), the unit tests in `invitations_tests.rs`.

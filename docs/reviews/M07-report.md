@@ -2583,3 +2583,58 @@ Deviations:
 - `driver.rs`: the consuming-`LINK_GET` arm of `run_control` is `VirtualDriver::consume_query` (same code as dictated), because `run_control` reached 105 lines (clippy `too_many_lines`, limit 100).
 - H3: the "no `trace` entry with `slot == CONTROL_SLOT_BASE + op.0`" assertion counts only entries at or after the start of the query's second run (`t_ms >= start`): an answered operation keeps its `OpId`, so the entries of its first, answered link carry the same slot.
 - Tests: H1/H5 share the helper `answered_is_spaced`; the test files add `min_gap`, `starts_of`, `control_link`, `unit_time`; time arithmetic is saturating (clippy `arithmetic_side_effects`).
+
+## S-5 (BRIEF M7-S5; modell=claude-sonnet-5-5)
+
+**Findings.**
+- EXT3-2 (a) MAJOR (V-EXT3-2): `Scheduler::change_mode` (`set_mode`, `set_direct`) wrote the mode and tore every link down before drawing the new phases; a failed draw left Balanced in force with part of the new links, so the relay learned a queue grouping the user had not chosen (§11.3 item 2; CLAUDE.md §1 invariants 1, 5), while the runtime answered `Unsupported` and kept `sched_mode` and the store on Strict.
+- EXT3-2 (b) MINOR (V-EXT3-2): `take_spare` → `set_queue_period` wrote the period before it drew the handover instant and did not restore it: the spare was announced at 10 s but fetched at 80 s for 6–24 h (§10.2), and a retry found "unchanged".
+- Sibling: a hand-out whose refill (`top_up_pool`) failed answered `Err` after it had already handed the spare out.
+- (d) The same order (a change, then the fallible draw) was in `World::tear`, `recreate`, `top_up_pool`, the queue adds, `remove_queue` and `connect_failed`.
+
+**Rule (Q301).** A scheduler change that needs randomness draws ALL its values before the first change, then applies them through a path that cannot fail. The values, their order and their count are those at the base, so every existing seeded test sees the same stream.
+
+**Change.**
+- `crates/secmp-client-core/src/timing.rs:111` `TimingRng::failing_after` (test-only, `Source::FailAfter`, `splitmix`).
+- `crates/secmp-client-core/src/scheduler/core/mod.rs:499` `World::close`, `:532` `tear`; `:982` `recreate`; `:1203` `top_up_pool`, `:1212` `draw_top_up`, `:1224` `apply_top_up`; `:453` `wanted_specs`; `:1260` `on_queue`, `:1265` `ends_with`; `:1320` `Scheduler::mode`; `:1518`, `:1583`, `:1618` the three queue adds; `:1650` `remove_queue`; `:1687` `set_queue_period`, `:1708` `check_changed`, `:1736` `plan_recv_period`, `:1759` `apply_recv_period`, `:1786` `set_send_period`; `:1817` `has_link`, `:1824` `draw_links`, `:1832` `add_links`, `:1849` `missing_links` (they replace `sync_links`); `:1887` `change_mode`; `:2026` `take_spare`; `:2389` `connect_failed`.
+- `crates/secmp-client-core/src/scheduler/control.rs:217` `ControlOps::schedule_drawn`.
+- `crates/secmp-client-core/src/scheduler/pool.rs:124` `QueuePool::oldest`, `:136` `missing_after_take`.
+- `crates/secmp-client-core/src/runtime.rs:215` `take_step`, `:240` `mode_step`, `:285` `settings_step`, `:305` `revert_step`.
+
+**Tests.** Red first on the base (`target/fable/s5-red.txt`; the 12 tests ran against the old code with only `failing_after`, `Scheduler::mode` and `schedule_drawn` added):
+- SM-1 `scheduler::core::tests::set_mode_without_randomness_changes_nothing`: mode, links and outputs unchanged after a failed phase draw (first or second link). Red: `(Balanced, Balanced)` against `(Strict, Strict)`.
+- SM-2 `runtime::tests::settings_step_failed_draw_then_old_mode_keeps_scheduler_in_step`: `Unavailable`, not `Unsupported`; `sched_mode` equals the scheduler's mode. Red: `Err(Unsupported)`.
+- SP-1 `take_spare_draw_failure_restores_period`: Red: `(10000, true)` against `(80000, true)`.
+- SP-2 `take_spare_retry_after_failed_draw_hands_over`: the retry hands over at the announced instant. Red: `die_at` `Some(83066121)` against `Some(3600001)`.
+- SP-3 `take_spare_refill_draw_failure_hands_out_nothing`: Red: `(10000, false)` against `(80000, true)`.
+- PS-1 `send_period_change_without_randomness_changes_nothing`: Red: period `Some(20000)` against `Some(10000)`.
+- RQ-1 `remove_queue_without_randomness_changes_nothing`: Red: the queue was removed.
+- TD-1 `teardown_without_randomness_leaves_the_link`: Red: one of two links gone.
+- CF-1 `connect_failed_without_randomness_changes_nothing`: Red: `closed_before` 1 against 0.
+- RC-1 `recreate_without_randomness_keeps_the_generation`: Red: generation 1.
+- MP-1 `manage_pool_failed_draw_queues_nothing`: Red: 1 operation queued against 0.
+- TS-1 `runtime::tests::take_step_retries_a_failed_draw`: Red: `Refused` against `Retry`.
+- TR-1 `timing::tests::failing_after_fails_from_the_chosen_draw`, CD-1 `scheduler::control::tests::schedule_drawn_is_the_delayed_schedule`: green only (they pin the new test source and that `schedule_drawn` equals `schedule(When::Delayed)`).
+- After the change all 14 pass.
+
+**Not in this unit.**
+- `World::work_pass` drops the outcomes after a failed one.
+- `Scheduler::poll_due` stops at the first failed link.
+- `World::fetched_multi` re-creates after delivering.
+- `ControlOps::failed` (M7-S4).
+- The runtime's `apply_action` reports a failed `AddRecv`/`AddSend` as `Refused` while the hub has registered the queue, which heals at the next add or open.
+
+**Gates.**
+1. `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+2. `secmp-client-core --features kat`: 377 run, 377 passed, 0 skipped (CORE_BASE 363 + 14); without `kat`: 63 run, 63 passed, 0 skipped.
+3. harness `m6_control`/`m6_mut`/`m6_sched`/`m7_pool`/`m6_activity`: 144 run, 144 passed (8 slow), 198 skipped; QP-01…QP-05 (in `m6_control`), `strict_take_emits_nothing_at_the_take`, `rejected_pool_handout_keeps_spare`, `control_op_draws_from_timing_rng` among them, unchanged.
+4. `cargo xtask step --strict policy`: PASS; `cargo xtask step fuzz-check`: PASS.
+
+**ci-fast.** Run on `<pending>`: `<pending>`; evidence `docs/reviews/M07-evidence/s5-ci-fast.txt`.
+
+Deviations:
+- The helpers and tests of the core are at the end of `scheduler::core::tests` (the anchored `counters_now_moves_when_a_counted_step_runs` is in the sibling module `m6_mut`); their imports are at the top of `tests`, not inside each test.
+- `ControlOps::schedule_drawn` and CD-1 were added before the red run (the 12 red tests compile either way; the function is not called on the base).
+- The `Op` literal of `schedule_drawn` is `schedule`'s (the fields of `struct Op` are unchanged by S4); the `let base` anchor is the 8-space line in `delayed_due` (WEISUNG M7-S5b).
+- `git grep -c sync_links` prints nothing (zero matches).
+- `two_relays_up` names the send cap `out_cap` (clippy `similar_names`).

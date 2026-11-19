@@ -140,11 +140,17 @@ pub struct Snapshot {
 }
 
 /// The confirmation and the cloud-folder refusal, the check that `path` does not exist, then the rows of `store` into
-/// buffers (milliseconds; no key derivation).
+/// buffers (no key derivation; the whole history while the caller holds `store` — the runtime uses [`snapshot_begin`], Q302).
 ///
 /// # Errors
 /// As [`export`], but no file is written.
 pub fn snapshot(store: &Store, confirm: bool, force: bool, path: &Path) -> Result<Snapshot> {
+    let target = checked_target(confirm, force, path)?;
+    assemble(target, &Contents::of(store)?)
+}
+
+/// The confirmation, the cloud-folder refusal and the check that `path` does not exist: the target, its parent canonicalised.
+fn checked_target(confirm: bool, force: bool, path: &Path) -> Result<std::path::PathBuf> {
     if !confirm {
         return Err(Error::ConfirmRequired);
     }
@@ -156,7 +162,12 @@ pub fn snapshot(store: &Store, confirm: bool, force: bool, path: &Path) -> Resul
     if std::fs::symlink_metadata(&target).is_ok() {
         return Err(Error::Unavailable);
     }
-    let sections = Contents::of(store)?.encode()?;
+    Ok(target)
+}
+
+/// The snapshot of `contents` for `target`: the sections, their table and the body (each one allocation, L34-1).
+fn assemble(target: std::path::PathBuf, contents: &Contents) -> Result<Snapshot> {
+    let sections = contents.encode()?;
     let mut table = Vec::with_capacity(4);
     for (tag, s) in TAGS.iter().zip(&sections) {
         table.push((*tag, len_u32(s.len())?));
@@ -169,9 +180,83 @@ pub fn snapshot(store: &Store, confirm: bool, force: bool, path: &Path) -> Resul
     })
 }
 
+/// The first half of the runtime's export (M7-S6, Q302): the checked target, the rows besides the history, and the store's
+/// reader inside the read transaction [`snapshot_begin`] started. It holds no lock.
+pub struct PendingSnapshot {
+    target: std::path::PathBuf,
+    head: Head,
+    reader: rusqlite::Connection,
+}
+
+/// The first half of an export in the runtime (M7-S6, Q302), while the caller holds `store` (and the hub): the checks of
+/// [`snapshot`], the rows besides the history and one read transaction on the store's reader, its snapshot fixed here by its
+/// first read (WAL). Every write goes through the store's own connection, which the caller's hold keeps out, so the history
+/// [`PendingSnapshot::finish`] reads is the history beside these rows (one point in time). Nothing here grows with the history.
+///
+/// # Errors
+/// As [`snapshot`]; [`Error::Unavailable`] also while another export reads its history, or if the transaction does not start.
+pub fn snapshot_begin(
+    store: &mut Store,
+    confirm: bool,
+    force: bool,
+    path: &Path,
+) -> Result<PendingSnapshot> {
+    let target = checked_target(confirm, force, path)?;
+    let head = Head::of(store)?;
+    let reader = store.reader.take().ok_or(Error::Unavailable)?;
+    let pinned = reader.execute_batch("BEGIN DEFERRED").and_then(|()| {
+        reader.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })
+    });
+    if pinned.is_err() {
+        let _ = reader.execute_batch("ROLLBACK");
+        if reader.is_autocommit() {
+            store.reader = Some(reader);
+        }
+        return Err(Error::Unavailable);
+    }
+    Ok(PendingSnapshot {
+        target,
+        head,
+        reader,
+    })
+}
+
+impl PendingSnapshot {
+    /// Read the history in the transaction of [`snapshot_begin`], end it, give the reader back to `home` (a short hold; a reader
+    /// whose transaction did not end is closed instead, and later exports are refused), and assemble as [`snapshot`] does.
+    ///
+    /// # Errors
+    /// As [`snapshot`]; [`Error::Unavailable`] if the read transaction cannot be ended.
+    pub fn finish(self, home: &std::sync::Mutex<Store>) -> Result<Snapshot> {
+        let Self {
+            target,
+            head,
+            reader,
+        } = self;
+        let messages = read_messages(&reader, &head.stored);
+        // the transaction ends before the reader goes back, so that a checkpoint passes it again
+        let ended = reader.execute_batch("ROLLBACK").is_ok() && reader.is_autocommit();
+        if ended && let Ok(mut store) = home.lock() {
+            store.reader = Some(reader);
+        }
+        if !ended {
+            return Err(Error::Unavailable);
+        }
+        assemble(target, &head.with(messages?))
+    }
+}
+
 /// A test hook (feature `kat`): while set, [`Snapshot::write`] waits on this barrier before it derives the key.
 #[cfg(feature = "kat")]
 pub static WRITE_BARRIER: std::sync::Mutex<Option<std::sync::Arc<std::sync::Barrier>>> =
+    std::sync::Mutex::new(None);
+
+/// A test hook (feature `kat`; M7-S6): while set, the history read of an export (`read_messages`) waits on this barrier twice —
+/// the first wait tells the test that the export is inside the read, the second is its release.
+#[cfg(feature = "kat")]
+pub static HISTORY_HOLD: std::sync::Mutex<Option<std::sync::Arc<std::sync::Barrier>>> =
     std::sync::Mutex::new(None);
 
 impl Snapshot {
@@ -293,8 +378,17 @@ fn joined(sections: &[Zeroizing<Vec<u8>>]) -> Result<Zeroizing<Vec<u8>>> {
     Ok(body)
 }
 
-impl Contents {
-    /// The contents of `store`: its identity, contacts, settings and messages (no view-once).
+/// What an export reads besides the history (M7-S6, Q302): the identity section, the contacts as exported and as stored (a
+/// message's contact index is its contact's position in `stored`) and the settings — one row each, one per contact.
+struct Head {
+    identity: Zeroizing<Vec<u8>>,
+    contacts: Vec<BackupContact>,
+    stored: Vec<crate::contacts::StoredContact>,
+    settings: Vec<(String, Zeroizing<Vec<u8>>)>,
+}
+
+impl Head {
+    /// The rows of `store` besides the history, in the order of the old `Contents::of`.
     fn of(store: &Store) -> Result<Self> {
         let id: i64 = store
             .query_row("SELECT id FROM identity ORDER BY id LIMIT 1", [], |r| {
@@ -318,13 +412,31 @@ impl Contents {
             })
             .collect::<Result<Vec<_>>>()?;
         let settings = read_settings(store)?;
-        let messages = read_messages(store, &stored)?;
         Ok(Self {
             identity,
             contacts,
+            stored,
             settings,
-            messages,
         })
+    }
+
+    /// The contents: these rows and the history `messages`.
+    fn with(self, messages: Vec<BackupMessage>) -> Contents {
+        Contents {
+            identity: self.identity,
+            contacts: self.contacts,
+            settings: self.settings,
+            messages,
+        }
+    }
+}
+
+impl Contents {
+    /// The contents of `store`: its identity, contacts, settings and messages (no view-once), through its own connection.
+    fn of(store: &Store) -> Result<Self> {
+        let head = Head::of(store)?;
+        let messages = read_messages(&store.conn, &head.stored)?;
+        Ok(head.with(messages))
     }
 
     /// The four sections, encoded (ADR-053 Appendix).
@@ -418,15 +530,14 @@ fn read_settings(store: &Store) -> Result<Vec<(String, Zeroizing<Vec<u8>>)>> {
 /// A `messages` row as [`read_messages`] selects it.
 type MessageRow = (i64, i64, i64, i64, Option<i64>, Vec<u8>, Zeroizing<Vec<u8>>);
 
-/// The messages of `store` in history order, each with the index of its contact in `contacts` (a message of a contact
+/// The messages read through `conn` in history order, each with the index of its contact in `contacts` (a message of a contact
 /// that is not in `contacts` has no index and is not exported); a view-once is never in the history (CS-3.4) and is
 /// excluded here as well.
 fn read_messages(
-    store: &Store,
+    conn: &rusqlite::Connection,
     contacts: &[crate::contacts::StoredContact],
 ) -> Result<Vec<BackupMessage>> {
-    let mut stmt = store
-        .conn
+    let mut stmt = conn
         .prepare(
             "SELECT contact_id, direction, kind, ts_ms, expire_at_ms, msg_id, payload FROM messages \
              WHERE kind != ?1 ORDER BY id",
@@ -446,6 +557,15 @@ fn read_messages(
         })
         .map_err(|_| Error::Unavailable)?;
     let mut out = Vec::new();
+    // M7-S6: the test hook of `HISTORY_HOLD`, inside the history read
+    #[cfg(feature = "kat")]
+    {
+        let held = HISTORY_HOLD.lock().ok().and_then(|mut b| b.take());
+        if let Some(barrier) = held {
+            barrier.wait();
+            barrier.wait();
+        }
+    }
     for row in rows {
         let (contact_id, direction, kind, ts, expire_at, msg_id, payload): MessageRow =
             row.map_err(|_| Error::Unavailable)?;
@@ -1236,6 +1356,47 @@ mod tests {
         let sum: usize = sections.iter().map(|s| s.len()).sum();
         assert_eq!(snap.body.len(), sum);
         assert_eq!(snap.body.capacity(), snap.body.len(), "the body");
+        Ok(())
+    }
+
+    /// M7-S6 (Q302; CLAUDE.md §1.6, review L34-1): the runtime's export — `snapshot_begin`, then `PendingSnapshot::finish` on
+    /// the reader — gives the table and body of `snapshot` byte for byte, the body is one allocation of exactly its length, a
+    /// second begin while one is pending is refused, and the reader is back after `finish`.
+    #[test]
+    fn export_two_phase_is_the_snapshot() -> R {
+        let dir = TempDir::new("s6-two-phase")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        let reference = snapshot(&store, true, true, &dir.path().join("one.secmpbackup"))?;
+        let home = std::sync::Mutex::new(store);
+        let pending = {
+            let mut s = home.lock().map_err(|_| "lock")?;
+            let pending = snapshot_begin(&mut s, true, true, &dir.path().join("two.secmpbackup"))?;
+            assert_eq!(
+                snapshot_begin(&mut s, true, true, &dir.path().join("three.secmpbackup")).err(),
+                Some(Error::Unavailable),
+                "one history read at a time"
+            );
+            pending
+        };
+        let snap = pending.finish(&home)?;
+        assert_eq!(snap.table, reference.table);
+        assert_eq!(
+            snap.body.as_slice(),
+            reference.body.as_slice(),
+            "byte-identical body"
+        );
+        assert_eq!(snap.body.capacity(), snap.body.len(), "the body");
+        let again = snapshot_begin(
+            &mut *home.lock().map_err(|_| "lock")?,
+            true,
+            true,
+            &dir.path().join("four.secmpbackup"),
+        )?;
+        assert_eq!(
+            again.finish(&home)?.body.as_slice(),
+            reference.body.as_slice()
+        );
         Ok(())
     }
 

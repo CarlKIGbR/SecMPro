@@ -9,6 +9,9 @@
 //! `secure_delete = ON` (CS-3.4) and `synchronous = FULL` (Q-A14). The profile directory holds `profile.db`, its `-wal` and `-shm`, and `lock`, which an
 //! open store holds locked (one writer per profile).
 //!
+//! **The reader (M7-S6, Q302).** Each open store has a second connection, opened the same way after the migration and set
+//! `query_only`: the runtime's export reads the history there in one read transaction (WAL: the writer goes on).
+//!
 //! **Transactions.** Every write goes through [`Store::txn`]: one `BEGIN IMMEDIATE … COMMIT`, every statement through
 //! [`Tx`]; an error anywhere rolls the whole transaction back and is [`Error::Unavailable`] (nothing changed).
 //!
@@ -162,6 +165,10 @@ pub fn check_cipher_version(version: &str) -> Result<()> {
 
 /// An open profile (see the module documentation).
 pub struct Store {
+    /// The reader of the runtime's export (M7-S6, Q302): opened like `conn` after the migration, `query_only`, taken by
+    /// `backup::snapshot_begin`, given back by `backup::PendingSnapshot::finish` (`None` meanwhile). Declared before `conn`: closed
+    /// first, so `conn` stays the last connection of the file (its close checkpoints the log, as before).
+    pub(crate) reader: Option<Connection>,
     pub(crate) conn: Connection,
     dir: PathBuf,
     _lock: File,
@@ -305,6 +312,7 @@ impl Store {
             None => None,
         };
         let mut store = Self {
+            reader: None,
             conn,
             dir: dir.to_path_buf(),
             _lock: lock,
@@ -316,6 +324,12 @@ impl Store {
         if migrate {
             crate::migrate::migrate(&mut store)?;
         }
+        // M7-S6 (Q302): the export's reader — the same opening and key statement as `conn`; without it the store does not open
+        let reader = open_connection(&dir.join(DB_FILE), key)?;
+        reader
+            .pragma_update(None, "query_only", true)
+            .map_err(|_| Error::Unavailable)?;
+        store.reader = Some(reader);
         #[cfg(any(test, feature = "kat"))]
         {
             store.wal_size = store.measured_wal_size();

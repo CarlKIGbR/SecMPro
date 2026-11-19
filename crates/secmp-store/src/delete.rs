@@ -8,18 +8,19 @@ use rusqlite::params;
 use crate::error::Result;
 use crate::store::Store;
 
+/// The statement of [`Store::delete_message`] (M7-S8, Q303): as `messages::HAS_MESSAGE_SQL`, the full unique index; both
+/// directions of the `msg_id` are deleted, as before.
+pub(crate) const DELETE_MESSAGE_SQL: &str =
+    "DELETE FROM messages WHERE contact_id = ?1 AND direction IN (0, 1) AND msg_id = ?2";
+
 impl Store {
     /// Delete a message of the history; returns whether it existed.
     ///
     /// # Errors
     /// [`crate::Error::Unavailable`] if the write fails.
     pub fn delete_message(&mut self, contact_id: i64, msg_id: &[u8; 16]) -> Result<bool> {
-        let n = self.txn(|tx| {
-            tx.exec(
-                "DELETE FROM messages WHERE contact_id = ?1 AND msg_id = ?2",
-                params![contact_id, msg_id.as_slice()],
-            )
-        })?;
+        let n =
+            self.txn(|tx| tx.exec(DELETE_MESSAGE_SQL, params![contact_id, msg_id.as_slice()]))?;
         Ok(n > 0)
     }
 }

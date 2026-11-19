@@ -35,6 +35,16 @@ pub enum Retention {
     Days(u32),
 }
 
+/// The statement of [`Store::has_message`] (M7-S8, Q303; EXT3b-2): `direction IN (0, 1)` — every value the history's writers
+/// store — lets SQLite seek the `UNIQUE (contact_id, direction, msg_id)` index by all three columns instead of reading every
+/// index entry of the contact; the rows it finds are the same.
+pub(crate) const HAS_MESSAGE_SQL: &str =
+    "SELECT count(*) FROM messages WHERE contact_id = ?1 AND direction IN (0, 1) AND msg_id = ?2";
+
+/// The statement of [`Store::message`] (M7-S8, Q303): as [`HAS_MESSAGE_SQL`]; `IN` probes 0, then 1, so for a `msg_id` stored in
+/// both directions the received row comes first, as with the index walk before.
+pub(crate) const MESSAGE_SQL: &str = "SELECT direction, kind, ts_ms, payload, expire_at_ms FROM messages WHERE contact_id = ?1 AND direction IN (0, 1) AND msg_id = ?2";
+
 /// A message to keep in the history.
 pub struct NewMessage<'a> {
     /// The contact.
@@ -136,7 +146,7 @@ impl Store {
     pub fn has_message(&self, contact_id: i64, msg_id: &[u8; 16]) -> Result<bool> {
         Ok(self
             .query_row(
-                "SELECT count(*) FROM messages WHERE contact_id = ?1 AND msg_id = ?2",
+                HAS_MESSAGE_SQL,
                 params![contact_id, msg_id.as_slice()],
                 |r| r.get::<_, i64>(0),
             )?
@@ -155,19 +165,15 @@ impl Store {
         msg_id: &[u8; 16],
         now_ms: u64,
     ) -> Result<Option<StoredMessage>> {
-        let row = self.query_row(
-            "SELECT direction, kind, ts_ms, payload, expire_at_ms FROM messages WHERE contact_id = ?1 AND msg_id = ?2",
-            params![contact_id, msg_id.as_slice()],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                    Zeroizing::new(r.get::<_, Vec<u8>>(3)?),
-                    r.get::<_, Option<i64>>(4)?,
-                ))
-            },
-        )?;
+        let row = self.query_row(MESSAGE_SQL, params![contact_id, msg_id.as_slice()], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                Zeroizing::new(r.get::<_, Vec<u8>>(3)?),
+                r.get::<_, Option<i64>>(4)?,
+            ))
+        })?;
         let Some((direction, kind, ts, payload, expire_at)) = row else {
             return Ok(None);
         };
@@ -547,6 +553,141 @@ mod tests {
             Some(b"in".as_slice())
         );
         assert!(store.view_once_held(&received, 0));
+        Ok(())
+    }
+
+    /// M7-S8: the query plan of `sql`, bound to contact 1 and an absent id, one detail per line.
+    fn plan_of(store: &Store, sql: &str) -> rusqlite::Result<String> {
+        let mut stmt = store
+            .connection_kat()
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let details = stmt
+            .query_map(rusqlite::params![1_i64, [0xff_u8; 16].as_slice()], |r| {
+                r.get::<_, String>(3)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(details.join("\n"))
+    }
+
+    /// M7-S8: whether `plan` seeks by `contact_id`, `direction` and `msg_id` together and scans nothing.
+    fn seeks_full_index(plan: &str) -> bool {
+        plan.contains("contact_id=?")
+            && plan.contains("direction=?")
+            && plan.contains("msg_id=?")
+            && !plan.contains("SCAN")
+    }
+
+    /// M7-S8: the SQLite VM steps of one run of `sql` for `contact` and an absent id (`StatementStatus::VmStep`).
+    fn vm_steps(store: &Store, sql: &str, contact: i64) -> rusqlite::Result<i32> {
+        let mut stmt = store.connection_kat().prepare(sql)?;
+        let absent = [0xff_u8; 16];
+        if sql.starts_with("DELETE") {
+            stmt.execute(rusqlite::params![contact, absent.as_slice()])?;
+        } else {
+            let mut rows = stmt.query(rusqlite::params![contact, absent.as_slice()])?;
+            while rows.next()?.is_some() {}
+        }
+        Ok(stmt.get_status(rusqlite::StatementStatus::VmStep))
+    }
+
+    /// M7-S8 (EXT3b-2 (d); Q303): `Store::message` seeks the `UNIQUE (contact_id, direction, msg_id)` index by all three
+    /// columns and scans nothing (before: `contact_id` only, every index entry of the contact read).
+    #[test]
+    fn message_plan_seeks_the_full_index() -> R {
+        let dir = TempDir::new("s8-plan-message")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        let got = plan_of(&store, MESSAGE_SQL)?;
+        assert!(seeks_full_index(&got), "{got}");
+        Ok(())
+    }
+
+    /// M7-S8 (EXT3b-2 (d); Q303): `Store::has_message` seeks the `UNIQUE (contact_id, direction, msg_id)` index by all three
+    /// columns and scans nothing (before: `contact_id` only, every index entry of the contact read).
+    #[test]
+    fn has_message_plan_seeks_the_full_index() -> R {
+        let dir = TempDir::new("s8-plan-has")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        let got = plan_of(&store, HAS_MESSAGE_SQL)?;
+        assert!(seeks_full_index(&got), "{got}");
+        Ok(())
+    }
+
+    /// M7-S8 (EXT3b-2 (d); Q303): `Store::delete_message` seeks the `UNIQUE (contact_id, direction, msg_id)` index by all
+    /// three columns and scans nothing (before: `contact_id` only, every index entry of the contact read).
+    #[test]
+    fn delete_message_plan_seeks_the_full_index() -> R {
+        let dir = TempDir::new("s8-plan-delete")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        let got = plan_of(&store, crate::delete::DELETE_MESSAGE_SQL)?;
+        assert!(seeks_full_index(&got), "{got}");
+        Ok(())
+    }
+
+    /// M7-S8 (Q303): one `msg_id` stored as received and as sent for contact 5, and as sent for contact 6: `has_message`
+    /// finds it, `message` returns the received row (index order, as before), `delete_message` removes both rows of contact 5
+    /// and nothing else — the results before the predicate.
+    #[test]
+    fn both_directions_of_one_msg_id_found_and_deleted() -> R {
+        let dir = TempDir::new("s8-directions")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let id = [0x3c_u8; 16];
+        for (contact_id, direction, ts_ms, payload) in [
+            (5, Direction::In, 10, b"in".as_slice()),
+            (5, Direction::Out, 20, b"out".as_slice()),
+            (6, Direction::Out, 30, b"other".as_slice()),
+        ] {
+            store.insert_message(&NewMessage {
+                contact_id,
+                msg_id: id,
+                direction,
+                kind: 1,
+                ts_ms,
+                expire_after: 0,
+                payload,
+            })?;
+        }
+        assert!(store.has_message(5, &id)?);
+        let got = store.message(5, &id, 100)?.ok_or("the message")?;
+        assert_eq!(
+            (got.direction, got.ts_ms, got.payload.as_slice()),
+            (Direction::In, 10, b"in".as_slice())
+        );
+        assert!(store.delete_message(5, &id)?);
+        assert!(!store.has_message(5, &id)?);
+        assert!(store.message(5, &id, 100)?.is_none());
+        assert_eq!(rows(&store, "messages")?, 1);
+        assert!(store.has_message(6, &id)?);
+        assert!(!store.delete_message(5, &id)?);
+        Ok(())
+    }
+
+    /// M7-S8 (EXT3b-2 (d); Q303): with 20 000 rows of contact 1 (both directions) and 20 of contact 2, each of the three
+    /// statements does the same constant work for an absent id of either contact — counted in SQLite VM steps, not time
+    /// (before: one pass over every index entry of the contact).
+    #[test]
+    fn lookups_do_constant_work_at_20000_rows() -> R {
+        let dir = TempDir::new("s8-scale")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        for (contact, n) in [(1_i64, 20_000_i64), (2, 20)] {
+            store.connection_kat().execute(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?2) \
+                 INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+                 SELECT ?1, CAST(printf('%016d', x) AS BLOB), x % 2, 1, x, NULL, x'00' FROM c",
+                rusqlite::params![contact, n],
+            )?;
+        }
+        assert_eq!(rows(&store, "messages")?, 20_020);
+        for sql in [
+            HAS_MESSAGE_SQL,
+            MESSAGE_SQL,
+            crate::delete::DELETE_MESSAGE_SQL,
+        ] {
+            let (small, big) = (vm_steps(&store, sql, 2)?, vm_steps(&store, sql, 1)?);
+            assert!(
+                big <= small.saturating_add(16) && big < 1_000,
+                "{sql}: {big} VM steps at 20 000 rows, {small} at 20"
+            );
+        }
         Ok(())
     }
 }

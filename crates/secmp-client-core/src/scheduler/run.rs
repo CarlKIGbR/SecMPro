@@ -216,18 +216,39 @@ pub enum ControlEffect {
     },
 }
 
-/// Runs a control operation on its own one-shot link (spec §10.6 (2)); the host owns the key material.
+/// Runs a control operation on its own one-shot link (spec §10.6 (2)) in three steps (Q300; EXT3-1 Repro B): the host's
+/// material before the link opens, the command on the link, the host's commit after the link is closed.
 pub trait ControlRunner: Send + Sync + 'static {
-    /// Run `kind` on `transport` (a fresh link to `relay`).
+    /// What the command needs, from the host before the link opens.
+    type Prepared: Send + 'static;
+    /// What the relay answered, committed by the host after the link is closed.
+    type Answer: Send + 'static;
+    /// The material of `kind`; `Ok(None)`: nothing to do — the operation is done and no link opens (Q298, Q300; HB-55).
     ///
     /// # Errors
-    /// The transport's error; the driver reports the operation failed.
-    fn run<S: ProviderStream>(
+    /// The host's failure: no link was opened; the driver retries after the back-off (CO-06).
+    fn prepare(
         &self,
         op: OpId,
         kind: ControlKind,
         relay: RelayId,
+    ) -> impl Future<Output = Result<Option<Self::Prepared>, TransportError>> + Send;
+    /// The command of `prepared` on `transport` (a fresh link), with no wait for the host before it (spec §10.1).
+    ///
+    /// # Errors
+    /// The transport's error: a relay's `ERR` ([`relay_answered`]) or a failure of the link.
+    fn run<S: ProviderStream>(
+        &self,
+        prepared: Self::Prepared,
         transport: &mut AsyncRelayQueueTransport<S>,
+    ) -> impl Future<Output = Result<Self::Answer, TransportError>> + Send;
+    /// Commit `answer` to the host after the link is closed; the operation is done only once this returns (CLAUDE.md §1.7).
+    ///
+    /// # Errors
+    /// The host's failure; the relay executed the command, so the driver queues the operation again as delayed.
+    fn commit(
+        &self,
+        answer: Self::Answer,
     ) -> impl Future<Output = Result<ControlEffect, TransportError>> + Send;
 }
 
@@ -242,6 +263,50 @@ pub fn link_put_outcome(answer: Result<(), TransportError>) -> Result<(), Transp
     match answer {
         Err(TransportError::Exists) => Ok(()),
         other => other,
+    }
+}
+
+/// How a control operation ended, for the scheduler (Q300, EXT3-4).
+pub enum ControlResult {
+    /// Done, also with nothing to do and no link opened; the effect goes to the scheduler.
+    Done(ControlEffect),
+    /// No answer of the relay (the host's prepare step, the link, a local error, the timeout): retried after the back-off
+    /// (CO-06).
+    LinkFailed {
+        /// The link closed before `RELAYINFO` (LR-03).
+        closed_before: bool,
+    },
+    /// The relay answered the command with an `ERR`, or its answer could not be committed: a related operation ran, so it
+    /// is queued again as a fresh delayed one (spec §10.6 (2)).
+    Answered,
+}
+
+/// Whether `e` is the relay's `ERR` answer to a command — the link stays usable (spec §9.3) — not a failure of the link or
+/// a local one (Q300, EXT3-4).
+#[must_use]
+pub const fn relay_answered(e: TransportError) -> bool {
+    matches!(
+        e,
+        TransportError::Token
+            | TransportError::Full
+            | TransportError::NoQueue
+            | TransportError::Auth
+            | TransportError::Exists
+            | TransportError::Malformed
+            | TransportError::Rate
+    )
+}
+
+/// The outcome of a consuming `LINK_GET` for the accept (Q300, EXT3-4): a relay's `ERR` ends the accept — `Ok(None)`, as for
+/// link data that is gone; never retried — every other outcome is returned unchanged.
+///
+/// # Errors
+/// The transport's error, unless the relay answered it ([`relay_answered`]).
+pub fn consume_outcome<T>(answer: Result<T, TransportError>) -> Result<Option<T>, TransportError> {
+    match answer {
+        Ok(got) => Ok(Some(got)),
+        Err(e) if relay_answered(e) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
@@ -632,7 +697,7 @@ enum Event<S> {
     Frame(LinkId, Vec<u8>),
     Closed(LinkId),
     Connected(LinkId, Conn<S>),
-    Control(OpId, Result<ControlEffect, bool>),
+    Control(OpId, ControlResult),
     Job(JobDone),
     /// A writer task finished a write: link, length, time, written and flushed.
     Written(LinkId, usize, u64, bool),
@@ -1025,7 +1090,7 @@ where
             }
             Event::Control(op, result) => {
                 match result {
-                    Ok(effect) => {
+                    ControlResult::Done(effect) => {
                         match effect {
                             ControlEffect::None => {}
                             ControlEffect::PoolQueueReady(queue, cap) => {
@@ -1044,7 +1109,11 @@ where
                         }
                         sched.control_done(op);
                     }
-                    Err(closed_before) => sched.control_failed(now, op, closed_before)?,
+                    ControlResult::LinkFailed { closed_before } => {
+                        sched.control_failed(now, op, closed_before)?;
+                    }
+                    // Q300 (EXT3-4): a fresh delayed operation, also when it first ran at once (spec §10.6 (2))
+                    ControlResult::Answered => sched.control_answered(now, op)?,
                 }
                 Vec::new()
             }
@@ -1253,34 +1322,54 @@ where
         let limit = self.connect_timeout;
         self.controls.retain(|t| !t.is_finished());
         self.controls.push(tokio::spawn(async move {
-            let attempt = async {
-                let relay_ref = directory.relay(relay).ok_or(false)?;
-                let stream = providers
-                    .connect(transport, relay_ref, isolation)
-                    .await
-                    .map_err(|_| false)?;
-                let access = directory.access_key(relay);
-                let unix = clock.unix_secs();
-                let session = match AsyncSession::connect_outcome(
-                    stream,
-                    relay_ref.relay_fp,
-                    access,
-                    unix,
-                    &mut entropy,
-                )
-                .await
-                {
-                    AsyncConnectOutcome::Up(session) => *session,
-                    AsyncConnectOutcome::ClosedBeforeRelayInfo => return Err(true),
-                    AsyncConnectOutcome::Failed(_) => return Err(false),
-                };
-                let mut t = AsyncRelayQueueTransport::new(session);
-                runner.run(op, kind, relay, &mut t).await.map_err(|_| false)
+            let result = match runner.prepare(op, kind, relay).await {
+                // Q300 (EXT3-1 Repro B, HB-55): the host's material before any link opens; nothing to do opens no link
+                Ok(None) => ControlResult::Done(ControlEffect::None),
+                Err(_) => ControlResult::LinkFailed {
+                    closed_before: false,
+                },
+                Ok(Some(prepared)) => {
+                    let attempt = async {
+                        let relay_ref = directory.relay(relay).ok_or(false)?;
+                        let stream = providers
+                            .connect(transport, relay_ref, isolation)
+                            .await
+                            .map_err(|_| false)?;
+                        let access = directory.access_key(relay);
+                        let unix = clock.unix_secs();
+                        let session = match AsyncSession::connect_outcome(
+                            stream,
+                            relay_ref.relay_fp,
+                            access,
+                            unix,
+                            &mut entropy,
+                        )
+                        .await
+                        {
+                            AsyncConnectOutcome::Up(session) => *session,
+                            AsyncConnectOutcome::ClosedBeforeRelayInfo => return Err(true),
+                            AsyncConnectOutcome::Failed(_) => return Err(false),
+                        };
+                        let mut t = AsyncRelayQueueTransport::new(session);
+                        let answer = runner.run(prepared, &mut t).await;
+                        // the one-shot link closes here, before the host commits the answer (Q300; spec §10.1)
+                        drop(t);
+                        Ok(answer)
+                    };
+                    // the link's life under the connect timeout: a hanging relay fails it, never stalls it
+                    match tokio::time::timeout(limit, attempt).await {
+                        Ok(Ok(Ok(answer))) => match runner.commit(answer).await {
+                            Ok(effect) => ControlResult::Done(effect),
+                            Err(_) => ControlResult::Answered,
+                        },
+                        Ok(Ok(Err(e))) if relay_answered(e) => ControlResult::Answered,
+                        Ok(Ok(Err(_))) | Err(_) => ControlResult::LinkFailed {
+                            closed_before: false,
+                        },
+                        Ok(Err(closed_before)) => ControlResult::LinkFailed { closed_before },
+                    }
+                }
             };
-            // the whole one-shot operation under the connect timeout: a hanging relay fails it, never stalls it
-            let result = tokio::time::timeout(limit, attempt)
-                .await
-                .unwrap_or(Err(false));
             let _ = events.send(Event::Control(op, result));
         }));
     }
@@ -1403,6 +1492,39 @@ mod tests {
         ] {
             assert_eq!(link_put_outcome(Err(e)), Err(e), "{e:?}");
         }
+    }
+
+    /// Q300 (spec §9.3): the seven relay `ERR` answers are answered and end an accept; the nine link-level and local errors
+    /// are neither, and a successful answer is returned. New API, not red-first.
+    #[test]
+    fn control_errors_are_classified() {
+        for e in [
+            TransportError::Token,
+            TransportError::Full,
+            TransportError::NoQueue,
+            TransportError::Auth,
+            TransportError::Exists,
+            TransportError::Malformed,
+            TransportError::Rate,
+        ] {
+            assert!(relay_answered(e), "{e:?}");
+            assert_eq!(consume_outcome::<u8>(Err(e)), Ok(None), "{e:?}");
+        }
+        for e in [
+            TransportError::Rejected,
+            TransportError::Closed,
+            TransportError::NewLinkRequired,
+            TransportError::Unavailable,
+            TransportError::OutOfOrder,
+            TransportError::Invalid,
+            TransportError::NoDirectEndpoint,
+            TransportError::TorNotReady,
+            TransportError::TorUnavailable,
+        ] {
+            assert!(!relay_answered(e), "{e:?}");
+            assert_eq!(consume_outcome::<u8>(Err(e)), Err(e), "{e:?}");
+        }
+        assert_eq!(consume_outcome::<u8>(Ok(5)), Ok(Some(5)));
     }
 
     /// Mutants #160 (`Deferred::{relayed, evicted, send_failed, discard, queue_lost}` → `()`): each notification of the core

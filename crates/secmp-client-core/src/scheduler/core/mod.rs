@@ -1962,6 +1962,18 @@ impl Scheduler {
         Ok(())
     }
 
+    /// The relay answered the operation's command with an `ERR` (Q300, EXT3-4): it is queued again as a fresh delayed
+    /// operation (spec §10.6 (2)).
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`].
+    pub fn control_answered(&mut self, now: u64, op: OpId) -> Result<(), SchedError> {
+        self.world
+            .control
+            .answered(&self.world.params, &mut self.world.ctl, op, now)?;
+        Ok(())
+    }
+
     /// The owner-status answer for link data `ld` (spec §9.7 (1)): `{0, 0}` before `expires` re-issues the identical
     /// `LINK_PUT` after `U[1 min, 60 min]`.
     ///

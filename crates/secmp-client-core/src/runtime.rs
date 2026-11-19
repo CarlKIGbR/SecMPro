@@ -41,7 +41,7 @@ use crate::scheduler::core::Scheduler;
 use crate::scheduler::params::{Mode, Params};
 use crate::scheduler::run::{
     BlockingWorker, ControlEffect, ControlRunner, Directory, Driver, Only, OsHandshakes, Providers,
-    link_put_outcome,
+    consume_outcome, link_put_outcome,
 };
 use crate::scheduler::types::{
     CellSource, CellToken, ControlKind, Delivered, OpId, Output, PreparedCell, QueueId, RelayId,
@@ -649,130 +649,117 @@ impl HostControl {
             .flatten()
             .ok_or(TransportError::Invalid)
     }
+}
 
-    /// A spare the scheduler's pool creates, or a queue re-created after `ERR_NOQUEUE` (spec §9.1).
-    async fn queue_new<S: ProviderStream>(
-        &self,
-        queue: QueueId,
-        access: &AccessKey,
-        t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
-        // a queue the hub knows uses its stored seeds; a new spare gets its seeds made durable now, before the request is
-        // written (D4′)
-        let (recv, send) = self
-            .with_hub(move |hub| match hub.queue_material(queue) {
-                Some((recv, Some(send))) => Some((recv, send)),
-                Some((_, None)) => None,
-                None => hub.pool_material(queue),
-            })
-            .await?;
-        let (cap, _) = t.create_queue(&recv, &send, access).await?;
-        Ok(ControlEffect::PoolQueueReady(queue, cap))
-    }
+/// The material of a control operation, from the hub before its one-shot link opens (Q300; EXT3-1 Repro B).
+enum ControlPrepared {
+    /// A queue to create: its id and its recipient and sender seeds.
+    QueueNew(QueueId, SecretBytes<32>, SecretBytes<32>),
+    /// A queue to delete: its id and its recipient seed.
+    QueueDel(QueueId, SecretBytes<32>),
+    /// A `LINK_PUT`: its arguments.
+    LinkPut(crate::invitations::LinkPutArgs),
+    /// An owner-status `LINK_GET`: the link-data number and the arguments.
+    LinkGetOwner(u32, crate::invitations::LinkPutArgs),
+    /// A consuming `LINK_GET`: the link-data number and its `ld_id`.
+    LinkGetConsume(u32, Id),
+}
 
-    async fn queue_del<S: ProviderStream>(
-        &self,
-        queue: QueueId,
-        t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
-        let recv = self
-            .with_hub(move |hub| hub.queue_material(queue).map(|(recv, _)| recv))
-            .await?;
-        let cap = RecvCap::from_seed(&recv)?;
-        // a queue the relay does not have (the `QUEUE_DEL` ran, the host did not record it) is deleted all the same
-        match t.delete_queue(&cap).await {
-            Ok(()) | Err(TransportError::NoQueue) => {}
-            Err(e) => return Err(e),
-        }
-        self.with_hub(move |hub| hub.queue_deleted(queue).ok())
-            .await?;
-        Ok(ControlEffect::None)
-    }
-
-    /// The consuming `LINK_GET` of an invitation the user is accepting: the accept, then the contact (or the refusal).
-    async fn link_get_consume<S: ProviderStream>(
-        &self,
-        n: u32,
-        t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
-        let ld = self
-            .consuming
-            .lock()
-            .map_err(|_| TransportError::Invalid)?
-            .get(&n)
-            .copied()
-            .ok_or(TransportError::Invalid)?;
-        let got = t.get_link_data(ld, LinkGetMode::Consume).await?;
-        let blob = got
-            .blob
-            .as_ref()
-            .map(|b| b.encode().map(|v| v.to_vec()))
-            .transpose()
-            .map_err(|_| TransportError::Invalid)?;
-        if let Ok(mut consuming) = self.consuming.lock() {
-            consuming.remove(&n);
-        }
-        self.with_hub(move |hub| {
-            if let Err(e) = hub.link_consumed(n, blob.as_deref()) {
-                let reason = match e {
-                    Error::Invitation(r) => r,
-                    _ => crate::api::InviteReject::Invalid,
-                };
-                hub.core_mut().raise(Event::InviteFailed(reason));
-            }
-            Some(())
-        })
-        .await?;
-        Ok(ControlEffect::None)
-    }
-
-    /// The owner-status `LINK_GET` of an open invitation (spec §9.4; Q297, L1-2): the answer goes to the hub
-    /// ([`crate::hub::Hub::owner_status`]), which commits what it learned before the operation is done (CLAUDE.md §1.7) and
-    /// queues the re-put (§9.7 (1)) and the next query (§10.6 (2)). Link data the hub no longer holds is not asked for: the
-    /// operation is done without a command (a failed one would be retried for ever, CO-06).
-    async fn link_get_owner<S: ProviderStream>(
-        &self,
-        n: u32,
-        t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
-        let args = self
-            .with_hub(move |hub| Some(hub.link_put_args(n).ok()))
-            .await?;
-        let Some(args) = args else {
-            return Ok(ControlEffect::None);
-        };
-        let got = t
-            .get_link_data(args.ld_id, LinkGetMode::OwnerStatus(&args.owner_seed))
-            .await?;
-        let status = crate::invitations::OwnerStatus {
-            present: got.present,
-            consumed: got.consumed,
-        };
-        self.with_hub(move |hub| hub.owner_status(n, status).ok())
-            .await?;
-        Ok(ControlEffect::None)
-    }
+/// What the relay answered, committed to the hub after the link is closed (Q300; CLAUDE.md §1.7: done only after the
+/// commit).
+enum ControlAnswer {
+    /// Nothing for the hub: the effect for the scheduler.
+    Effect(ControlEffect),
+    /// The queue was deleted on the relay (or was already gone).
+    QueueDeleted(QueueId),
+    /// The owner status of link data `n`.
+    OwnerStatus(u32, crate::invitations::OwnerStatus),
+    /// The link data `n` was consumed: its blob, `None` if it was gone.
+    Consumed(u32, Option<Vec<u8>>),
+    /// The relay answered the consuming `LINK_GET` of link data `n` with an `ERR`: the accept ends.
+    AcceptFailed(u32),
 }
 
 impl ControlRunner for HostControl {
-    async fn run<S: ProviderStream>(
+    type Prepared = ControlPrepared;
+    type Answer = ControlAnswer;
+
+    async fn prepare(
         &self,
         _op: OpId,
         kind: ControlKind,
         _relay: RelayId,
-        t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
-        let access = self.access.as_ref().ok_or(TransportError::Invalid)?;
+    ) -> Result<Option<ControlPrepared>, TransportError> {
+        self.access.as_ref().ok_or(TransportError::Invalid)?;
         match kind {
-            ControlKind::QueueNew(queue) => self.queue_new(queue, access, t).await,
-            ControlKind::QueueDel(queue) => self.queue_del(queue, t).await,
+            // a spare the scheduler's pool creates, or a queue re-created after `ERR_NOQUEUE` (spec §9.1)
+            ControlKind::QueueNew(queue) => {
+                // a queue the hub knows uses its stored seeds; a new spare gets its seeds made durable now, before the
+                // request is written (D4′)
+                let (recv, send) = self
+                    .with_hub(move |hub| match hub.queue_material(queue) {
+                        Some((recv, Some(send))) => Some((recv, send)),
+                        Some((_, None)) => None,
+                        None => hub.pool_material(queue),
+                    })
+                    .await?;
+                Ok(Some(ControlPrepared::QueueNew(queue, recv, send)))
+            }
+            ControlKind::QueueDel(queue) => {
+                let recv = self
+                    .with_hub(move |hub| hub.queue_material(queue).map(|(recv, _)| recv))
+                    .await?;
+                Ok(Some(ControlPrepared::QueueDel(queue, recv)))
+            }
             ControlKind::LinkPut(n) => {
-                // Q298 (S2-1): checked when the operation runs; an invitation that is no longer offered ends it without a
-                // command (a failed one would be retried for ever, CO-06); a store error is retried
+                // Q298 (S2-1): checked when the operation runs; an invitation that is no longer offered ends it before a
+                // link opens (HB-55); a store error is retried
                 let args = self.with_hub(move |hub| hub.put_args(n).ok()).await?;
-                let Some(args) = args else {
-                    return Ok(ControlEffect::None);
-                };
+                Ok(args.map(ControlPrepared::LinkPut))
+            }
+            ControlKind::LinkGetOwner(n) => {
+                // Q300 (EXT3-4): the put's gates again when the query runs; an ineligible query ends before a link opens
+                let args = self
+                    .with_hub(move |hub| hub.owner_query_args(n).ok())
+                    .await?;
+                Ok(args.map(|args| ControlPrepared::LinkGetOwner(n, args)))
+            }
+            ControlKind::LinkGetConsume(n) => {
+                // an accept that is no longer waiting has nothing to consume
+                let ld = self
+                    .consuming
+                    .lock()
+                    .map_err(|_| TransportError::Invalid)?
+                    .get(&n)
+                    .copied();
+                Ok(ld.map(|ld| ControlPrepared::LinkGetConsume(n, ld)))
+            }
+        }
+    }
+
+    async fn run<S: ProviderStream>(
+        &self,
+        prepared: ControlPrepared,
+        t: &mut AsyncRelayQueueTransport<S>,
+    ) -> Result<ControlAnswer, TransportError> {
+        let access = self.access.as_ref().ok_or(TransportError::Invalid)?;
+        match prepared {
+            ControlPrepared::QueueNew(queue, recv, send) => {
+                let (cap, _) = t.create_queue(&recv, &send, access).await?;
+                Ok(ControlAnswer::Effect(ControlEffect::PoolQueueReady(
+                    queue, cap,
+                )))
+            }
+            ControlPrepared::QueueDel(queue, recv) => {
+                let cap = RecvCap::from_seed(&recv)?;
+                // a queue the relay does not have (the `QUEUE_DEL` ran, the host did not record it) is deleted all the same
+                match t.delete_queue(&cap).await {
+                    Ok(()) | Err(TransportError::NoQueue) => {}
+                    Err(e) => return Err(e),
+                }
+                Ok(ControlAnswer::QueueDeleted(queue))
+            }
+            ControlPrepared::LinkPut(args) => {
                 let blob = LinkBlob::decode(&args.blob).map_err(|_| TransportError::Invalid)?;
                 let bucket =
                     u32::try_from(args.expires / 3_600).map_err(|_| TransportError::Invalid)?;
@@ -781,10 +768,80 @@ impl ControlRunner for HostControl {
                     t.put_link_data(args.ld_id, &args.owner_seed, &blob, true, bucket, access)
                         .await,
                 )?;
+                Ok(ControlAnswer::Effect(ControlEffect::None))
+            }
+            ControlPrepared::LinkGetOwner(n, args) => {
+                let got = t
+                    .get_link_data(args.ld_id, LinkGetMode::OwnerStatus(&args.owner_seed))
+                    .await?;
+                Ok(ControlAnswer::OwnerStatus(
+                    n,
+                    crate::invitations::OwnerStatus {
+                        present: got.present,
+                        consumed: got.consumed,
+                    },
+                ))
+            }
+            ControlPrepared::LinkGetConsume(n, ld) => {
+                // Q300 (EXT3-4): a relay `ERR` ends the accept; it is not retried
+                let Some(got) = consume_outcome(t.get_link_data(ld, LinkGetMode::Consume).await)?
+                else {
+                    return Ok(ControlAnswer::AcceptFailed(n));
+                };
+                let blob = got
+                    .blob
+                    .as_ref()
+                    .map(|b| b.encode().map(|v| v.to_vec()))
+                    .transpose()
+                    .map_err(|_| TransportError::Invalid)?;
+                Ok(ControlAnswer::Consumed(n, blob))
+            }
+        }
+    }
+
+    async fn commit(&self, answer: ControlAnswer) -> Result<ControlEffect, TransportError> {
+        match answer {
+            ControlAnswer::Effect(effect) => Ok(effect),
+            ControlAnswer::QueueDeleted(queue) => {
+                self.with_hub(move |hub| hub.queue_deleted(queue).ok())
+                    .await?;
                 Ok(ControlEffect::None)
             }
-            ControlKind::LinkGetOwner(n) => self.link_get_owner(n, t).await,
-            ControlKind::LinkGetConsume(n) => self.link_get_consume(n, t).await,
+            ControlAnswer::OwnerStatus(n, status) => {
+                // the hub commits what it learned before the operation is done (CLAUDE.md §1.7) and queues the re-put
+                // (§9.7 (1)) and the next query (Q297)
+                self.with_hub(move |hub| hub.owner_status(n, status).ok())
+                    .await?;
+                Ok(ControlEffect::None)
+            }
+            ControlAnswer::Consumed(n, blob) => {
+                if let Ok(mut consuming) = self.consuming.lock() {
+                    consuming.remove(&n);
+                }
+                self.with_hub(move |hub| {
+                    if let Err(e) = hub.link_consumed(n, blob.as_deref()) {
+                        let reason = match e {
+                            Error::Invitation(r) => r,
+                            _ => crate::api::InviteReject::Invalid,
+                        };
+                        hub.core_mut().raise(Event::InviteFailed(reason));
+                    }
+                    Some(())
+                })
+                .await?;
+                Ok(ControlEffect::None)
+            }
+            ControlAnswer::AcceptFailed(n) => {
+                if let Ok(mut consuming) = self.consuming.lock() {
+                    consuming.remove(&n);
+                }
+                self.with_hub(move |hub| {
+                    hub.accept_failed(n);
+                    Some(())
+                })
+                .await?;
+                Ok(ControlEffect::None)
+            }
         }
     }
 }

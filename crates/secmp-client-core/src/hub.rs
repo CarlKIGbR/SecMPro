@@ -834,6 +834,24 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.invitations.put_args(n, &self.core.clock)
     }
 
+    /// The owner-status query's arguments of link data `n` when it runs (Q300, EXT3-4): `None` — no link opens — for an
+    /// invitation that is not offered, or whose link data was seen consumed.
+    ///
+    /// # Errors
+    /// As [`Invitations::owner_query_args`].
+    pub fn owner_query_args(&self, n: u32) -> Result<Option<LinkPutArgs>, Error> {
+        self.invitations.owner_query_args(n, &self.core.clock)
+    }
+
+    /// The relay answered the consuming `LINK_GET` of link data `n` with an `ERR` (Q300, EXT3-4): the accept ends with
+    /// `Event::InviteFailed(InviteReject::Invalid)`, as for link data that is gone, and is not retried.
+    pub fn accept_failed(&mut self, n: u32) {
+        self.waiting.remove(&n);
+        self.core.raise(crate::api::Event::InviteFailed(
+            crate::api::InviteReject::Invalid,
+        ));
+    }
+
     /// The answer of the owner-status `LINK_GET` of link data `n` (spec §9.4; Q297): as [`Invitations::owner_answer`]; the
     /// re-put (§9.7 (1)) and the next query go to the scheduler.
     ///

@@ -82,6 +82,12 @@ pub struct ControlMaterial {
     pub link_status: Vec<(u32, bool, bool)>,
     /// Control operations completed, with their kind.
     pub done: Vec<ControlKind>,
+    /// M7-S4 test hook: virtual ms the host's prepare step waits — a hub lock held.
+    pub prepare_wait_ms: u64,
+    /// M7-S4 test hook: virtual ms the commit of an answer waits.
+    pub commit_wait_ms: u64,
+    /// M7-S4 test hook: operations the host has nothing to do for.
+    pub skip: Vec<ControlKind>,
 }
 
 /// The control runner (as the virtual driver's `run_control`); queue seeds of new pool queues come from `seeds`.
@@ -109,13 +115,30 @@ fn seed32(bytes: &[u8; 32]) -> SecretBytes<32> {
 }
 
 impl ControlRunner for TestControl {
-    async fn run<S: ProviderStream>(
+    type Prepared = (ControlKind, RelayId);
+    type Answer = (ControlKind, ControlEffect);
+
+    async fn prepare(
         &self,
         _op: OpId,
         kind: ControlKind,
         relay: RelayId,
+    ) -> Result<Option<Self::Prepared>, TransportError> {
+        let (wait, skip) = {
+            let m = self.material.lock().unwrap();
+            (m.prepare_wait_ms, m.skip.contains(&kind))
+        };
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
+        Ok((!skip).then_some((kind, relay)))
+    }
+
+    async fn run<S: ProviderStream>(
+        &self,
+        (kind, relay): (ControlKind, RelayId),
         t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
+    ) -> Result<Self::Answer, TransportError> {
         let effect = match kind {
             ControlKind::QueueNew(queue) => {
                 let known = self.material.lock().unwrap().queues.get(&queue.0).copied();
@@ -195,6 +218,17 @@ impl ControlRunner for TestControl {
                 ControlEffect::None
             }
         };
+        Ok((kind, effect))
+    }
+
+    async fn commit(
+        &self,
+        (kind, effect): (ControlKind, ControlEffect),
+    ) -> Result<ControlEffect, TransportError> {
+        let wait = self.material.lock().unwrap().commit_wait_ms;
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
         self.material.lock().unwrap().done.push(kind);
         Ok(effect)
     }

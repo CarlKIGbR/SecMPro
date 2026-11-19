@@ -171,6 +171,11 @@ pub struct Options {
     /// `ERR_NOQUEUE` and no `FETCH` has seen the queue gone (B4b-8).
     #[doc(hidden)]
     pub relay_drops_before_queue_del: bool,
+    /// M7-S4 test hook (Q300): the relay answers the command of this control operation with this `ERR` — modelled: the
+    /// link is opened and handshaken, the command is not written, the transport's call returns the code (`QueueNew`,
+    /// `LinkPut`, `LinkGetOwner`, `LinkGetConsume`).
+    #[doc(hidden)]
+    pub answer_err: Option<(ControlKind, TransportError)>,
 }
 
 /// What the driver keeps of a scheduled connection.
@@ -271,6 +276,13 @@ pub trait StoreHub: Source {
     /// # Errors
     /// The hub's failure to read it, as text.
     fn put_allowed(&self, n: u32) -> Result<bool, String>;
+    /// Whether the owner-status query of link data `n` may run now: the hub's gate (Q300).
+    ///
+    /// # Errors
+    /// The hub's failure to read it, as text.
+    fn owner_query_allowed(&self, n: u32) -> Result<bool, String>;
+    /// The relay answered the consuming `LINK_GET` of `n` with an `ERR` (Q300): the accept fails.
+    fn accept_failed(&mut self, n: u32);
     /// The seeds `(recipient, sender)` of `queue`.
     fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)>;
     /// The seeds `(recipient, sender)` of a spare queue the scheduler's pool is about to create (the pool bridge of the hub,
@@ -330,6 +342,16 @@ impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
         Hub::put_args(self, n)
             .map(|args| args.is_some())
             .map_err(|e| e.to_string())
+    }
+
+    fn owner_query_allowed(&self, n: u32) -> Result<bool, String> {
+        Hub::owner_query_args(self, n)
+            .map(|a| a.is_some())
+            .map_err(|e| e.to_string())
+    }
+
+    fn accept_failed(&mut self, n: u32) {
+        Hub::accept_failed(self, n);
     }
 
     fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
@@ -1300,6 +1322,25 @@ impl VirtualDriver {
             .unwrap()
             .controls_started
             .push((t, op, kind));
+        // Q300 (EXT3-1 Repro B): the host's prepare step before any link opens, as the runtime; nothing to do opens no link
+        match self.prepare_control(i, kind) {
+            Ok(true) => {}
+            Ok(false) => {
+                let c = self.clients.get_mut(i).unwrap();
+                c.sched.control_done(op);
+                c.controls_done.push((t, kind));
+                return Vec::new();
+            }
+            Err(_) => {
+                self.clients
+                    .get_mut(i)
+                    .unwrap()
+                    .sched
+                    .control_failed(t, op, false)
+                    .unwrap();
+                return Vec::new();
+            }
+        }
         let slot = CONTROL_SLOT_BASE.saturating_add(op.0);
         let (keep, outcome) = self.handshake(i);
         let Hs::Up(session) = outcome else {
@@ -1349,6 +1390,10 @@ impl VirtualDriver {
                 c.sched.control_done(op);
                 c.controls_done.push((t, kind));
             }
+            // Q300 (EXT3-4): the production classification
+            Err(e) if secmp_client_core::scheduler::run::relay_answered(e) => {
+                c.sched.control_answered(t, op).unwrap();
+            }
             Err(_) => c.sched.control_failed(t, op, false).unwrap(),
         }
         Vec::new()
@@ -1361,11 +1406,15 @@ impl VirtualDriver {
         transport: &mut RelayQueueTransport<HarnessStream>,
         n: u32,
         now: u64,
+        answer: Option<TransportError>,
     ) -> Result<(), TransportError> {
         let client = self.clients.get_mut(idx).unwrap();
         let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
         let owner = SecretBytes::from_slice(&m.owner_seed).unwrap();
         let ld = m.ld_id;
+        if let Some(e) = answer {
+            return Err(e);
+        }
         let got = transport.get_link_data(ld, LinkGetMode::OwnerStatus(&owner))?;
         client.link_status.push((now, n, got.present, got.consumed));
         // Q297: a store-backed client's answer goes to its hub (the re-put and the next query come back as its
@@ -1392,7 +1441,12 @@ impl VirtualDriver {
         access: &secmp_proto::link::ids::AccessKey,
         now: u64,
     ) -> Result<(), TransportError> {
-        self.hub_material(idx, kind);
+        let answer = self
+            .clients
+            .get(idx)
+            .and_then(|c| c.opts.answer_err)
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, e)| e);
         match kind {
             ControlKind::QueueNew(queue) => {
                 let client = self.clients.get_mut(idx).unwrap();
@@ -1415,6 +1469,9 @@ impl VirtualDriver {
                         m
                     }
                 };
+                if let Some(e) = answer {
+                    return Err(e);
+                }
                 let (rc, _sc) = transport.create_queue(
                     &SecretBytes::from_slice(&recv).unwrap(),
                     &SecretBytes::from_slice(&send).unwrap(),
@@ -1449,15 +1506,11 @@ impl VirtualDriver {
             }
             ControlKind::LinkPut(n) => {
                 let client = self.clients.get_mut(idx).unwrap();
-                // Q298 (S2-1): a store-backed client's `LINK_PUT` is checked when it runs, as in the runtime: an invitation
-                // that is no longer offered ends the operation without a command
-                if let Some(hub) = client.hub.as_ref()
-                    && !hub.put_allowed(n).map_err(|_| TransportError::Invalid)?
-                {
-                    return Ok(());
-                }
                 let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
                 let blob = LinkBlob::decode(&m.blob).map_err(|_| TransportError::Invalid)?;
+                if let Some(e) = answer {
+                    return secmp_client_core::scheduler::run::link_put_outcome(Err(e));
+                }
                 // Q299 (F1-1): the production outcome rule — `ERR_EXISTS` completes the operation
                 secmp_client_core::scheduler::run::link_put_outcome(transport.put_link_data(
                     m.ld_id,
@@ -1468,27 +1521,46 @@ impl VirtualDriver {
                     access,
                 ))
             }
-            ControlKind::LinkGetOwner(n) => self.owner_status_query(idx, transport, n, now),
-            ControlKind::LinkGetConsume(n) => {
-                let client = self.clients.get_mut(idx).unwrap();
-                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
-                let ld = m.ld_id;
-                let got = transport.get_link_data(ld, LinkGetMode::Consume)?;
-                client
-                    .link_consumed
-                    .push((now, n, got.present, got.consumed, got.blob.is_some()));
-                if let Some(hub) = client.hub.as_mut() {
-                    let blob = got
-                        .blob
-                        .as_ref()
-                        .map(|b| secmp_proto::Encode::encode(b).unwrap().to_vec());
-                    if let Err(e) = hub.link_consumed(n, blob) {
-                        client.hub_errors.push(e);
-                    }
-                }
-                Ok(())
+            ControlKind::LinkGetOwner(n) => self.owner_status_query(idx, transport, n, now, answer),
+            ControlKind::LinkGetConsume(n) => self.consume_query(idx, transport, n, now, answer),
+        }
+    }
+
+    /// The consuming `LINK_GET` of link data `n` of client `idx` (the accept): the answer goes to the hub; a relay `ERR`
+    /// ends the accept (Q300, EXT3-4).
+    fn consume_query(
+        &mut self,
+        idx: usize,
+        transport: &mut RelayQueueTransport<HarnessStream>,
+        n: u32,
+        now: u64,
+        answer: Option<TransportError>,
+    ) -> Result<(), TransportError> {
+        let client = self.clients.get_mut(idx).unwrap();
+        let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+        let ld = m.ld_id;
+        // Q300 (EXT3-4): the production rule — a relay `ERR` ends the accept, never retried
+        let answered =
+            answer.map_or_else(|| transport.get_link_data(ld, LinkGetMode::Consume), Err);
+        let Some(got) = secmp_client_core::scheduler::run::consume_outcome(answered)? else {
+            if let Some(hub) = client.hub.as_mut() {
+                hub.accept_failed(n);
+            }
+            return Ok(());
+        };
+        client
+            .link_consumed
+            .push((now, n, got.present, got.consumed, got.blob.is_some()));
+        if let Some(hub) = client.hub.as_mut() {
+            let blob = got
+                .blob
+                .as_ref()
+                .map(|b| secmp_proto::Encode::encode(b).unwrap().to_vec());
+            if let Err(e) = hub.link_consumed(n, blob) {
+                client.hub_errors.push(e);
             }
         }
+        Ok(())
     }
 
     /// The relay loses `queue` (a `QUEUE_DEL` by its owner's key on a connection of its own; the client's connections and
@@ -1505,6 +1577,22 @@ impl VirtualDriver {
                 .unwrap();
         t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap()).unwrap())
             .unwrap();
+    }
+
+    /// The host's prepare step of a control operation (Q300; the runtime's `ControlRunner::prepare`): a store-backed client's
+    /// material, then the gates of Q298 (`LinkPut`) and Q300 (`LinkGetOwner`); `Ok(false)`: nothing to do, no link opens.
+    fn prepare_control(&mut self, idx: usize, kind: ControlKind) -> Result<bool, TransportError> {
+        self.hub_material(idx, kind);
+        let Some(hub) = self.clients.get(idx).unwrap().hub.as_ref() else {
+            return Ok(true);
+        };
+        match kind {
+            ControlKind::LinkPut(n) => hub.put_allowed(n).map_err(|_| TransportError::Invalid),
+            ControlKind::LinkGetOwner(n) => hub
+                .owner_query_allowed(n)
+                .map_err(|_| TransportError::Invalid),
+            _ => Ok(true),
+        }
     }
 
     /// A store-backed client keeps the material of its control operations in the store: the queues' seeds, the link data.

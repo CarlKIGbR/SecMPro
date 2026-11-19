@@ -166,21 +166,9 @@ impl ControlOps {
             When::Prompt | When::AfterEmptyFetch(_) | When::AfterEmptyFetchFrom(..) => now,
             When::At(t) => t,
             When::Delayed => {
-                let started = self
-                    .last_start
-                    .iter()
-                    .filter(|(r, _)| *r == related)
-                    .map(|(_, t)| *t);
-                let waiting = self
-                    .ops
-                    .iter()
-                    .filter(|o| o.related == related)
-                    .map(|o| o.due);
-                let base = started.chain(waiting).fold(now, u64::max);
-                let (lo, hi) = params.control_delay_ms;
-                let drawn = rng.uniform(lo, hi)?;
+                let (at, drawn) = self.delayed_due(params, rng, related, now)?;
                 delay = Some(drawn);
-                base.saturating_add(drawn)
+                at
             }
         };
         self.ops.push(Op {
@@ -197,6 +185,31 @@ impl ControlOps {
             not_before: 0,
         });
         Ok(())
+    }
+
+    /// The due time and the drawn delay of a [`When::Delayed`] operation of `related` queued at `now`: `U[1 min, 60 min]`
+    /// after the latest of `now` and the start or due time of any operation with the same `related` (spec §10.6 (2)).
+    fn delayed_due(
+        &self,
+        params: &Params,
+        rng: &mut TimingRng,
+        related: u64,
+        now: u64,
+    ) -> Result<(u64, u64), Unavailable> {
+        let started = self
+            .last_start
+            .iter()
+            .filter(|(r, _)| *r == related)
+            .map(|(_, t)| *t);
+        let waiting = self
+            .ops
+            .iter()
+            .filter(|o| o.related == related)
+            .map(|o| o.due);
+        let base = started.chain(waiting).fold(now, u64::max);
+        let (lo, hi) = params.control_delay_ms;
+        let drawn = rng.uniform(lo, hi)?;
+        Ok((base.saturating_add(drawn), drawn))
     }
 
     /// Queue `spec` (a `QUEUE_DEL` of `queue`, §10.6 (4)) behind an empty `FETCH` (Q163, Q194; D-B11): it waits, with no
@@ -335,6 +348,34 @@ impl ControlOps {
         out
     }
 
+    /// The relay answered the operation's command with an `ERR` (Q300, EXT3-4): it waits again exactly as a fresh
+    /// [`When::Delayed`] operation of its correlation (the answered attempt is a related operation, spec §10.6 (2)), also
+    /// when it first ran at once; the drawn delay is kept, so a later related start pushes it back. No cap, no growing
+    /// back-off (HB-61).
+    ///
+    /// # Errors
+    /// [`Unavailable`] without randomness.
+    pub fn answered(
+        &mut self,
+        params: &Params,
+        rng: &mut TimingRng,
+        id: OpId,
+        now: u64,
+    ) -> Result<(), Unavailable> {
+        let Some(related) = self.ops.iter().find(|o| o.id == id).map(|o| o.related) else {
+            return Ok(());
+        };
+        let (due, drawn) = self.delayed_due(params, rng, related, now)?;
+        if let Some(op) = self.ops.iter_mut().find(|o| o.id == id) {
+            op.failures = op.failures.saturating_add(1);
+            op.closed_before = 0;
+            op.due = due;
+            op.delay = Some(drawn);
+            op.running = false;
+        }
+        Ok(())
+    }
+
     /// The operation succeeded: it is gone (it ran exactly once).
     pub fn done(&mut self, id: OpId) {
         self.ops.retain(|o| o.id != id);
@@ -435,6 +476,56 @@ mod tests {
             (10_000_000 + 60_000..=10_000_000 + 3_600_000).contains(&due),
             "{due}"
         );
+        Ok(())
+    }
+
+    /// Q300 (EXT3-4; spec §10.6 (2)): an answered operation, here a prompt one, is due again `U[1 min, 60 min]` after the
+    /// latest related start or due time and never overtakes a waiting related one.
+    #[test]
+    fn answered_error_redues_through_control_delay() -> Result<(), Unavailable> {
+        let params = Params::default();
+        for seed in 0..200_u64 {
+            let mut rng = TimingRng::seeded(seed);
+            let mut ops = ControlOps::new();
+            ops.schedule(
+                &params,
+                &mut rng,
+                OpId(1),
+                0,
+                spec(ControlKind::LinkPut(7), 7, When::Prompt),
+            )?;
+            assert_eq!(ops.take_due(0).len(), 1, "seed {seed}");
+            ops.answered(&params, &mut rng, OpId(1), 1_000)?;
+            let due = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+            assert!(
+                (61_000..=3_601_000).contains(&due),
+                "seed {seed}: due {due}"
+            );
+            assert!(
+                ops.take_due(due.saturating_sub(1)).is_empty(),
+                "seed {seed}: early"
+            );
+            assert_eq!(ops.take_due(due).len(), 1, "seed {seed}: at due");
+            ops.schedule(
+                &params,
+                &mut rng,
+                OpId(2),
+                due,
+                spec(ControlKind::LinkGetOwner(7), 7, When::Delayed),
+            )?;
+            let query = ops.due_of(OpId(2)).ok_or(Unavailable)?;
+            ops.answered(&params, &mut rng, OpId(1), due.saturating_add(1_000))?;
+            let again = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+            assert!(
+                again >= query.saturating_add(60_000),
+                "seed {seed}: again {again}, query {query}"
+            );
+            assert_eq!(
+                ops.take_due(query).first().map(|o| o.id),
+                Some(OpId(2)),
+                "seed {seed}: the waiting query starts first"
+            );
+        }
         Ok(())
     }
 }

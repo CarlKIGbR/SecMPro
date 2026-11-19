@@ -808,6 +808,40 @@ impl Invitations {
         Ok(None)
     }
 
+    /// The arguments of the owner-status `LINK_GET` of link data `n` when the query runs (spec §9.4, §10.6 (2); Q300,
+    /// EXT3-4): the bytes of [`Invitations::link_put_args`], only while the invitation is offered and its link data was not
+    /// seen consumed (the gates of [`Invitations::put_args`]; Q297's cut before `expires` applies when a query is queued,
+    /// not here); `None` — the operation ends without a link and is not retried — otherwise and for link data no invitation
+    /// has.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or a record does not open.
+    pub fn owner_query_args(
+        &self,
+        n: u32,
+        clock: &impl Clock,
+    ) -> Result<Option<LinkPutArgs>, Error> {
+        let now = clock.unix_secs();
+        let store = self.lock()?;
+        for row in store.invitations()? {
+            let ld_id = ld_id_of(&row.ld_id)?;
+            if link_data_n(&ld_id) != n {
+                continue;
+            }
+            if offer_state(&store, &ld_id, None, now)? != OfferState::Offered {
+                return Ok(None);
+            }
+            let Some(loaded) = load(&store, &ld_id)? else {
+                return Ok(None);
+            };
+            if loaded.stored.flags & FLAG_CONSUMED_SEEN != 0 {
+                return Ok(None);
+            }
+            return put_args_of(&loaded, ld_id).map(Some);
+        }
+        Ok(None)
+    }
+
     /// The owner status of the link data of `ld_id` (§9.4, §9.7 (1)): `present = 0, consumed = 0` before `expires` means the
     /// relay restarted — the identical `LINK_PUT` is queued again, delayed `U[1 min, 60 min]` (no user waits, §10.6 (2)); a
     /// consumed link data is noted, and with no handshake before `expires` the invitation is reported as used by someone

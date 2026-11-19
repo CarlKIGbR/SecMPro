@@ -4,7 +4,7 @@
 //! data consumed by someone else is seen and reported at `expires`; a link data the relay lost is put again, identically;
 //! the schedule of the queries does not depend on the user's calls.
 
-use secmp_client_core::api::{ContactId, Event, Request, Response};
+use secmp_client_core::api::{ContactId, Event, InviteReject, Request, Response};
 use secmp_client_core::invitations::{OwnerStatus, uri_link_data};
 use secmp_client_core::scheduler::control::When;
 use secmp_client_core::scheduler::params::{Mode, Params};
@@ -12,6 +12,7 @@ use secmp_client_core::scheduler::types::{ControlKind, RelayId};
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::frame::{LinkGetMode, RequestCmd};
 use secmp_testkit::harness::{CONTROL_SLOT_BASE, Inspect, LinkMaterial, START_UNIX, VirtualDriver};
+use secmp_transport::Error as TransportError;
 
 use super::m7_world::{add_party, contact_ids, driver, establish_seeded, hub};
 
@@ -508,4 +509,182 @@ fn owner_reput_answered_exists_is_not_retried() {
         answers.iter().all(|row| row.2 && !row.3),
         "{answers:?}: the relay still holds the link data"
     );
+}
+
+/// The least difference of consecutive times of `times` (`u64::MAX` for fewer than two).
+fn min_gap(times: &[u64]) -> u64 {
+    let mut sorted = times.to_vec();
+    sorted.sort_unstable();
+    sorted
+        .windows(2)
+        .filter_map(|w| w.get(1).zip(w.first()).map(|(b, a)| b.saturating_sub(*a)))
+        .min()
+        .unwrap_or(u64::MAX)
+}
+
+/// Q300 (V-EXT3-4 new finding; spec §10.6 (2)): a re-put the relay answers `ERR_FULL` is queued again as a delayed
+/// operation, so it does not push the start of the waiting owner-status query of the same link data out of reach: the
+/// query runs, and no two of the two operations start less than a minute apart.
+#[test]
+fn answered_reput_does_not_starve_the_owner_query() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s4b-host", 2, 31);
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 3_600)
+        .unwrap();
+    let (_, n) = uri_link_data(&issued.uri).unwrap();
+    d.run_until(30_000);
+    assert_eq!(starts(&d, host.idx, ControlKind::LinkPut(n)).len(), 1);
+    d.client(host.idx).opts.answer_err = Some((ControlKind::LinkPut(n), TransportError::Full));
+    let gone = OwnerStatus {
+        present: false,
+        consumed: false,
+    };
+    hub(&mut d, host.idx).owner_status(n, gone).unwrap();
+    let now = d.now();
+    d.run_until(now.saturating_add(FOUR_HOURS_MS));
+
+    assert_eq!(d.client_ref(host.idx).hub_errors, Vec::<String>::new());
+    let puts: Vec<u64> = starts(&d, host.idx, ControlKind::LinkPut(n))
+        .into_iter()
+        .filter(|t| *t >= now)
+        .collect();
+    assert!(
+        (1..=20).contains(&puts.len()),
+        "{} re-put starts in 4 h",
+        puts.len()
+    );
+    let first = puts.first().copied().unwrap_or(u64::MAX);
+    let queries: Vec<u64> = starts(&d, host.idx, ControlKind::LinkGetOwner(n))
+        .into_iter()
+        .filter(|t| *t >= now)
+        .collect();
+    assert!(
+        queries.iter().any(|t| *t > first),
+        "the owner query never ran after the first re-put: {queries:?}"
+    );
+    let all: Vec<u64> = puts.iter().chain(queries.iter()).copied().collect();
+    let gap = min_gap(&all);
+    assert!(gap >= MIN_MS, "min_gap {gap} ms over {} starts", all.len());
+}
+
+/// Q300 (Q297 at run time): an owner-status query the relay answers with an `ERR` is queued again; the answer
+/// `{0, 1}` (consumed) reaches the hub before it runs again, so the second run ends without a link, and no re-put follows.
+#[test]
+fn answered_owner_query_ends_once_consumed_seen() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s4c-host", 2, 33);
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 3_600)
+        .unwrap();
+    let (_, n) = uri_link_data(&issued.uri).unwrap();
+    d.run_until(30_000);
+    d.client(host.idx).opts.answer_err = Some((ControlKind::LinkGetOwner(n), TransportError::Rate));
+    let mut elapsed = d.now();
+    while starts(&d, host.idx, ControlKind::LinkGetOwner(n)).is_empty() {
+        assert!(elapsed < 2 * MAX_MS, "no owner query started");
+        elapsed = elapsed.saturating_add(MIN_MS);
+        d.run_until(elapsed);
+    }
+    let before = d.client_ref(host.idx).controls_started.len();
+    let rows: Vec<_> = d
+        .client_ref(host.idx)
+        .link_status
+        .iter()
+        .filter(|r| r.1 == n)
+        .copied()
+        .collect();
+    let seen = OwnerStatus {
+        present: false,
+        consumed: true,
+    };
+    hub(&mut d, host.idx).owner_status(n, seen).unwrap();
+    let now = d.now();
+    d.run_until(now.saturating_add(FOUR_HOURS_MS));
+
+    let c = d.client_ref(host.idx);
+    assert_eq!(c.hub_errors, Vec::<String>::new());
+    let later: Vec<_> = c
+        .controls_started
+        .iter()
+        .skip(before)
+        .filter(|(_, _, k)| *k == ControlKind::LinkGetOwner(n))
+        .collect();
+    assert_eq!(later.len(), 1, "{later:?}");
+    // the operation keeps its id when it is queued again: only the entries from this run's start count
+    let (start, op, _) = **later.first().unwrap();
+    assert!(
+        !c.trace
+            .iter()
+            .any(|e| e.slot == CONTROL_SLOT_BASE + op.0 && e.t_ms >= start),
+        "the ended query opened no link"
+    );
+    let done = c
+        .controls_done
+        .iter()
+        .filter(|(t, k)| *k == ControlKind::LinkGetOwner(n) && *t >= now)
+        .count();
+    assert_eq!(done, 1);
+    let rows_after: Vec<_> = c.link_status.iter().filter(|r| r.1 == n).copied().collect();
+    assert_eq!(rows_after, rows, "no new owner-status answer");
+    let puts = starts(&d, host.idx, ControlKind::LinkPut(n))
+        .into_iter()
+        .filter(|t| *t >= now)
+        .count();
+    assert_eq!(puts, 0, "no re-put after the consumption was seen");
+}
+
+/// Q300: a consuming `LINK_GET` the relay answers with an `ERR` ends the accept once: one run, the invite fails as
+/// invalid, no contact, nothing consumed.
+#[test]
+fn answered_consume_fails_the_accept_once() {
+    let mut d = driver();
+    let host = add_party(&mut d, "s4d-host", 2, 35);
+    let guest = add_party(&mut d, "s4d-guest", 2, 36);
+    let issued = hub(&mut d, host.idx)
+        .invite(START_UNIX + 6 * 3_600)
+        .unwrap();
+    d.run_until(30_000);
+    let (ld, n) = hub(&mut d, guest.idx).begin_accept(&issued.uri).unwrap();
+    d.client(guest.idx).links.insert(
+        n,
+        LinkMaterial {
+            ld_id: ld,
+            owner_seed: [0; 32],
+            blob: Vec::new(),
+            one_time: true,
+            expires_bucket: 0,
+        },
+    );
+    d.client(guest.idx).opts.answer_err =
+        Some((ControlKind::LinkGetConsume(n), TransportError::Rate));
+    let now = d.now();
+    d.run_until(now.saturating_add(FOUR_HOURS_MS));
+
+    assert_eq!(d.client_ref(host.idx).hub_errors, Vec::<String>::new());
+    assert_eq!(d.client_ref(guest.idx).hub_errors, Vec::<String>::new());
+    assert_eq!(
+        starts(&d, guest.idx, ControlKind::LinkGetConsume(n)).len(),
+        1
+    );
+    let done = d
+        .client_ref(guest.idx)
+        .controls_done
+        .iter()
+        .filter(|(_, k)| *k == ControlKind::LinkGetConsume(n))
+        .count();
+    assert_eq!(done, 1);
+    assert!(d.client_ref(guest.idx).link_consumed.is_empty());
+    let events: Vec<Event> = hub(&mut d, guest.idx)
+        .core_mut()
+        .take_events()
+        .into_iter()
+        .map(|ev| ev.event)
+        .collect();
+    let failed = events
+        .iter()
+        .filter(|ev| matches!(ev, Event::InviteFailed(InviteReject::Invalid)))
+        .count();
+    assert_eq!(failed, 1, "{events:?}");
+    assert!(contact_ids(&mut d, guest.idx).is_empty());
 }

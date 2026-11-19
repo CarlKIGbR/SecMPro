@@ -12,6 +12,7 @@ use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{
     CONTROL_SLOT_BASE, Dir, Inspect, LinkMaterial, SimClient, TraceEntry, VirtualDriver,
 };
+use secmp_transport::Error as TransportError;
 
 use crate::m6_common::{
     FRAME, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up,
@@ -405,6 +406,76 @@ fn control_op_retried_after_link_failure() {
     let gap = |i: usize| starts.get(i + 1).unwrap() - starts.get(i).unwrap();
     assert!(gap(0) <= 180_000, "first retry within U[0, 180 s]");
     assert!(gap(1) <= 360_000, "second within U[0, 360 s]");
+}
+
+/// The least difference of consecutive start times (`u64::MAX` for fewer than two).
+fn min_gap(starts: &[u64]) -> u64 {
+    let mut sorted = starts.to_vec();
+    sorted.sort_unstable();
+    sorted
+        .windows(2)
+        .filter_map(|w| w.get(1).zip(w.first()).map(|(b, a)| b.saturating_sub(*a)))
+        .min()
+        .unwrap_or(u64::MAX)
+}
+
+/// The start times of the runs of `kind` of client `c`.
+fn starts_of(sim: &VirtualDriver, c: usize, kind: ControlKind) -> Vec<u64> {
+    sim.client_ref(c)
+        .controls_started
+        .iter()
+        .filter(|(_, _, k)| *k == kind)
+        .map(|(t, _, _)| *t)
+        .collect()
+}
+
+/// Q300 (EXT3-4; spec §10.6 (2)): an operation whose command the relay answers with an `ERR` is queued again exactly as
+/// a fresh delayed one — never within a minute of its last start, a handful of links over 12 hours, never done.
+fn answered_is_spaced(seed: u64, kind: ControlKind, related: u64, err: TransportError) {
+    let mut sim = driver();
+    let alice = client(&mut sim, Mode::Strict, seed);
+    sim.client(alice).links.insert(1, material(1));
+    sim.client(alice).opts.answer_err = Some((kind, err));
+    sim.run_until(1_000);
+    let t = sim.now();
+    sim.client(alice)
+        .sched
+        .schedule_control(t, kind, RelayId(0), related, When::Prompt)
+        .unwrap();
+    sim.run_until(t.saturating_add(12 * 3_600_000));
+    let starts = starts_of(&sim, alice, kind);
+    let n = starts.len();
+    let gap = min_gap(&starts);
+    assert_eq!(starts.first().copied(), Some(t), "the first run is at once");
+    assert!(n >= 2, "queued again: {n}");
+    assert!(
+        n <= 60 && gap >= 60_000,
+        "spaced like a delayed operation: {n} runs, min_gap {gap} ms"
+    );
+    assert!(
+        !sim.client_ref(alice)
+            .controls_done
+            .iter()
+            .any(|(_, k)| *k == kind),
+        "an answered operation is never done"
+    );
+}
+
+/// Q300 (EXT3-4; §10.6 (2)): an answered `LINK_PUT` is spaced like a delayed operation.
+#[test]
+fn answered_link_put_is_spaced_like_a_delayed_op() {
+    answered_is_spaced(91, ControlKind::LinkPut(1), 1, TransportError::Rate);
+}
+
+/// Q300: an answered `QUEUE_NEW` (`ERR_AUTH`) is not terminal and is spaced like a delayed operation.
+#[test]
+fn answered_queue_new_auth_is_spaced_not_terminal() {
+    answered_is_spaced(
+        92,
+        ControlKind::QueueNew(QueueId(700)),
+        700,
+        TransportError::Auth,
+    );
 }
 
 /// CO-07: control operations leave the scheduled traces unchanged; the only extra units are the one-shot links'.

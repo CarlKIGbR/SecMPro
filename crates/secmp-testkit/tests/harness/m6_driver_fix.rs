@@ -141,3 +141,199 @@ fn driver_queue_recreation_does_not_ack_undelivered_cells() {
         assert_eq!(x.sched.acked(q), Some(1));
     });
 }
+
+/// Where the control operation `op` ran: its start (virtual ms), its isolation key, its relay connection (`None` when no
+/// connection was opened for it).
+fn control_link(
+    setup: &Setup,
+    x: &TClient,
+    op: secmp_client_core::scheduler::types::OpId,
+) -> (u64, secmp_transport::driver::Isolation, Option<u64>) {
+    use secmp_client_core::scheduler::run::Purpose;
+    let log = x.driver.log().unwrap();
+    let (start, iso) = log
+        .connects
+        .iter()
+        .find_map(|(t, p, i)| matches!(p, Purpose::Control(o) if *o == op).then_some((*t, *i)))
+        .unwrap();
+    let conn = setup
+        .relay
+        .isolations()
+        .iter()
+        .find_map(|(c, i)| (*i == iso).then_some(*c));
+    (start, iso, conn)
+}
+
+/// The time of the unit of `conn` in direction `dir` and length `len`: the first, or the last.
+fn unit_time(setup: &Setup, conn: u64, dir: Dir, len: usize, last: bool) -> u64 {
+    let times: Vec<u64> = setup
+        .relay
+        .units()
+        .iter()
+        .filter(|u| u.conn == conn && u.dir == dir && u.len == len)
+        .map(|u| u.t_ms)
+        .collect();
+    let t = if last { times.last() } else { times.first() };
+    *t.unwrap()
+}
+
+/// Q300 (EXT3-1 Repro B; spec §10.1): the host's material is ready before the one-shot link opens — a hub wait of 5 s in
+/// the prepare step delays the connect, and the command follows the handshake at once.
+#[test]
+fn driver_control_material_is_ready_before_the_link_opens() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::types::{ControlKind, QueueId, RelayId};
+    use secmp_testkit::harness::Costs;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut x = TClient::new(
+            &setup,
+            Mode::Strict,
+            Params::default(),
+            41,
+            Costs::default(),
+            0,
+        );
+        let t0 = setup.now();
+        x.control.lock().unwrap().prepare_wait_ms = 5_000;
+        let kind = ControlKind::QueueNew(QueueId(900));
+        let op = x
+            .sched
+            .schedule_control(t0, kind, RelayId(0), 900, When::Prompt)
+            .unwrap();
+        x.run_until(t0 + 20_000).await;
+        let (start, iso, conn) = control_link(&setup, &x, op);
+        let connected = setup
+            .provider
+            .connects()
+            .iter()
+            .find_map(|(t, i)| (*i == iso).then_some(*t))
+            .unwrap();
+        let conn = conn.unwrap();
+        let hs2 = unit_time(&setup, conn, Dir::R2C, 1156, false);
+        let cmd = unit_time(&setup, conn, Dir::C2R, 4352, false);
+        assert!(
+            connected >= start + 5_000,
+            "connect {} ms after the start",
+            connected - start
+        );
+        assert!(
+            cmd.checked_sub(hs2).is_some_and(|d| d < 200),
+            "command {cmd} ms after handshake end {hs2}"
+        );
+        assert!(x.control.lock().unwrap().done.contains(&kind));
+    });
+}
+
+/// Q300 (EXT3-1 Repro B; spec §10.1, CLAUDE.md §1.7): the one-shot link is closed before the host commits the answer — a
+/// commit that waits 5 s leaves the link closed within 200 ms of its last response, and the operation done only after.
+#[test]
+fn driver_control_link_closes_before_the_commit() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_testkit::harness::{Costs, LinkMaterial};
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut x = TClient::new(
+            &setup,
+            Mode::Strict,
+            Params::default(),
+            42,
+            Costs::default(),
+            0,
+        );
+        let t0 = setup.now();
+        {
+            let mut m = x.control.lock().unwrap();
+            m.commit_wait_ms = 5_000;
+            m.links.insert(
+                1,
+                LinkMaterial {
+                    ld_id: [7; 16],
+                    owner_seed: [8; 32],
+                    blob: Vec::new(),
+                    one_time: true,
+                    expires_bucket: 0,
+                },
+            );
+        }
+        let kind = ControlKind::LinkGetOwner(1);
+        let op = x
+            .sched
+            .schedule_control(t0, kind, RelayId(0), 1, When::Prompt)
+            .unwrap();
+        x.run_until(t0 + 3_000).await;
+        let (_, _, conn) = control_link(&setup, &x, op);
+        let conn = conn.unwrap();
+        let last = setup
+            .relay
+            .units()
+            .iter()
+            .filter(|u| u.conn == conn && u.dir == Dir::R2C)
+            .map(|u| u.t_ms)
+            .max()
+            .unwrap();
+        let closed = setup
+            .relay
+            .closes()
+            .iter()
+            .find_map(|(c, t)| (*c == conn).then_some(*t));
+        assert!(
+            closed.is_some_and(|c| c >= last && c - last < 200),
+            "closed {closed:?}, last response {last}"
+        );
+        assert!(!x.control.lock().unwrap().done.contains(&kind));
+        x.run_until(t0 + 10_000).await;
+        let m = x.control.lock().unwrap();
+        assert!(m.done.contains(&kind));
+        assert_eq!(m.link_status.last(), Some(&(1, false, false)));
+    });
+}
+
+/// Q300 (HB-55): an operation the host has nothing to do for opens no link.
+#[test]
+fn driver_control_with_nothing_to_do_opens_no_link() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::Purpose;
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_testkit::harness::Costs;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut x = TClient::new(
+            &setup,
+            Mode::Strict,
+            Params::default(),
+            43,
+            Costs::default(),
+            0,
+        );
+        let t0 = setup.now();
+        let kind = ControlKind::LinkPut(9);
+        x.control.lock().unwrap().skip.push(kind);
+        let op = x
+            .sched
+            .schedule_control(t0, kind, RelayId(0), 9, When::Prompt)
+            .unwrap();
+        x.run_until(t0 + 10_000).await;
+        let entries: Vec<_> = x
+            .driver
+            .log()
+            .unwrap()
+            .connects
+            .iter()
+            .filter(|(_, p, _)| matches!(p, Purpose::Control(o) if *o == op))
+            .copied()
+            .collect();
+        assert_eq!(entries.len(), 1, "one start");
+        let iso = entries.first().map(|(_, _, i)| *i).unwrap();
+        let opened = setup
+            .provider
+            .connects()
+            .iter()
+            .filter(|(_, i)| *i == iso)
+            .count();
+        assert_eq!(opened, 0, "provider connects with the operation's key");
+        assert_eq!(x.sched.control_due(op), None);
+        assert!(!x.control.lock().unwrap().done.contains(&kind));
+    });
+}

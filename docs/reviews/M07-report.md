@@ -2693,6 +2693,6 @@ Deviations:
 
 **Gates.** fmt and clippy clean; `secmp-store --features kat` 111/111; `secmp-client-core --features kat` 381/381; harness subset (`m7_runtime`, `m7_forensic`, `m7_crash`, `m7_restart`, `m7_persist`) 14/14; `cargo xtask step --strict policy` PASS.
 
-**ci-fast.** <pending>
+**ci-fast.** (run on f10cfb9) `ci-fast: PASS`, workspace 1673/1673 (1667 + S1–S5, C1), harness 349/349 (harness step 1625 s), 0 skipped; evidence `docs/reviews/M07-evidence/s8-ci-fast.txt`.
 
 Deviations: the `Result` of `job_hub` is spelled through a type alias `JobHub` (clippy `type_complexity`); `cargo fmt` laid out the dictated code.

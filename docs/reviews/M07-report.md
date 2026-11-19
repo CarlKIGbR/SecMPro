@@ -2531,3 +2531,55 @@ Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, ex
 **ci-fast.** Run on 6394a4e: `ci-fast: PASS`; workspace nextest 1646/1646 (WS_BASE 1643 + 3: T1, T3, T4), harness 334/334 (HARNESS_BASE 333 + 1: T2; harness step 1722 s), 0 skipped; evidence `docs/reviews/M07-evidence/s3-ci-fast.txt`.
 
 Deviations: none.
+
+## S-4 (BRIEF M7-S4; modell=claude-sonnet-5-5)
+
+**Findings.**
+- EXT3-4 (external review round 3; V-EXT3-4): `Driver::control` mapped every runner error, a relay `ERR` answer too, to `Err(false)`; `ControlOps::failed` re-dued it at now + U[0, 3 min], uncapped, with the correlation delay cleared by `take_due`: spec §10.6 (2) bypassed, ≈ 900–960 one-shot links a day per operation, linkable by `ld_id`/`recv_pk`; each retry moved `last_start[related]`, so a put retry loop starved the waiting owner-status query of the same link data (new finding), and an answered consuming `LINK_GET` was retried for ever.
+- EXT3-1 Repro B (V-EXT3-1): the order was connect → handshake → `with_hub` (hub mutex) → command, and the post-response hub commits ran while the link was open: a hub hold is an idle gap on a one-shot link (§10.1, invariant 4).
+
+**Rule (Q300).** A control operation ends done, link failed (no answer of the relay: CO-06's back-off, unchanged) or answered (a relay `ERR`, or an answer that could not be committed): an answered operation is queued again exactly as a fresh `When::Delayed` operation, with no cap and no growing back-off (HB-61). The owner-status query is gated again when it runs; an answered consume fails the accept. Material from the host before `providers.connect`; the link closed before the commit; done only after the commit (invariant 7); nothing to do opens no link (closes HB-55).
+
+**Change.**
+- `crates/secmp-client-core/src/scheduler/run.rs:221` trait `ControlRunner` (`prepare` / `run` / `commit`); `:270` `ControlResult`; `:287` `relay_answered`; `:305` `consume_outcome`; `:1324` the `Driver::control` body (prepare, link, close, commit); `:1093`, `:1112`, `:1116` the handler arms.
+- `crates/secmp-client-core/src/scheduler/control.rs:192` `delayed_due` (the moved statements of the `When::Delayed` arm, one draw); `:358` `answered`.
+- `crates/secmp-client-core/src/scheduler/core/mod.rs:1970` `control_answered`.
+- `crates/secmp-client-core/src/invitations.rs:819` `owner_query_args`; `crates/secmp-client-core/src/hub.rs:842` `owner_query_args`, `:848` `accept_failed`.
+- `crates/secmp-client-core/src/runtime.rs:655` `ControlPrepared`; `:670` `ControlAnswer`; `:687` `prepare`; `:740` `run`; `:802` `commit`.
+- Test kit: `crates/secmp-testkit/src/harness/driver.rs:1584` `prepare_control`, `:178` `answer_err`, `:1531` `consume_query`; `tokio_driver.rs:117` `TestControl`; `mem.rs:463` `closes`.
+
+**Invariant 7 per kind.**
+- QUEUE_NEW: the seeds are made durable in `prepare` (D4′), before the link opens.
+- QUEUE_DEL: `queue_deleted` runs in `commit`, after the close; a re-run after a failed commit meets `ERR_NOQUEUE`, counted as deleted.
+- LINK_PUT: no commit.
+- Owner LINK_GET: `owner_status` runs in `commit`, after the close; the chain is drawn again at open.
+- Consuming LINK_GET: `link_consumed` runs in `commit`, after the close; the relay consumed at its response, and the window response → commit is HB-22's and no longer — the close adds no state.
+
+**Tests.** Red first on the current code, with the test-kit hooks on the old structure (`target/fable/s4-red.txt`):
+- U1 `scheduler::control::tests::answered_error_redues_through_control_delay`: an answered prompt operation is due U[1 min, 60 min] after the latest related start/due and never overtakes a waiting related one (200 seeds). New API, not red-first.
+- U2 `scheduler::run::tests::control_errors_are_classified`: the 7 relay answers vs the 9 link-level/local errors, `relay_answered` and `consume_outcome`. New API, not red-first.
+- H1 `m6_control::answered_link_put_is_spaced_like_a_delayed_op`: spacing of an answered `LINK_PUT` over 12 h. Red: 472 runs, min_gap 114 ms.
+- H5 `m6_control::answered_queue_new_auth_is_spaced_not_terminal`: as H1 for `QUEUE_NEW` answered `ERR_AUTH`. Red: 489 runs, min_gap 230 ms.
+- H2 `m7_owner::answered_reput_does_not_starve_the_owner_query`: a re-put answered `ERR_FULL` leaves the owner query running, no two starts under a minute apart. Red: 117 re-puts.
+- H3 `m7_owner::answered_owner_query_ends_once_consumed_seen`: an answered owner query ends without a link once the hub saw `consumed`; no re-put. Red: 158 starts.
+- H4 `m7_owner::answered_consume_fails_the_accept_once`: an answered consume fails the accept once (`InviteFailed(Invalid)`), no contact. Red: 168 starts.
+- H6 `m6_driver_fix::driver_control_material_is_ready_before_the_link_opens`: the prepare wait of 5 s delays the connect; the command follows the handshake within 200 ms. Red: connect 0 ms after the start (the second assertion was not reached).
+- H7 `m6_driver_fix::driver_control_link_closes_before_the_commit`: the link is closed within 200 ms of the last response while the commit waits 5 s; done only after. Red: no close recorded by t0 + 3 000.
+- H8 `m6_driver_fix::driver_control_with_nothing_to_do_opens_no_link`: a skipped operation opens no connection. Red: 1 provider connect.
+- `HostControl` is covered by reading only (HB-59).
+
+**Not in this unit.** EXT3-1 Repro A (export under the hub lock; HB-29, Q285); a cap or a back-off (HB-61); a runtime-level test (HB-59).
+
+**Gates.**
+1. `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+2. `secmp-client-core --features kat`: 363 run, 363 passed, 0 skipped.
+3. harness `m7_owner`/`m6_control`/`m6_driver_fix`/`m6_driver`/`m6_mut`/`m7_pool`/`m7_accept`: 109 run, 109 passed (2 slow), 233 skipped; `m6_control::control_op_retried_after_link_failure` and `m6_mut::control_failed_makes_the_operation_due_again` among them, unchanged.
+4. `cargo xtask step --strict policy`: PASS.
+
+**ci-fast.** <pending>
+
+Deviations:
+- `run.rs` handler: rustfmt put the `LinkFailed` arm in a block, so clippy (`semicolon_if_nothing_returned`) asks for `;` after `sched.control_failed(now, op, closed_before)?`; same semantics.
+- `driver.rs`: the consuming-`LINK_GET` arm of `run_control` is `VirtualDriver::consume_query` (same code as dictated), because `run_control` reached 105 lines (clippy `too_many_lines`, limit 100).
+- H3: the "no `trace` entry with `slot == CONTROL_SLOT_BASE + op.0`" assertion counts only entries at or after the start of the query's second run (`t_ms >= start`): an answered operation keeps its `OpId`, so the entries of its first, answered link carry the same slot.
+- Tests: H1/H5 share the helper `answered_is_spaced`; the test files add `min_gap`, `starts_of`, `control_link`, `unit_time`; time arithmetic is saturating (clippy `arithmetic_side_effects`).

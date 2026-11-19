@@ -2413,3 +2413,5 @@ Gates: `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nexte
 No Kani harness reaches `Scheduler`; the PR's `kani` job is the evidence.
 
 Deviations: none (the lint-form changes above only).
+
+**ci-fast** (head `cfc0fb0`): `ci-fast: PASS`; workspace nextest 1641/1641, harness 328/328 (harness step 1735 s); evidence `docs/reviews/M07-evidence/s1-ci-fast.txt`.

@@ -863,7 +863,16 @@ impl World {
         };
         match todo {
             Todo::Connect => self.start_connect(link),
-            Todo::Lifetime => self.tear(link, now, Reason::Lifetime, source)?,
+            Todo::Lifetime => {
+                // spec §10.6 (1), S-1 (Q296): a recv link whose queue was handed out at another period ends at the
+                // instant drawn at the hand-out, and its successor (new key, the new period) connects at that instant
+                let handover = matches!(link.spec, Spec::Recv(_))
+                    && matches!(&link.state, State::Up(up) if self.period_of(link.spec) != Some(up.period));
+                self.tear(link, now, Reason::Lifetime, source)?;
+                if handover {
+                    self.start_connect(link);
+                }
+            }
             Todo::Run => {
                 #[cfg(feature = "kat")]
                 let (before, out_before) = (counters_now(), self.out.len());
@@ -1564,8 +1573,8 @@ impl Scheduler {
         Ok(core::mem::take(&mut self.world.out))
     }
 
-    /// Change the period of a queue (a hand-out announced with another period, spec §10.6 (1)): a Strict link is
-    /// replaced by a new one with its own key and phase.
+    /// Change the period of a queue (spec §10.6 (1)). Strict: a send queue's link is replaced (new key and phase); a
+    /// recv queue's link is untouched at the call and hands over at an instant drawn at it (S-1, Q296; `World::step_due`).
     ///
     /// # Errors
     /// [`SchedError::UnknownQueue`], [`SchedError::BadPeriod`], [`SchedError::RateBound`].
@@ -1579,8 +1588,10 @@ impl Scheduler {
         if !self.world.params.period_valid(period_ms) {
             return Err(SchedError::BadPeriod);
         }
-        if let Some(sq) = self.world.send_mut(queue) {
+        // `None`: a send queue; `Some(changed)`: a recv queue and whether its period changed
+        let recv = if let Some(sq) = self.world.send_mut(queue) {
             sq.period_ms = period_ms;
+            None
         } else if let Some(rq) = self.world.recvs.iter().find(|r| r.id == queue) {
             let (relay, was) = (rq.relay, rq.period_ms);
             let mode = self.world.effective_mode();
@@ -1593,19 +1604,43 @@ impl Scheduler {
                 }
                 return Err(e);
             }
+            Some(was != period_ms)
         } else {
             return Err(SchedError::UnknownQueue);
-        }
+        };
         if self.world.effective_mode() == Mode::Strict {
-            let (world, links) = (&mut self.world, &mut self.links);
-            for link in links.iter_mut() {
-                if matches!(link.spec, Spec::Send(q) | Spec::Recv(q) if q == queue) {
-                    world.tear(link, now, Reason::Closed, source)?;
-                    link.state = State::Gone;
+            match recv {
+                None => {
+                    let (world, links) = (&mut self.world, &mut self.links);
+                    for link in links.iter_mut() {
+                        if matches!(link.spec, Spec::Send(q) | Spec::Recv(q) if q == queue) {
+                            world.tear(link, now, Reason::Closed, source)?;
+                            link.state = State::Gone;
+                        }
+                    }
+                    self.links.retain(|l| !matches!(l.state, State::Gone));
+                    self.sync_links(now)?;
                 }
+                Some(true) => {
+                    // spec §10.1, §10.6 (1), S-1 (Q296): nothing reaches the wire at a hand-out (a user action or a
+                    // received reply); the successor starts at an independent draw `U[0, 3 min]` after it, and the old
+                    // link ends there
+                    let end = now.saturating_add(self.world.phase()?);
+                    for link in &mut self.links {
+                        if link.spec != Spec::Recv(queue) {
+                            continue;
+                        }
+                        match &mut link.state {
+                            State::Up(up) if up.period != period_ms => {
+                                up.die_at = up.die_at.min(end);
+                            }
+                            State::Down { at } => *at = (*at).min(end),
+                            State::Up(_) | State::Connecting { .. } | State::Gone => {}
+                        }
+                    }
+                }
+                Some(false) => {}
             }
-            self.links.retain(|l| !matches!(l.state, State::Gone));
-            self.sync_links(now)?;
         }
         Ok(core::mem::take(&mut self.world.out))
     }

@@ -9,7 +9,9 @@ use secmp_client_core::scheduler::types::{
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_proto::wire::frame::RequestCmd;
-use secmp_testkit::harness::{CONTROL_SLOT_BASE, Dir, Inspect, LinkMaterial, VirtualDriver};
+use secmp_testkit::harness::{
+    CONTROL_SLOT_BASE, Dir, Inspect, LinkMaterial, SimClient, TraceEntry, VirtualDriver,
+};
 
 use crate::m6_common::{
     FRAME, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up,
@@ -633,18 +635,64 @@ fn pool_queue_never_idles_out() {
     assert!(last_hour >= 44, "{last_hour} FETCHes in the last hour");
 }
 
-/// QP-05: a spare handed out with another period gets a new recv link (new key, new phase) at that period.
+/// A client in `mode` with one spare (`pool_target` 1) whose link (Strict: its own, Balanced: the relay link) is up and has run
+/// 500 s more: the driver, the client and the link's slot.
+fn pool_client_up(mode: Mode, seed: u64) -> (VirtualDriver, usize, u64) {
+    let mut sim = driver();
+    let x = client_with(&mut sim, mode, pool_params(1), seed);
+    let now = sim.now();
+    sim.client(x).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.run_until(3_600_000 + 190_000);
+    let (slot, _) = run_until_link_up(
+        &mut sim,
+        x,
+        if mode == Mode::Strict {
+            LinkKind::Recv
+        } else {
+            LinkKind::Relay
+        },
+    );
+    let up = sim.now();
+    sim.run_until(up.saturating_add(500_000));
+    (sim, x, slot)
+}
+
+/// The trace of the scheduled links of `c` before `end`, without the connections in `skip`.
+fn scheduled_before(c: &SimClient, end: u64, skip: &[u64]) -> Vec<TraceEntry> {
+    c.trace
+        .iter()
+        .filter(|e| e.slot < CONTROL_SLOT_BASE && e.t_ms < end && !skip.contains(&e.slot))
+        .copied()
+        .collect()
+}
+
+/// The link events of `c` in `[from, end)`, without those of the connections in `skip`.
+fn events_between(c: &SimClient, (from, end): (u64, u64), skip: &[u64]) -> Vec<(u64, LinkEvent)> {
+    let of = |e: &LinkEvent| match e {
+        LinkEvent::Up(id, _) | LinkEvent::TornDown(id, _, _) => Some(id.0),
+        LinkEvent::Alert(..) | LinkEvent::RouteDead(_) | LinkEvent::QueueGone(_) => None,
+    };
+    c.events
+        .iter()
+        .filter(|(at, e)| (from..end).contains(at) && !of(e).is_some_and(|i| skip.contains(&i)))
+        .copied()
+        .collect()
+}
+
+/// Whether `o` is a link event on the wire: a connection closed or opened, or a teardown.
+fn on_wire(o: &Output) -> bool {
+    matches!(
+        o,
+        Output::Close { .. } | Output::Connect { .. } | Output::Event(LinkEvent::TornDown(..))
+    )
+}
+
+/// QP-05 (re-dictated by S-1, Q296; spec §10.6 (1), (3)): a spare handed out with another period gets a new recv link (new key,
+/// the announced period) that connects at an instant drawn `U[0, 180 000]` after the hand-out; the 80 s link is not touched at
+/// the hand-out (no `Close`, its `FETCH`es every 80 000) and ends (`TornDown(.., Lifetime)`) at that instant.
 #[test]
 fn pool_handout_recreates_link_with_announced_period() {
-    let mut sim = driver();
-    let alice = client_with(&mut sim, Mode::Strict, pool_params(1), 131);
-    let now = sim.now();
-    sim.client(alice)
-        .sched
-        .manage_pool(now, RelayId(0))
-        .unwrap();
-    sim.run_until(3_600_000 + 190_000);
-    let (old_slot, _) = run_until_link_up(&mut sim, alice, LinkKind::Recv);
+    let (mut sim, alice, old_slot) = pool_client_up(Mode::Strict, 131);
     let t = sim.now();
     let (taken, outs) = sim
         .client(alice)
@@ -652,30 +700,189 @@ fn pool_handout_recreates_link_with_announced_period() {
         .take_pool_queue(t, RelayId(0), 10_000, &mut NoCells)
         .unwrap();
     assert!(taken.is_some());
-    assert!(outs.iter().any(|o| matches!(
-        o,
-        secmp_client_core::scheduler::types::Output::Event(LinkEvent::TornDown(id, _, Reason::Closed)) if id.0 == old_slot
-    )), "the 80 s link closes");
-    let keys_before = sim.client_ref(alice).connects.len();
-    sim.run_until(t + 190_000);
-    let new = sim
+    assert!(!outs.iter().any(on_wire), "no link event at the hand-out");
+    let info = sim
         .client_ref(alice)
+        .sched
+        .links()
+        .into_iter()
+        .find(|l| l.queue == taken)
+        .unwrap();
+    assert_eq!(
+        info.id.map(|l| l.0),
+        Some(old_slot),
+        "the 80 s link is still up"
+    );
+    let end = info.die_at.unwrap();
+    assert!(
+        (t..=t.saturating_add(180_000)).contains(&end),
+        "drawn U[0, 180 000] after the hand-out: {end} vs {t}"
+    );
+    let keys_before = sim.client_ref(alice).connects.len();
+    sim.run_until(end);
+    let old: Vec<u64> = frames_of(&sim, alice, Dir::C2R, old_slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
+    assert!(old.len() >= 5, "{old:?}");
+    for pair in old.windows(2) {
+        assert_eq!(
+            pair.get(1).unwrap().saturating_sub(*pair.first().unwrap()),
+            80_000,
+            "until {end}"
+        );
+    }
+    let c = sim.client_ref(alice);
+    let downs: Vec<(u64, Reason)> = c
+        .events
+        .iter()
+        .filter_map(|(at, e)| match e {
+            LinkEvent::TornDown(id, _, why) if id.0 == old_slot => Some((*at, *why)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        downs,
+        vec![(end, Reason::Lifetime)],
+        "the 80 s link ends once, at the drawn instant"
+    );
+    let new: Vec<(u64, u64)> = c
         .connects
         .iter()
         .skip(keys_before)
-        .find(|(_, id, _)| id.0 != old_slot)
-        .unwrap();
-    assert!(new.0 >= t && new.0 <= t + 180_000, "new phase");
-    let new_slot = new.1.0;
-    sim.run_until(new.0 + 120_000);
+        .filter(|(_, id, _)| c.link_kinds.get(&id.0) == Some(&(LinkKind::Recv, 10_000)))
+        .map(|(at, id, _)| (*at, id.0))
+        .collect();
+    assert_eq!(new.len(), 1, "one successor: {new:?}");
+    let (at, new_slot) = *new.first().unwrap();
+    assert_eq!(at, end, "the successor connects when the 80 s link ends");
+    assert_ne!(new_slot, old_slot);
+    sim.run_until(end.saturating_add(120_000));
     let fetches: Vec<u64> = frames_of(&sim, alice, Dir::C2R, new_slot)
         .iter()
         .map(|e| e.t_ms)
         .collect();
     assert!(fetches.len() >= 5);
     for pair in fetches.windows(2) {
-        assert_eq!(pair.get(1).unwrap() - pair.first().unwrap(), 10_000);
+        assert_eq!(
+            pair.get(1).unwrap().saturating_sub(*pair.first().unwrap()),
+            10_000
+        );
     }
+}
+
+/// S-1 (Q296; spec §10.1, §10.6 (1)–(3); review L1-1/L2-1): Strict, a named hand-out (`take_pool_queue_id`: the core entry of
+/// all four triggers) emits nothing; until the drawn handover instant the scheduled links' trace, events and connects are the
+/// run's without the take, but the refill spare (§10.6 (2), (3)); then one handover. Balanced: nothing, links unchanged.
+#[test]
+fn strict_take_emits_nothing_at_the_take() {
+    let (mut with, x, old_slot) = pool_client_up(Mode::Strict, 141);
+    let (mut without, _, _) = pool_client_up(Mode::Strict, 141);
+    let t = with.now();
+    assert_eq!(without.now(), t, "the two runs are one up to the take");
+    let links = with.client_ref(x).sched.links();
+    let spare = links
+        .iter()
+        .find(|l| l.id.map(|i| i.0) == Some(old_slot))
+        .and_then(|l| l.queue)
+        .unwrap();
+    let (taken, outs) = with
+        .client(x)
+        .sched
+        .take_pool_queue_id(t, RelayId(0), spare, 10_000, &mut NoCells)
+        .unwrap();
+    assert_eq!(taken, Some(spare));
+    assert!(!outs.iter().any(on_wire), "nothing at the take");
+    let end = with
+        .client_ref(x)
+        .sched
+        .links()
+        .iter()
+        .find(|l| l.queue == Some(spare))
+        .and_then(|l| l.die_at)
+        .unwrap();
+    assert!((t..=t.saturating_add(180_000)).contains(&end));
+    with.run_until(end);
+    without.run_until(end);
+    let (wc, oc) = (with.client_ref(x), without.client_ref(x));
+    let refill: Vec<u64> = wc
+        .connects
+        .iter()
+        .filter(|(at, id, _)| {
+            (t..end).contains(at) && wc.link_kinds.get(&id.0) == Some(&(LinkKind::Recv, 80_000))
+        })
+        .map(|(_, id, _)| id.0)
+        .collect();
+    let others = |c: &SimClient, skip: &[u64]| -> Vec<u64> {
+        c.connects
+            .iter()
+            .filter(|(at, id, _)| (t..end).contains(at) && !skip.contains(&id.0))
+            .map(|(at, _, _)| *at)
+            .collect()
+    };
+    assert_eq!(
+        others(wc, &refill),
+        others(oc, &[]),
+        "no other connection before the handover"
+    );
+    assert_eq!(
+        scheduled_before(wc, end, &refill),
+        scheduled_before(oc, end, &[]),
+        "the trace is the run without the take"
+    );
+    assert_eq!(
+        events_between(wc, (t, end), &refill),
+        events_between(oc, (t, end), &[]),
+        "no link event before the handover"
+    );
+    assert!(
+        wc.controls_started
+            .iter()
+            .filter(|(at, _, _)| (t..end).contains(at))
+            .all(|(at, _, k)| matches!(k, ControlKind::QueueNew(_))
+                && *at >= t.saturating_add(60_000)),
+        "only the refill, delayed"
+    );
+    let downs: Vec<LinkEvent> = wc
+        .events
+        .iter()
+        .filter(|(at, e)| *at == end && matches!(e, LinkEvent::TornDown(..)))
+        .map(|(_, e)| *e)
+        .collect();
+    assert!(
+        matches!(downs.as_slice(), [LinkEvent::TornDown(id, _, Reason::Lifetime)] if id.0 == old_slot),
+        "{downs:?}"
+    );
+    let ups: Vec<u64> = wc
+        .connects
+        .iter()
+        .filter(|(at, _, _)| *at == end)
+        .map(|(_, id, _)| id.0)
+        .collect();
+    assert_eq!(ups.len(), 1, "{ups:?}");
+    assert_eq!(
+        ups.first().and_then(|id| wc.link_kinds.get(id)),
+        Some(&(LinkKind::Recv, 10_000))
+    );
+    balanced_take_changes_no_link();
+}
+
+/// The Balanced leg of S-1: a take outputs nothing and leaves the links as they were.
+fn balanced_take_changes_no_link() {
+    let (mut bal, bx, _) = pool_client_up(Mode::Balanced, 141);
+    let (tb, before) = (bal.now(), bal.client_ref(bx).sched.links());
+    let (taken, outs) = bal
+        .client(bx)
+        .sched
+        .take_pool_queue(tb, RelayId(0), 10_000, &mut NoCells)
+        .unwrap();
+    assert!(taken.is_some());
+    assert!(outs.is_empty(), "Balanced: nothing at the take");
+    assert_eq!(
+        bal.client_ref(bx).sched.links(),
+        before,
+        "Balanced: the links are as they were"
+    );
 }
 
 /// The `QueueNew` creations the scheduler hands out at `now`: `(operation, queue)`.

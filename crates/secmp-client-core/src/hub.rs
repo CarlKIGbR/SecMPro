@@ -26,7 +26,7 @@ use secmp_proto::wire::{Id, Period};
 use crate::api::{ContactId, Core, Error};
 use crate::clock::Clock;
 use crate::invitations::{
-    AcceptRequest, Invitations, Issuance, IssueRequest, LinkPutArgs, uri_link_data,
+    AcceptRequest, Invitations, Issuance, IssueRequest, LinkPutArgs, OwnerStatus, uri_link_data,
 };
 use crate::scheduler::control::{OpSpec, When};
 use crate::scheduler::params::{Mode, Params};
@@ -244,6 +244,10 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
             let period = u64::from(open.period_s).saturating_mul(1_000);
             hub.register_recv(open.relay, open.queue, &open.recv_seed, period);
             hub.inv_queues.insert(open.queue, open.ld_id);
+        }
+        // Q297 (L1-2): the owner-status chain of every open invitation starts again at open, U[1 min, 60 min] on (§10.6 (2))
+        for op in hub.invitations.owner_queries(&hub.core.clock)? {
+            hub.actions.push(Action::Control(op));
         }
         // the queues of invitations retired unconsumed whose `QUEUE_DEL` did not run yet: fetched again until the empty
         // `FETCH`, then deleted (Q201); their cells are acknowledged and dropped
@@ -784,6 +788,14 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         for op in &issued.ops {
             self.actions.push(Action::Control(*op));
         }
+        // Q297 (L1-2): the first owner-status query, U[1 min, 60 min] after the LINK_PUT (§10.6 (2), §9.7 (1), §5.2); a store
+        // that cannot be read now leaves it to the next open (the invitation is issued)
+        if let Ok(Some(op)) = self
+            .invitations
+            .owner_query(&issued.invitation.ld_id, &self.core.clock)
+        {
+            self.actions.push(Action::Control(op));
+        }
         self.next_expiry = self.invitations.next_expiry()?;
         Ok(issued)
     }
@@ -811,6 +823,18 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// As [`Invitations::link_put_args`].
     pub fn link_put_args(&self, n: u32) -> Result<LinkPutArgs, Error> {
         self.invitations.link_put_args(n)
+    }
+
+    /// The answer of the owner-status `LINK_GET` of link data `n` (spec §9.4; Q297): as [`Invitations::owner_answer`]; the
+    /// re-put (§9.7 (1)) and the next query go to the scheduler.
+    ///
+    /// # Errors
+    /// As [`Invitations::owner_answer`]: nothing is queued, the operation fails and runs again.
+    pub fn owner_status(&mut self, n: u32, status: OwnerStatus) -> Result<(), Error> {
+        for op in self.invitations.owner_answer(n, status, &self.core.clock)? {
+            self.actions.push(Action::Control(op));
+        }
+        Ok(())
     }
 
     /// The user is accepting `uri`: the consuming `LINK_GET` runs at once on a one-shot link (a user waits, §10.6 (2)); its
@@ -1437,15 +1461,19 @@ mod tests {
                 ..
             },
             Action::Control(put),
+            Action::Control(query),
         ] = actions.as_slice()
         else {
-            return Err("issue: AddRecv, LinkPut".into());
+            return Err("issue: AddRecv, LinkPut, LinkGetOwner".into());
         };
         assert_eq!(*queue, inv_queue);
         let ControlKind::LinkPut(n_link) = put.kind else {
             return Err("a LinkPut".into());
         };
         assert!(matches!(put.when, When::Prompt));
+        // Q297: the first owner-status query, delayed, of the same link data
+        assert_eq!(query.kind, ControlKind::LinkGetOwner(n_link));
+        assert_eq!((query.when, query.related), (When::Delayed, put.related));
         assert_eq!(
             sc.inviter.link_put_args(n_link)?.ld_id,
             issued.invitation.ld_id

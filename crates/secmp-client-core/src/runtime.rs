@@ -721,6 +721,33 @@ impl HostControl {
         .await?;
         Ok(ControlEffect::None)
     }
+
+    /// The owner-status `LINK_GET` of an open invitation (spec §9.4; Q297, L1-2): the answer goes to the hub
+    /// ([`crate::hub::Hub::owner_status`]), which commits what it learned before the operation is done (CLAUDE.md §1.7) and
+    /// queues the re-put (§9.7 (1)) and the next query (§10.6 (2)). Link data the hub no longer holds is not asked for: the
+    /// operation is done without a command (a failed one would be retried for ever, CO-06).
+    async fn link_get_owner<S: ProviderStream>(
+        &self,
+        n: u32,
+        t: &mut AsyncRelayQueueTransport<S>,
+    ) -> Result<ControlEffect, TransportError> {
+        let args = self
+            .with_hub(move |hub| Some(hub.link_put_args(n).ok()))
+            .await?;
+        let Some(args) = args else {
+            return Ok(ControlEffect::None);
+        };
+        let got = t
+            .get_link_data(args.ld_id, LinkGetMode::OwnerStatus(&args.owner_seed))
+            .await?;
+        let status = crate::invitations::OwnerStatus {
+            present: got.present,
+            consumed: got.consumed,
+        };
+        self.with_hub(move |hub| hub.owner_status(n, status).ok())
+            .await?;
+        Ok(ControlEffect::None)
+    }
 }
 
 impl ControlRunner for HostControl {
@@ -728,7 +755,7 @@ impl ControlRunner for HostControl {
         &self,
         _op: OpId,
         kind: ControlKind,
-        relay: RelayId,
+        _relay: RelayId,
         t: &mut AsyncRelayQueueTransport<S>,
     ) -> Result<ControlEffect, TransportError> {
         let access = self.access.as_ref().ok_or(TransportError::Invalid)?;
@@ -744,19 +771,7 @@ impl ControlRunner for HostControl {
                     .await?;
                 Ok(ControlEffect::None)
             }
-            ControlKind::LinkGetOwner(n) => {
-                let args = self.with_hub(move |hub| hub.link_put_args(n).ok()).await?;
-                let got = t
-                    .get_link_data(args.ld_id, LinkGetMode::OwnerStatus(&args.owner_seed))
-                    .await?;
-                Ok(ControlEffect::OwnerStatus {
-                    relay,
-                    ld: n,
-                    present: got.present,
-                    consumed: got.consumed,
-                    expired: false,
-                })
-            }
+            ControlKind::LinkGetOwner(n) => self.link_get_owner(n, t).await,
             ControlKind::LinkGetConsume(n) => self.link_get_consume(n, t).await,
         }
     }

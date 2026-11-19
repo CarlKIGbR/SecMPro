@@ -809,6 +809,90 @@ impl Invitations {
         }])
     }
 
+    /// The next owner-status query of the open invitation `ld_id` (spec §9.4, §9.7 (1), §5.2; Q297, L1-2): a `LINK_GET` in
+    /// owner-status mode on a one-shot link, `When::Delayed` = `U[1 min, 60 min]` from the latest operation of its link data
+    /// (§10.6 (2)); `None` once the invitation is not offered (consumed, expired, retired), once its link data was seen
+    /// consumed (the answer cannot change), or when it expires within the longest delay; the chain runs from the issue,
+    /// each answer and each open, never from a user's call.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written or a record does not open.
+    pub fn owner_query(&self, ld_id: &Id, clock: &impl Clock) -> Result<Option<OpSpec>, Error> {
+        let now = clock.unix_secs();
+        let store = self.lock()?;
+        if offer_state(&store, ld_id, None, now)? != OfferState::Offered {
+            return Ok(None);
+        }
+        let Some(loaded) = load(&store, ld_id)? else {
+            return Ok(None);
+        };
+        // Q297: no query that could only run after expires
+        let longest = crate::scheduler::params::Params::default()
+            .control_delay_ms
+            .1
+            .div_ceil(1_000);
+        if loaded.stored.flags & FLAG_CONSUMED_SEEN != 0
+            || now.saturating_add(longest) >= loaded.stored.record.expires
+        {
+            return Ok(None);
+        }
+        let n = link_data_n(ld_id);
+        Ok(Some(OpSpec {
+            kind: ControlKind::LinkGetOwner(n),
+            relay: loaded.stored.relay,
+            related: u64::from(n),
+            when: When::Delayed,
+        }))
+    }
+
+    /// The owner-status queries of the open invitations at open, [`Invitations::owner_query`] of each (Q297; nothing
+    /// pending is stored, the open draws afresh).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written or a record does not open.
+    pub fn owner_queries(&self, clock: &impl Clock) -> Result<Vec<OpSpec>, Error> {
+        let rows = self.lock()?.invitations()?;
+        let mut out = Vec::new();
+        for row in rows {
+            if row.status == INVITATION_OPEN {
+                out.extend(self.owner_query(&ld_id_of(&row.ld_id)?, clock)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The answer of the owner-status query of link data `n` (the host's control operation): [`Invitations::on_owner_status`]
+    /// for the open invitation that has it — its flag is committed before this returns, so before the operation is done
+    /// (CLAUDE.md §1.7) — then the next query ([`Invitations::owner_query`]); nothing for link data no open invitation has.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written or a record does not open.
+    pub fn owner_answer(
+        &self,
+        n: u32,
+        status: OwnerStatus,
+        clock: &impl Clock,
+    ) -> Result<Vec<OpSpec>, Error> {
+        let rows = self.lock()?.invitations()?;
+        let mut open = None;
+        for row in rows {
+            if row.status != INVITATION_OPEN {
+                continue;
+            }
+            let ld_id = ld_id_of(&row.ld_id)?;
+            if link_data_n(&ld_id) == n {
+                open = Some(ld_id);
+                break;
+            }
+        }
+        let Some(ld_id) = open else {
+            return Ok(Vec::new());
+        };
+        let mut ops = self.on_owner_status(&ld_id, status, clock)?;
+        ops.extend(self.owner_query(&ld_id, clock)?);
+        Ok(ops)
+    }
+
     /// Retire what has expired (§6.1, §5.2): the profile's retirement ([`Profile::retire`]), the `QUEUE_DEL` of the queue
     /// of every invitation that expired unused (a consumed invitation's queue is retired with its session), and
     /// [`Event::InvitationUsedElsewhere`] once for an invitation whose link data was consumed and that no handshake

@@ -2465,3 +2465,5 @@ Deviations: none (the lint-form changes above only).
 **Gates.** `cargo nextest run -p secmp-client-core --features kat`: 359/359 (without `kat`: 56/56). `cargo nextest run -p secmp-testkit --features kat --test harness`: 333/333 (1759 s; the four new tests PASS). `cargo xtask step --strict policy`: PASS. fmt and clippy `-D warnings` clean.
 
 Deviations: the assertion above (`<= 1` queries), the unit tests in `invitations_tests.rs`.
+
+**ci-fast** (head `b1f798b`): `ci-fast: PASS`; workspace nextest 1643/1643, harness 333/333 (harness step 1561 s), 0 skipped; evidence `docs/reviews/M07-evidence/s2b-ci-fast.txt`.

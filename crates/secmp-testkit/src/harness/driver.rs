@@ -283,6 +283,11 @@ pub trait StoreHub: Source {
     /// # Errors
     /// The hub's failure to record it, as text.
     fn queue_deleted(&mut self, queue: QueueId) -> Result<(), String>;
+    /// The owner-status `LINK_GET` of link data `n` answered `{present, consumed}` (Q297).
+    ///
+    /// # Errors
+    /// The hub's failure to record it, as text.
+    fn owner_status(&mut self, n: u32, present: bool, consumed: bool) -> Result<(), String>;
     /// The hub as `Any`, for the tests to reach its own methods.
     fn any(&mut self) -> &mut dyn std::any::Any;
 }
@@ -332,6 +337,15 @@ impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
 
     fn queue_deleted(&mut self, queue: QueueId) -> Result<(), String> {
         Hub::queue_deleted(self, queue).map_err(|e| e.to_string())
+    }
+
+    fn owner_status(&mut self, n: u32, present: bool, consumed: bool) -> Result<(), String> {
+        Hub::owner_status(
+            self,
+            n,
+            secmp_client_core::invitations::OwnerStatus { present, consumed },
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn any(&mut self) -> &mut dyn std::any::Any {
@@ -1329,6 +1343,36 @@ impl VirtualDriver {
         Vec::new()
     }
 
+    /// The owner-status `LINK_GET` of link data `n` of client `idx` (Q297): the answer is recorded and goes to the hub.
+    fn owner_status_query(
+        &mut self,
+        idx: usize,
+        transport: &mut RelayQueueTransport<HarnessStream>,
+        n: u32,
+        now: u64,
+    ) -> Result<(), TransportError> {
+        let client = self.clients.get_mut(idx).unwrap();
+        let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+        let owner = SecretBytes::from_slice(&m.owner_seed).unwrap();
+        let ld = m.ld_id;
+        let got = transport.get_link_data(ld, LinkGetMode::OwnerStatus(&owner))?;
+        client.link_status.push((now, n, got.present, got.consumed));
+        // Q297: a store-backed client's answer goes to its hub (the re-put and the next query come back as its
+        // actions); a client without a hub keeps the scheduler's re-put (CO-05)
+        if let Some(hub) = client.hub.as_mut() {
+            if let Err(e) = hub.owner_status(n, got.present, got.consumed) {
+                client.hub_errors.push(format!("owner_status: {e}"));
+            }
+        } else {
+            let relay = client.relay;
+            let expired = false;
+            let _ = client
+                .sched
+                .owner_status(now, relay, n, got.present, got.consumed, expired);
+        }
+        Ok(())
+    }
+
     fn run_control(
         &mut self,
         idx: usize,
@@ -1405,21 +1449,7 @@ impl VirtualDriver {
                     access,
                 )
             }
-            ControlKind::LinkGetOwner(n) => {
-                let client = self.clients.get_mut(idx).unwrap();
-                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
-                let owner = SecretBytes::from_slice(&m.owner_seed).unwrap();
-                let ld = m.ld_id;
-                let got = transport.get_link_data(ld, LinkGetMode::OwnerStatus(&owner))?;
-                client.link_status.push((now, n, got.present, got.consumed));
-                let relay = client.relay;
-                let expired = false;
-                let _ =
-                    client
-                        .sched
-                        .owner_status(now, relay, n, got.present, got.consumed, expired);
-                Ok(())
-            }
+            ControlKind::LinkGetOwner(n) => self.owner_status_query(idx, transport, n, now),
             ControlKind::LinkGetConsume(n) => {
                 let client = self.clients.get_mut(idx).unwrap();
                 let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
@@ -1485,12 +1515,12 @@ impl VirtualDriver {
                         .or_insert((*recv.expose_secret(), send));
                 }
             }
-            ControlKind::LinkPut(n) => {
+            ControlKind::LinkPut(n) | ControlKind::LinkGetOwner(n) => {
                 if let Some(m) = hub.link_put(n) {
                     client.links.entry(n).or_insert(m);
                 }
             }
-            _ => {}
+            ControlKind::LinkGetConsume(_) => {}
         }
     }
 

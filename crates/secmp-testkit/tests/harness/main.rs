@@ -44,6 +44,7 @@ mod m7_e2e;
 mod m7_e2e_virt;
 mod m7_forensic;
 mod m7_links;
+mod m7_owner;
 mod m7_persist;
 mod m7_pool;
 mod m7_restart;

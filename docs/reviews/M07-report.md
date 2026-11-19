@@ -2492,4 +2492,4 @@ Docs only, on head `56e86e3` (S-2b evidence). No code, comment in code, test, ex
 
 **Gates.** `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nextest -p xtask` 330/330.
 
-**ci-fast**: pending (K2).
+**ci-fast** (head `83b66c6`): `ci-fast: PASS`; workspace nextest 1643/1643, harness 333/333 (harness step 1795 s), 0 skipped; evidence `docs/reviews/M07-evidence/d11-ci-fast.txt`.

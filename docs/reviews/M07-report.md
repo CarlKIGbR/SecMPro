@@ -2630,7 +2630,7 @@ Deviations:
 3. harness `m6_control`/`m6_mut`/`m6_sched`/`m7_pool`/`m6_activity`: 144 run, 144 passed (8 slow), 198 skipped; QP-01…QP-05 (in `m6_control`), `strict_take_emits_nothing_at_the_take`, `rejected_pool_handout_keeps_spare`, `control_op_draws_from_timing_rng` among them, unchanged.
 4. `cargo xtask step --strict policy`: PASS; `cargo xtask step fuzz-check`: PASS.
 
-**ci-fast.** Run on `<pending>`: `<pending>`; evidence `docs/reviews/M07-evidence/s5-ci-fast.txt`.
+**ci-fast.** Run on e69f041: `ci-fast: PASS`; workspace nextest 1662/1662 (WS_BASE 1648 + 14), `secmp-client-core --features kat` 377/377 (CORE_BASE 363 + 14), harness 342/342 (HARNESS_BASE 342 + 0; harness step 1598 s), 0 skipped; evidence `docs/reviews/M07-evidence/s5-ci-fast.txt`.
 
 Deviations:
 - The helpers and tests of the core are at the end of `scheduler::core::tests` (the anchored `counters_now_moves_when_a_counted_step_runs` is in the sibling module `m6_mut`); their imports are at the top of `tests`, not inside each test.

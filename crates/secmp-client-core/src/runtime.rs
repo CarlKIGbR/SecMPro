@@ -41,6 +41,7 @@ use crate::scheduler::core::Scheduler;
 use crate::scheduler::params::{Mode, Params};
 use crate::scheduler::run::{
     BlockingWorker, ControlEffect, ControlRunner, Directory, Driver, Only, OsHandshakes, Providers,
+    link_put_outcome,
 };
 use crate::scheduler::types::{
     CellSource, CellToken, ControlKind, Delivered, OpId, Output, PreparedCell, QueueId, RelayId,
@@ -423,7 +424,9 @@ impl Serve {
 
 // ---- the relay reference ------------------------------------------------------------------------------------------------
 
-fn unhex(s: &str) -> Option<Vec<u8>> {
+/// The bytes of the hex string `s`, in one zeroizing allocation of exactly their length (CLAUDE.md §1.6; review L34-2 (a):
+/// the access key is never in a buffer that grew or that is dropped unwiped); `None` for an odd length or a non-hex digit.
+fn unhex(s: &str) -> Option<Zeroizing<Vec<u8>>> {
     let digit = |c: u8| {
         char::from(c)
             .to_digit(16)
@@ -432,13 +435,14 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }
-    s.as_bytes()
-        .chunks(2)
-        .map(|p| match p {
-            [hi, lo] => Some((digit(*hi)? << 4) | digit(*lo)?),
-            _ => None,
-        })
-        .collect()
+    let mut out = Zeroizing::new(Vec::with_capacity(s.len() / 2));
+    for p in s.as_bytes().chunks(2) {
+        match p {
+            [hi, lo] => out.push((digit(*hi)? << 4) | digit(*lo)?),
+            _ => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Read the text of a relay reference file: `relay_ref = <hex RelayRef>` and `access_key = <hex 32 bytes>`, one per line;
@@ -453,7 +457,7 @@ pub fn read_relay_ref(text: &str) -> Result<(RelayRef, AccessKey), Error> {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        let bytes = Zeroizing::new(unhex(value.trim()).ok_or(Error::Unavailable)?);
+        let bytes = unhex(value.trim()).ok_or(Error::Unavailable)?;
         match key.trim() {
             "relay_ref" => relay = RelayRef::decode(&bytes).ok(),
             "access_key" => access = SecretBytes::<32>::from_slice(&bytes).ok(),
@@ -772,8 +776,11 @@ impl ControlRunner for HostControl {
                 let blob = LinkBlob::decode(&args.blob).map_err(|_| TransportError::Invalid)?;
                 let bucket =
                     u32::try_from(args.expires / 3_600).map_err(|_| TransportError::Invalid)?;
-                t.put_link_data(args.ld_id, &args.owner_seed, &blob, true, bucket, access)
-                    .await?;
+                // Q299 (F1-1; spec §9.4): `ERR_EXISTS` is done, never retried; the owner-status chain sees the real state
+                link_put_outcome(
+                    t.put_link_data(args.ld_id, &args.owner_seed, &blob, true, bucket, access)
+                        .await,
+                )?;
                 Ok(ControlEffect::None)
             }
             ControlKind::LinkGetOwner(n) => self.link_get_owner(n, t).await,
@@ -1587,6 +1594,25 @@ mod tests {
         ] {
             assert!(read_relay_ref(&bad).is_err(), "{bad:?}");
         }
+        Ok(())
+    }
+
+    /// M7-S3 (L34-2 (a); CLAUDE.md §1.6): `unhex` decodes into one allocation of exactly the decoded length and refuses an
+    /// odd length or a non-hex digit.
+    #[test]
+    fn unhex_is_one_exact_allocation() -> Result<(), Box<dyn std::error::Error>> {
+        for n in [1_u8, 31, 32, 33, 100] {
+            let bytes: Vec<u8> = (0..n).collect();
+            let mut text = String::new();
+            for b in &bytes {
+                write!(text, "{b:02x}")?;
+            }
+            let got = unhex(&text).ok_or("unhex refused valid hex")?;
+            assert_eq!(got.as_slice(), bytes.as_slice());
+            assert_eq!(got.capacity(), got.len(), "{n} bytes");
+        }
+        assert!(unhex("0").is_none());
+        assert!(unhex("0g").is_none());
         Ok(())
     }
 

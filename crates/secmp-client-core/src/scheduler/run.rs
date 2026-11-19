@@ -231,6 +231,20 @@ pub trait ControlRunner: Send + Sync + 'static {
     ) -> impl Future<Output = Result<ControlEffect, TransportError>> + Send;
 }
 
+/// The outcome of a `LINK_PUT` for its control operation (spec §9.4, §9.7 (1); Q299, review finding F1-1): `ERR_EXISTS` means
+/// the relay holds this `ld_id`'s link data or its consumption marker — the identical put's goal is reached, or the link data
+/// was consumed, which the owner-status chain reports (Q297) — so the operation is done and never retried. Every other outcome
+/// is returned unchanged (a failure is retried as before, HB-61).
+///
+/// # Errors
+/// The transport's error, unless it is [`TransportError::Exists`].
+pub fn link_put_outcome(answer: Result<(), TransportError>) -> Result<(), TransportError> {
+    match answer {
+        Err(TransportError::Exists) => Ok(()),
+        other => other,
+    }
+}
+
 // ---- the cell-source worker ------------------------------------------------------------------------------------------
 
 /// One call of the cell source, run by the [`Worker`] off the I/O loop.
@@ -1363,6 +1377,32 @@ mod tests {
 
     fn cell() -> Result<Cell, secmp_proto::Error> {
         Cell::from_bytes(&[0x5a; secmp_proto::sizes::CELL_LEN])
+    }
+
+    /// Q299 (F1-1; spec §9.4): `ERR_EXISTS` is done, every other outcome unchanged.
+    #[test]
+    fn link_put_exists_is_done() {
+        assert_eq!(link_put_outcome(Ok(())), Ok(()));
+        assert_eq!(link_put_outcome(Err(TransportError::Exists)), Ok(()));
+        for e in [
+            TransportError::Token,
+            TransportError::Full,
+            TransportError::NoQueue,
+            TransportError::Auth,
+            TransportError::Malformed,
+            TransportError::Rate,
+            TransportError::Rejected,
+            TransportError::Closed,
+            TransportError::NewLinkRequired,
+            TransportError::Unavailable,
+            TransportError::OutOfOrder,
+            TransportError::Invalid,
+            TransportError::NoDirectEndpoint,
+            TransportError::TorNotReady,
+            TransportError::TorUnavailable,
+        ] {
+            assert_eq!(link_put_outcome(Err(e)), Err(e), "{e:?}");
+        }
     }
 
     /// Mutants #160 (`Deferred::{relayed, evicted, send_failed, discard, queue_lost}` → `()`): each notification of the core

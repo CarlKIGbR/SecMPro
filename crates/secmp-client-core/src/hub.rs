@@ -181,8 +181,8 @@ pub struct Hub<C: Clock, S: EntropySource> {
     invitations: Invitations,
     /// The invitation queues the hub fetches, with their invitation.
     inv_queues: BTreeMap<QueueId, Id>,
-    /// Invitations the user is accepting: link-data number → URI, until the `LINK_GET` returns.
-    waiting: BTreeMap<u32, String>,
+    /// Invitations the user is accepting: link-data number → URI, until the `LINK_GET` returns. The URI carries the link key: zeroized (CLAUDE.md §1.6; review L34-3).
+    waiting: BTreeMap<u32, Zeroizing<String>>,
     registered: BTreeSet<QueueId>,
     send_ids: BTreeMap<i64, QueueId>,
     /// The encoded `RouteDescriptor` each contact's current send queue was registered from: a re-sent `RouteUpdate`
@@ -853,7 +853,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
     /// [`Error::Invitation`] for a URI that does not parse.
     pub fn begin_accept(&mut self, uri: &str) -> Result<(Id, u32), Error> {
         let (ld_id, n) = uri_link_data(uri)?;
-        self.waiting.insert(n, uri.to_owned());
+        self.waiting.insert(n, Zeroizing::new(uri.to_owned()));
         self.actions.push(Action::Control(OpSpec {
             kind: ControlKind::LinkGetConsume(n),
             relay: self.config.relay,

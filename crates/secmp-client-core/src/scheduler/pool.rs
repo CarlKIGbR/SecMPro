@@ -119,6 +119,36 @@ impl QueuePool {
             .position(|q| *q == queue)
     }
 
+    /// The oldest spare of `relay`: the one [`QueuePool::take`] hands out (nothing changes; Q301).
+    #[must_use]
+    pub fn oldest(&self, relay: RelayId) -> Option<QueueId> {
+        self.relays
+            .iter()
+            .find(|r| r.relay == relay)?
+            .spares
+            .first()
+            .copied()
+    }
+
+    /// [`QueuePool::missing`] as it will be once the spare `queue` of `relay` is handed out; nothing changes (Q301: the refill
+    /// is drawn before the hand-out).
+    #[must_use]
+    pub fn missing_after_take(&self, relay: RelayId, queue: QueueId) -> Vec<(RelayId, usize)> {
+        self.relays
+            .iter()
+            .filter_map(|r| {
+                let taken = usize::from(r.relay == relay && r.spares.contains(&queue));
+                let need = self.target.saturating_sub(
+                    r.spares
+                        .len()
+                        .saturating_add(r.pending.len())
+                        .saturating_sub(taken),
+                );
+                (need > 0).then_some((r.relay, need))
+            })
+            .collect()
+    }
+
     /// Hand out the oldest spare of `relay`.
     pub fn take(&mut self, relay: RelayId) -> Option<QueueId> {
         let r = self.relays.iter_mut().find(|r| r.relay == relay)?;

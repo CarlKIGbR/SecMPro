@@ -212,6 +212,35 @@ impl ControlOps {
         Ok((base.saturating_add(drawn), drawn))
     }
 
+    /// [`ControlOps::schedule`] of a [`When::Delayed`] operation whose delay `drawn` (`params.control_delay_ms`) the caller drew
+    /// before it changed anything (Q301: a failed draw changes nothing); `spec.when` is not read. It cannot fail.
+    pub fn schedule_drawn(&mut self, id: OpId, now: u64, spec: OpSpec, drawn: u64) {
+        let started = self
+            .last_start
+            .iter()
+            .filter(|(r, _)| *r == spec.related)
+            .map(|(_, t)| *t);
+        let waiting = self
+            .ops
+            .iter()
+            .filter(|o| o.related == spec.related)
+            .map(|o| o.due);
+        let base = started.chain(waiting).fold(now, u64::max);
+        self.ops.push(Op {
+            id,
+            kind: spec.kind,
+            relay: spec.relay,
+            related: spec.related,
+            due: base.saturating_add(drawn),
+            delay: Some(drawn),
+            running: false,
+            failures: 0,
+            closed_before: 0,
+            awaiting: None,
+            not_before: 0,
+        });
+    }
+
     /// Queue `spec` (a `QUEUE_DEL` of `queue`, §10.6 (4)) behind an empty `FETCH` (Q163, Q194; D-B11): it waits, with no
     /// time of its own, until the core reports a `FETCH` of `queue` that held no present cell
     /// ([`ControlOps::note_empty_fetch`]); then its `U[1 min, 60 min]` delay (§10.6 (2)) starts. One implementation for
@@ -476,6 +505,26 @@ mod tests {
             (10_000_000 + 60_000..=10_000_000 + 3_600_000).contains(&due),
             "{due}"
         );
+        Ok(())
+    }
+
+    /// Q301 sweep: `schedule_drawn` with the delay the caller drew queues exactly what `schedule` of a `When::Delayed`
+    /// operation queues, also behind a waiting related operation and after the first one started.
+    #[test]
+    fn schedule_drawn_is_the_delayed_schedule() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let (lo, hi) = params.control_delay_ms;
+        let (mut a, mut b) = (ControlOps::new(), ControlOps::new());
+        let (mut by_rng, mut drawn) = (TimingRng::seeded(9), TimingRng::seeded(9));
+        for n in 1..=2_u64 {
+            let s = spec(ControlKind::QueueNew(QueueId(1)), 7, When::Delayed);
+            a.schedule(&params, &mut by_rng, OpId(n), 0, s)?;
+            b.schedule_drawn(OpId(n), 0, s, drawn.uniform(lo, hi)?);
+            assert_eq!(a.due_of(OpId(n)), b.due_of(OpId(n)));
+        }
+        let d = a.due_of(OpId(1)).ok_or(Unavailable)?;
+        assert_eq!(a.take_due(d), b.take_due(d));
+        assert_eq!(a.due_of(OpId(2)), b.due_of(OpId(2)));
         Ok(())
     }
 

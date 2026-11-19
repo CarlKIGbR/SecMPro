@@ -27,6 +27,22 @@ enum Source {
     Seeded(u64),
     #[cfg(test)]
     Failing,
+    /// Seeded, for `left` more uniform draws; then every draw fails (Q301).
+    #[cfg(test)]
+    FailAfter {
+        state: u64,
+        left: u64,
+    },
+}
+
+/// One `SplitMix64` step (the seeded test generators).
+#[cfg(any(test, feature = "kat"))]
+fn splitmix(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 /// The timing randomness (see the module documentation).
@@ -88,6 +104,20 @@ impl TimingRng {
         }
     }
 
+    /// A deterministic generator whose first `n` uniform draws succeed with the values of `seeded(seed)` and whose every later
+    /// draw fails (tests only, Q301: a failure at a chosen draw of a change). Its fork is healthy.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn failing_after(seed: u64, n: u64) -> Self {
+        Self {
+            source: Source::FailAfter {
+                state: seed,
+                left: n,
+            },
+            draws: 0,
+        }
+    }
+
     /// A second generator for a separate purpose (the control operations): seeded from this one's next 64 bits, so the two
     /// streams do not move each other. The fork is not a uniform draw and is not counted.
     ///
@@ -104,6 +134,8 @@ impl TimingRng {
             Source::Seeded(_) => Self::seeded(seed ^ 0xa5a5_a5a5_5a5a_5a5a),
             #[cfg(test)]
             Source::Failing => Self::failing(),
+            #[cfg(test)]
+            Source::FailAfter { .. } => Self::seeded(seed ^ 0xa5a5_a5a5_5a5a_5a5a),
         })
     }
 
@@ -120,13 +152,9 @@ impl TimingRng {
                 Ok(u64::from_be_bytes(*bytes.expose_secret()))
             }
             #[cfg(any(test, feature = "kat"))]
-            Source::Seeded(state) => {
-                *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-                let mut z = *state;
-                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-                Ok(z ^ (z >> 31))
-            }
+            Source::Seeded(state) => Ok(splitmix(state)),
+            #[cfg(test)]
+            Source::FailAfter { state, .. } => Ok(splitmix(state)),
             #[cfg(test)]
             Source::Failing => Err(Unavailable),
         }
@@ -137,6 +165,11 @@ impl TimingRng {
     /// # Errors
     /// [`Unavailable`] if the operating system has no randomness.
     pub fn uniform(&mut self, lo: u64, hi: u64) -> Result<u64, Unavailable> {
+        // Q301 (tests only): the budget of a `failing_after` generator, one per uniform draw
+        #[cfg(test)]
+        if let Source::FailAfter { left, .. } = &mut self.source {
+            *left = left.checked_sub(1).ok_or(Unavailable)?;
+        }
         let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
         self.draws = self.draws.saturating_add(1);
         // `hi - lo + 1`; 0 stands for the whole 64-bit range
@@ -184,6 +217,20 @@ mod tests {
     fn os_source_draws() -> Result<(), Unavailable> {
         let mut rng = TimingRng::os();
         assert!(rng.uniform(0, 180_000)? <= 180_000);
+        Ok(())
+    }
+
+    /// Q301: `failing_after(seed, n)` gives the values of `seeded(seed)` for `n` draws, then fails; its fork is healthy.
+    #[test]
+    fn failing_after_fails_from_the_chosen_draw() -> Result<(), Unavailable> {
+        let mut plain = TimingRng::seeded(7);
+        let mut limited = TimingRng::failing_after(7, 3);
+        for _ in 0..3 {
+            assert_eq!(plain.uniform(0, 180_000)?, limited.uniform(0, 180_000)?);
+        }
+        assert_eq!(limited.uniform(0, 180_000), Err(Unavailable));
+        assert_eq!(limited.uniform(5, 5), Err(Unavailable));
+        assert!(limited.fork()?.uniform(0, 9).is_ok());
         Ok(())
     }
 }

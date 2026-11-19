@@ -2395,3 +2395,21 @@ Docs only. The three one-departure connections of the E2-10 evidence are named i
 Cross-review verdicts: C-3 PUSH 0/0/2/8, C-4 PUSH 0/0/4/7, C-5 PUSH 0/0/2/5.
 
 Gates: `git diff --stat` only under `docs/`; `step --strict policy` PASS; `nextest -p xtask` 330/330; `ci-fast` (head `6315386`) PASS: workspace nextest 1641/1641, harness 327/327 (harness step 1660 s); evidence `docs/reviews/M07-evidence/c5b-ci-fast.txt`.
+
+## S-1 (BRIEF M7-S1; modell=claude-sonnet-5-5)
+
+**Finding (review L1-1/L2-1, V-L2-1).** In Strict mode a hand-out of a spare closed the spare's 80 s recv link at the call (`set_queue_period` → `Close` + `TornDown(.., Closed)`), ≤ 1 s after the user action or received reply and next to the prompt `LINK_PUT`/`LINK_GET`(consume); this is not in spec §10.6 or §11.3. The successor started `U[0, 3 min]` later.
+
+**Change.** `set_queue_period` (§2.1, `scheduler/core/mod.rs`): a Strict recv queue whose period changes leaves its link untouched and draws one `U[0, 3 min]` instant; an up link with another period gets `die_at = min(die_at, end)`, a down link `at = min(at, end)`; send queues keep the old replacement. `step_due` (§2.2): a recv link ending by `Lifetime` whose queue now has another period connects its successor (`start_connect`) at that instant. Numstat K1: `core/mod.rs` 47/12, `m6_control.rs` 230/23. Balanced/Low-bandwidth unchanged.
+
+**Tests.** `m6_control::pool_handout_recreates_link_with_announced_period` (QP-05, re-dictated): PASS (0.145 s in the targeted run). New `m6_control::strict_take_emits_nothing_at_the_take`: PASS (1.611 s). Targeted run (§4 step 9): 42 passed, 0 failed (`target/fable/report/s1-targeted.txt`).
+
+**§4 summaries.** (1) fmt --check clean. (2) clippy `-D warnings` clean. (3) `step --strict policy` PASS. (4) `nextest -p xtask` 330/330. (5) 5/5. (6) `fuzz-check` PASS. (7) `Instant::now`/`SystemTime::now` code only in `clock.rs`; no seeded RNG/`#[ignore]` in `m6_control.rs`. (8) `nextest -p secmp-client-core --all-features` 357/357. (9) targeted 42/42.
+
+**Lint-form changes to the dictated tests** (same assertions and values): `pool_client_up`'s caller `strict_take_emits_nothing_at_the_take` — `a`/`b`/`y` renamed to `wc`/`oc`/`bx` (`many_single_char_names`); the Balanced leg moved into the helper `balanced_take_changes_no_link` (`too_many_lines`, 102/100). Product code: a `;` after `up.die_at = up.die_at.min(end)` (`semicolon_if_nothing_returned`, after rustfmt's block form).
+
+**Docs.** Q296 (`OPEN-M7-decided.md`), HB-53 (`HARDENING-BACKLOG.md`). Commits: K1 `05b656f`.
+
+No Kani harness reaches `Scheduler`; the PR's `kani` job is the evidence.
+
+Deviations: none (the lint-form changes above only).

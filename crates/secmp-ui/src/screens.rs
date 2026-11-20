@@ -17,7 +17,7 @@ slint::slint! {
         // the product name; the title never carries content (docs/04)
         title: "SecMPro";
         preferred-width: 600px;
-        preferred-height: 600px;
+        preferred-height: 760px;
         min-width: 420px;
         min-height: 440px;
 
@@ -64,6 +64,27 @@ slint::slint! {
         in property <string> contacts-title;
         in property <string> contacts-empty;
         in property <[ContactRowData]> contacts;
+        in property <string> contacts-invite-text;
+        callback open-invitations();
+
+        // leaving a screen for the contact list
+        in property <string> back-text;
+        callback back();
+
+        // invitations (4)
+        in property <string> invite-title;
+        in property <string> invite-create-text;
+        in property <string> invite-uri-label;
+        in property <string> invite-copy-text;
+        in property <string> invite-accept-label;
+        in property <string> invite-accept-text;
+        in property <string> invite-uri;
+        in property <bool> invite-copyable: false;
+        in property <image> invite-qr;
+        in property <string> invite-status;
+        in-out property <string> invite-input;
+        callback invite-create();
+        callback invite-accept(string);
 
         VerticalLayout {
             padding: 16px;
@@ -178,6 +199,10 @@ slint::slint! {
             if root.screen == 2 : VerticalLayout {
                 spacing: 8px;
                 Text { text: root.contacts-title; font-size: 18px; font-weight: 700; }
+                Button {
+                    text: root.contacts-invite-text;
+                    clicked => { root.open-invitations(); }
+                }
                 Text {
                     text: root.contacts-empty;
                     visible: root.contacts.length == 0;
@@ -205,6 +230,61 @@ slint::slint! {
                             }
                         }
                     }
+                }
+            }
+
+            if root.screen == 4 : VerticalLayout {
+                spacing: 8px;
+                Text { text: root.invite-title; font-size: 18px; font-weight: 700; }
+                Button {
+                    text: root.invite-create-text;
+                    enabled: !root.busy;
+                    clicked => { root.invite-create(); }
+                }
+                if root.invite-uri != "" : VerticalLayout {
+                    spacing: 6px;
+                    Text { text: root.invite-uri-label; wrap: word-wrap; }
+                    invite-field := LineEdit {
+                        text: root.invite-uri;
+                        read-only: true;
+                        accessible-label: root.invite-uri-label;
+                    }
+                    Button {
+                        text: root.invite-copy-text;
+                        enabled: root.invite-copyable;
+                        clicked => {
+                            invite-field.select-all();
+                            invite-field.copy();
+                        }
+                    }
+                    Image {
+                        source: root.invite-qr;
+                        width: 200px;
+                        height: 200px;
+                        image-rendering: pixelated;
+                    }
+                }
+                Text {
+                    text: root.invite-status;
+                    wrap: word-wrap;
+                    visible: root.invite-status != "";
+                    accessible-role: text;
+                }
+                Text { text: root.invite-accept-label; wrap: word-wrap; }
+                LineEdit {
+                    text <=> root.invite-input;
+                    accessible-label: root.invite-accept-label;
+                    enabled: !root.busy;
+                    accepted => { root.invite-accept(root.invite-input); }
+                }
+                Button {
+                    text: root.invite-accept-text;
+                    enabled: !root.busy;
+                    clicked => { root.invite-accept(root.invite-input); }
+                }
+                Button {
+                    text: root.back-text;
+                    clicked => { root.back(); }
                 }
             }
         }

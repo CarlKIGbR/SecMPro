@@ -1230,6 +1230,18 @@ reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
 
 **Status.** Accepted (reviewer, 2026-11-20; pins and build settings that execute ADR-013; owner delegations of 2026-10-29 and 2026-11-10; BSL-1.0 allowed by the reviewer in BRIEF_M8).
 
+### ADR-064 — QR code generation in the UI (engineering)
+
+**Context.** The M8 screens show a QR code for the invitation URI and for the safety number (BRIEF M8-P2 U4, U5). The toolkit has no QR encoder.
+
+**Decision.** `qrcode =0.14.1` with `default-features = false`: pure Rust, no dependencies (no `image`, no `svg`), licence `MIT OR Apache-2.0` (already allowed). 0.15.0 (2026-11-19) is younger than 7 days; 0.14.1 (2024-07-05) is the newest older one. `secmp-ui` renders the module matrix into a Slint image itself. `cargo vet`: one tracked exemption added (`safe-to-deploy`), none dropped; the crate is outside the `secmp-crypto`/`secmp-proto` closure. `secmp-ui`'s direct dependencies become {`secmp-client-core`, `secmp-sys-desktop`, `slint`, `i-slint-common`, `qrcode`} (`cargo xtask policy`).
+
+**Alternatives.** An encoder of our own — rejected: an untested encoder that silently produces unreadable codes.
+
+**Consequences.** One crate added to `Cargo.lock` and to the review list of the hardening phase.
+
+**Status.** Proposed (engineering; reviewer to accept).
+
 ---
 
 *Template for new entries:*

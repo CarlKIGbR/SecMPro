@@ -37,6 +37,10 @@ pub enum Request {
     Contacts,
     /// "What the relay can see" in `mode`.
     RelayView(ModeChoice),
+    /// Issue an invitation.
+    InviteCreate,
+    /// Accept the invitation `uri` (a capability: a secret).
+    InviteAccept(Zeroizing<String>),
 }
 
 impl core::fmt::Debug for Request {
@@ -47,6 +51,8 @@ impl core::fmt::Debug for Request {
             Self::Unlock { .. } => "Unlock",
             Self::Contacts => "Contacts",
             Self::RelayView(_) => "RelayView",
+            Self::InviteCreate => "InviteCreate",
+            Self::InviteAccept(_) => "InviteAccept",
         })
     }
 }
@@ -60,14 +66,19 @@ pub enum CoreEvent {
     ContactRemoved(i64),
     /// A contact's key changed.
     KeyChanged(i64),
+    /// An invitation the user accepted was refused, whatever the class (it is never shown).
+    InviteFailed,
+    /// An invitation was retired (expired, used up or replaced).
+    InvitationRetired,
+    /// An invitation was used by someone else.
+    InvitationUsedElsewhere,
     /// The core's loop stopped for good, or the bridge's thread ended: nothing more is shown.
     Stopped,
     /// The core could not finish something just now and tries again: a transient notice, the screen stays.
     Unavailable,
 }
 
-/// What comes back to the UI.
-#[derive(Debug)]
+/// What comes back to the UI (`Debug` prints the variant name only: names, URIs and messages are content).
 pub enum Response {
     /// The profile is open.
     Opened,
@@ -81,8 +92,28 @@ pub enum Response {
     Contacts(Vec<ContactRow>),
     /// The lines of what the relay can see.
     RelayView(Vec<String>),
+    /// The invitation just issued: its URI (a capability: a secret).
+    Invitation(Zeroizing<String>),
+    /// The accept of an invitation is under way: [`CoreEvent::ContactAdded`] or [`CoreEvent::InviteFailed`] follows.
+    Accepting,
     /// An event of the core.
     Event(CoreEvent),
+}
+
+impl core::fmt::Debug for Response {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Opened => "Opened",
+            Self::NotOpened => "NotOpened",
+            Self::OpenedModeNotSaved => "OpenedModeNotSaved",
+            Self::Failed(_) => "Failed",
+            Self::Contacts(_) => "Contacts",
+            Self::RelayView(_) => "RelayView",
+            Self::Invitation(_) => "Invitation",
+            Self::Accepting => "Accepting",
+            Self::Event(_) => "Event",
+        })
+    }
 }
 
 /// Where responses and events go; it may be called from any thread and must not block.

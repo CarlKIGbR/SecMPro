@@ -81,5 +81,6 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-75 | The relay-view lines of the onboarding screen are the core's English strings (`relay_view::relay_view`): not localised. The core should return keys, the UI the text. | M8 cross-review | Open |
 | HB-76 | The protection state is verified once per window; re-verify when the native window is recreated (M9). | M8 delta review | Open |
 | HB-77 | The unlock screen shows the profile name before the protection is verified. | M8 delta review | Open |
+| HB-78 | The invitation URI (and, with U5, message text and the safety number) leaves its zeroising buffer when it is shown: the Slint property and the text field hold plain copies, and the copy button puts it on the system clipboard, whose policy is M9 (docs/04 CS-1.14 clipboard). | M8 U4 | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

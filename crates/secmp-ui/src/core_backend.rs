@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
+use secmp_client_core::Zeroizing;
 use secmp_client_core::api::runtime::{
     Answer, Call, Host, Notice, RuntimeConfig, create_profile, spawn_host,
 };
@@ -20,6 +21,9 @@ use crate::vm::{ContactRow, Failure, ModeChoice, RowState, name_is_valid};
 
 /// How many hex digits of the fingerprint a row shows.
 const KEY_DIGITS: usize = 16;
+
+/// How long an invitation the UI issues stays open, as for `secmp-cli invite create` (spec §5.2 allows 30 days at most).
+const INVITE_LIFETIME_S: u64 = 86_400;
 
 /// The core's mode of the user's choice.
 const fn mode_of(choice: ModeChoice) -> Mode {
@@ -59,6 +63,10 @@ fn event_of(notice: &Notice) -> Option<CoreEvent> {
         Event::ContactAdded(ContactId(id)) => Some(CoreEvent::ContactAdded(id)),
         Event::ContactRemoved(ContactId(id)) => Some(CoreEvent::ContactRemoved(id)),
         Event::KeyChanged(ContactId(id)) => Some(CoreEvent::KeyChanged(id)),
+        // the class of a refusal is never shown (spec §5.5): one event for all
+        Event::InviteFailed(_) => Some(CoreEvent::InviteFailed),
+        Event::InvitationRetired { .. } => Some(CoreEvent::InvitationRetired),
+        Event::InvitationUsedElsewhere => Some(CoreEvent::InvitationUsedElsewhere),
         _ => None,
     }
 }
@@ -138,6 +146,33 @@ impl CoreBackend {
         }
     }
 
+    fn invite_create(&self) -> UiResponse {
+        let Some(host) = &self.host else {
+            return UiResponse::Failed(Failure::InviteCreate);
+        };
+        match ask(
+            host,
+            Call::InviteCreate {
+                expires_s: INVITE_LIFETIME_S,
+            },
+        ) {
+            Ok(Answer::Invitation { uri }) => UiResponse::Invitation(uri),
+            Ok(Answer::PoolEmpty) => UiResponse::Failed(Failure::InvitePoolEmpty),
+            _ => UiResponse::Failed(Failure::InviteCreate),
+        }
+    }
+
+    /// The accept is under way once the core took it; every refusal, here or later as an event, is one failure.
+    fn invite_accept(&self, uri: Zeroizing<String>) -> UiResponse {
+        let Some(host) = &self.host else {
+            return UiResponse::Failed(Failure::InviteAccept);
+        };
+        match ask(host, Call::InviteAccept { uri }) {
+            Ok(Answer::Accepting) => UiResponse::Accepting,
+            _ => UiResponse::Failed(Failure::InviteAccept),
+        }
+    }
+
     fn contacts(&self) -> UiResponse {
         let Some(host) = &self.host else {
             return UiResponse::Contacts(Vec::new());
@@ -164,6 +199,8 @@ impl Backend for CoreBackend {
                 }
             }
             UiRequest::Contacts => self.contacts(),
+            UiRequest::InviteCreate => self.invite_create(),
+            UiRequest::InviteAccept(uri) => self.invite_accept(uri),
             UiRequest::RelayView(mode) => UiResponse::RelayView(
                 relay_view(mode_of(mode), self.direct)
                     .into_iter()
@@ -178,7 +215,7 @@ impl Backend for CoreBackend {
 mod tests {
     use super::*;
 
-    use secmp_client_core::api::Stamped;
+    use secmp_client_core::api::{InviteReject, Stamped};
 
     fn contact(id: i64, state: ContactState, verified: bool) -> Contact {
         Contact {
@@ -226,7 +263,15 @@ mod tests {
             event_of(&at(Event::KeyChanged(ContactId(5)))),
             Some(CoreEvent::KeyChanged(5))
         );
-        assert_eq!(event_of(&at(Event::InvitationUsedElsewhere)), None);
+        assert_eq!(
+            event_of(&at(Event::InvitationUsedElsewhere)),
+            Some(CoreEvent::InvitationUsedElsewhere)
+        );
+        assert_eq!(
+            event_of(&at(Event::InviteFailed(InviteReject::Expired))),
+            Some(CoreEvent::InviteFailed)
+        );
+        assert_eq!(event_of(&at(Event::RoutesChanged(ContactId(1)))), None);
         assert_eq!(event_of(&Notice::Stopped), Some(CoreEvent::Stopped));
         assert_eq!(event_of(&Notice::Unavailable), Some(CoreEvent::Unavailable));
         assert_eq!(event_of(&Notice::Refused), None);

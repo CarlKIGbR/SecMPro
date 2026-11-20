@@ -77,6 +77,8 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 i-slint-backend-testing = { version = "=1.18.1", default-features = false }
 # Only to switch on its feature `fontconfig-dlopen` (fontconfig is loaded at run time, no development files at build time).
 i-slint-common = { version = "=1.18.1", default-features = false, features = ["fontconfig-dlopen"] }
+# ADR-064 (M8 U4): QR codes for the invitation and the safety number; pure Rust, no `image` (0.15.0 of 2026-11-19 is younger than 7 days).
+qrcode = { version = "=0.14.1", default-features = false }
 
 # ADR-040: seeded generators for the property tests of secmp-proto (dev-dependency only; never key material).
 rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }

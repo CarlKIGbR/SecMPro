@@ -105,128 +105,235 @@ pub mod key {
     pub const ENGINE_UNAVAILABLE: &str = "engine.unavailable";
     /// The profile was created but the traffic mode was not stored.
     pub const ONBOARDING_MODE_NOT_SAVED: &str = "onboarding.mode_not_saved";
+    /// The button that opens the invitation screen.
+    pub const CONTACTS_INVITE: &str = "contacts.invite";
+    /// The button that leaves a screen.
+    pub const NAV_BACK: &str = "nav.back";
+    /// The title of the invitation screen.
+    pub const INVITE_TITLE: &str = "invite.title";
+    /// The button that issues an invitation.
+    pub const INVITE_CREATE: &str = "invite.create";
+    /// The label of the invitation text.
+    pub const INVITE_URI_LABEL: &str = "invite.uri_label";
+    /// The button that copies the invitation.
+    pub const INVITE_COPY: &str = "invite.copy";
+    /// The label of the field for an invitation to accept.
+    pub const INVITE_ACCEPT_LABEL: &str = "invite.accept_label";
+    /// The button that accepts an invitation.
+    pub const INVITE_ACCEPT: &str = "invite.accept";
+    /// The invitation was taken; the contact follows.
+    pub const INVITE_ACCEPTING: &str = "invite.accepting";
+    /// An invitation made a contact.
+    pub const INVITE_CONTACT_ADDED: &str = "invite.contact_added";
+    /// An invitation was retired.
+    pub const INVITE_RETIRED: &str = "invite.retired";
+    /// An invitation was consumed by someone else.
+    pub const INVITE_USED_ELSEWHERE: &str = "invite.used_elsewhere";
+    /// The pool has no spare queue.
+    pub const ERROR_INVITE_POOL_EMPTY: &str = "error.invite_pool_empty";
+    /// Issuing an invitation failed.
+    pub const ERROR_INVITE_CREATE: &str = "error.invite_create";
+    /// Every refused invitation.
+    pub const ERROR_INVITE_ACCEPT: &str = "error.invite_accept";
 }
-
-use key::{
-    APP_TAGLINE, CONTACTS_EMPTY, CONTACTS_REINVITE, CONTACTS_REMOVED, CONTACTS_TITLE,
-    CONTACTS_UNNAMED, CONTACTS_UNVERIFIED, CONTACTS_VERIFIED, CONTENT_LOCKED, ENGINE_UNAVAILABLE,
-    ERROR_BUSY, ERROR_CREATE, ERROR_EMPTY_PASS, ERROR_MISMATCH, ERROR_NAME, ERROR_STOPPED,
-    ERROR_UNLOCK, INDICATOR_LOCKED, INDICATOR_OVERRIDDEN, INDICATOR_PROTECTED, MODE_BALANCED,
-    MODE_LOWBW, MODE_STRICT, ONBOARDING_CREATE, ONBOARDING_MODE, ONBOARDING_MODE_NOT_SAVED,
-    ONBOARDING_NAME, ONBOARDING_PASS, ONBOARDING_PASS_AGAIN, ONBOARDING_RELAY_VIEW,
-    ONBOARDING_TITLE, OVERRIDE_SHOW, UNLOCK_BUTTON, UNLOCK_PASS, UNLOCK_TITLE, WORKING,
-};
 
 /// The English table.
 pub static EN: &[(&str, &str)] = &[
-    (APP_TAGLINE, "Private messaging without metadata"),
-    (ONBOARDING_TITLE, "Create your profile"),
-    (ONBOARDING_NAME, "Profile name"),
-    (ONBOARDING_PASS, "Passphrase"),
-    (ONBOARDING_PASS_AGAIN, "Repeat the passphrase"),
-    (ONBOARDING_MODE, "Traffic mode"),
-    (ONBOARDING_RELAY_VIEW, "What the relay can see"),
-    (ONBOARDING_CREATE, "Create profile"),
-    (MODE_STRICT, "Strict"),
-    (MODE_BALANCED, "Balanced"),
-    (MODE_LOWBW, "Low bandwidth"),
-    (UNLOCK_TITLE, "Unlock your profile"),
-    (UNLOCK_PASS, "Passphrase"),
-    (UNLOCK_BUTTON, "Unlock"),
-    (CONTACTS_TITLE, "Contacts"),
-    (CONTACTS_EMPTY, "No contacts yet."),
-    (CONTACTS_VERIFIED, "Verified"),
-    (CONTACTS_UNVERIFIED, "Not verified"),
-    (CONTACTS_REINVITE, "Invite again"),
-    (CONTACTS_REMOVED, "Removed you"),
-    (CONTACTS_UNNAMED, "(no name)"),
-    (ERROR_MISMATCH, "The two passphrases are not the same."),
-    (ERROR_EMPTY_PASS, "Enter a passphrase."),
+    (key::APP_TAGLINE, "Private messaging without metadata"),
+    (key::ONBOARDING_TITLE, "Create your profile"),
+    (key::ONBOARDING_NAME, "Profile name"),
+    (key::ONBOARDING_PASS, "Passphrase"),
+    (key::ONBOARDING_PASS_AGAIN, "Repeat the passphrase"),
+    (key::ONBOARDING_MODE, "Traffic mode"),
+    (key::ONBOARDING_RELAY_VIEW, "What the relay can see"),
+    (key::ONBOARDING_CREATE, "Create profile"),
+    (key::MODE_STRICT, "Strict"),
+    (key::MODE_BALANCED, "Balanced"),
+    (key::MODE_LOWBW, "Low bandwidth"),
+    (key::UNLOCK_TITLE, "Unlock your profile"),
+    (key::UNLOCK_PASS, "Passphrase"),
+    (key::UNLOCK_BUTTON, "Unlock"),
+    (key::CONTACTS_TITLE, "Contacts"),
+    (key::CONTACTS_EMPTY, "No contacts yet."),
+    (key::CONTACTS_VERIFIED, "Verified"),
+    (key::CONTACTS_UNVERIFIED, "Not verified"),
+    (key::CONTACTS_REINVITE, "Invite again"),
+    (key::CONTACTS_REMOVED, "Removed you"),
+    (key::CONTACTS_UNNAMED, "(no name)"),
+    (key::ERROR_MISMATCH, "The two passphrases are not the same."),
+    (key::ERROR_EMPTY_PASS, "Enter a passphrase."),
     (
-        ERROR_NAME,
+        key::ERROR_NAME,
         "Use 1 to 32 letters, digits, hyphens or underscores for the profile name.",
     ),
-    (ERROR_CREATE, "The profile could not be created."),
-    (ERROR_UNLOCK, "The profile could not be unlocked."),
-    (ERROR_BUSY, "Still working on the last request."),
-    (WORKING, "Working…"),
-    (CONTENT_LOCKED, "Content hidden"),
-    (INDICATOR_LOCKED, "Unprotected display — content locked"),
-    (INDICATOR_PROTECTED, "Protected display"),
+    (key::ERROR_CREATE, "The profile could not be created."),
+    (key::ERROR_UNLOCK, "The profile could not be unlocked."),
+    (key::ERROR_BUSY, "Still working on the last request."),
+    (key::WORKING, "Working…"),
+    (key::CONTENT_LOCKED, "Content hidden"),
     (
-        INDICATOR_OVERRIDDEN,
+        key::INDICATOR_LOCKED,
+        "Unprotected display — content locked",
+    ),
+    (key::INDICATOR_PROTECTED, "Protected display"),
+    (
+        key::INDICATOR_OVERRIDDEN,
         "Unprotected display — shown by your choice for this session",
     ),
-    (OVERRIDE_SHOW, "Show content anyway (this session only)"),
     (
-        ERROR_STOPPED,
+        key::OVERRIDE_SHOW,
+        "Show content anyway (this session only)",
+    ),
+    (
+        key::ERROR_STOPPED,
         "The engine has stopped. Close and start the application again.",
     ),
     (
-        ENGINE_UNAVAILABLE,
+        key::ENGINE_UNAVAILABLE,
         "The engine could not finish something just now and will try again.",
     ),
     (
-        ONBOARDING_MODE_NOT_SAVED,
+        key::ONBOARDING_MODE_NOT_SAVED,
         "The profile was created, but the traffic mode was not saved. The default (Strict) is in use.",
+    ),
+    (key::CONTACTS_INVITE, "Invitations"),
+    (key::NAV_BACK, "Back"),
+    (key::INVITE_TITLE, "Invitations"),
+    (key::INVITE_CREATE, "Create an invitation"),
+    (
+        key::INVITE_URI_LABEL,
+        "Your invitation — whoever has it can use it once",
+    ),
+    (key::INVITE_COPY, "Copy"),
+    (key::INVITE_ACCEPT_LABEL, "Paste an invitation you received"),
+    (key::INVITE_ACCEPT, "Accept invitation"),
+    (key::INVITE_ACCEPTING, "Accepting the invitation …"),
+    (
+        key::INVITE_CONTACT_ADDED,
+        "A contact was added. Verify its safety number.",
+    ),
+    (key::INVITE_RETIRED, "The invitation is no longer valid."),
+    (
+        key::INVITE_USED_ELSEWHERE,
+        "The invitation was used by someone else.",
+    ),
+    (
+        key::ERROR_INVITE_POOL_EMPTY,
+        "No invitation can be made yet. Try again in a few minutes.",
+    ),
+    (
+        key::ERROR_INVITE_CREATE,
+        "The invitation could not be created.",
+    ),
+    (
+        key::ERROR_INVITE_ACCEPT,
+        "This invitation cannot be accepted.",
     ),
 ];
 
 /// The German table.
 pub static DE: &[(&str, &str)] = &[
-    (APP_TAGLINE, "Private Nachrichten ohne Metadaten"),
-    (ONBOARDING_TITLE, "Profil anlegen"),
-    (ONBOARDING_NAME, "Profilname"),
-    (ONBOARDING_PASS, "Passphrase"),
-    (ONBOARDING_PASS_AGAIN, "Passphrase wiederholen"),
-    (ONBOARDING_MODE, "Verkehrsmodus"),
-    (ONBOARDING_RELAY_VIEW, "Was das Relay sehen kann"),
-    (ONBOARDING_CREATE, "Profil anlegen"),
-    (MODE_STRICT, "Strikt"),
-    (MODE_BALANCED, "Ausgewogen"),
-    (MODE_LOWBW, "Geringe Bandbreite"),
-    (UNLOCK_TITLE, "Profil entsperren"),
-    (UNLOCK_PASS, "Passphrase"),
-    (UNLOCK_BUTTON, "Entsperren"),
-    (CONTACTS_TITLE, "Kontakte"),
-    (CONTACTS_EMPTY, "Noch keine Kontakte."),
-    (CONTACTS_VERIFIED, "Verifiziert"),
-    (CONTACTS_UNVERIFIED, "Nicht verifiziert"),
-    (CONTACTS_REINVITE, "Erneut einladen"),
-    (CONTACTS_REMOVED, "Hat Sie entfernt"),
-    (CONTACTS_UNNAMED, "(ohne Namen)"),
-    (ERROR_MISMATCH, "Die beiden Passphrasen sind nicht gleich."),
-    (ERROR_EMPTY_PASS, "Geben Sie eine Passphrase ein."),
+    (key::APP_TAGLINE, "Private Nachrichten ohne Metadaten"),
+    (key::ONBOARDING_TITLE, "Profil anlegen"),
+    (key::ONBOARDING_NAME, "Profilname"),
+    (key::ONBOARDING_PASS, "Passphrase"),
+    (key::ONBOARDING_PASS_AGAIN, "Passphrase wiederholen"),
+    (key::ONBOARDING_MODE, "Verkehrsmodus"),
+    (key::ONBOARDING_RELAY_VIEW, "Was das Relay sehen kann"),
+    (key::ONBOARDING_CREATE, "Profil anlegen"),
+    (key::MODE_STRICT, "Strikt"),
+    (key::MODE_BALANCED, "Ausgewogen"),
+    (key::MODE_LOWBW, "Geringe Bandbreite"),
+    (key::UNLOCK_TITLE, "Profil entsperren"),
+    (key::UNLOCK_PASS, "Passphrase"),
+    (key::UNLOCK_BUTTON, "Entsperren"),
+    (key::CONTACTS_TITLE, "Kontakte"),
+    (key::CONTACTS_EMPTY, "Noch keine Kontakte."),
+    (key::CONTACTS_VERIFIED, "Verifiziert"),
+    (key::CONTACTS_UNVERIFIED, "Nicht verifiziert"),
+    (key::CONTACTS_REINVITE, "Erneut einladen"),
+    (key::CONTACTS_REMOVED, "Hat Sie entfernt"),
+    (key::CONTACTS_UNNAMED, "(ohne Namen)"),
     (
-        ERROR_NAME,
+        key::ERROR_MISMATCH,
+        "Die beiden Passphrasen sind nicht gleich.",
+    ),
+    (key::ERROR_EMPTY_PASS, "Geben Sie eine Passphrase ein."),
+    (
+        key::ERROR_NAME,
         "Der Profilname besteht aus 1 bis 32 Buchstaben, Ziffern, Bindestrichen oder Unterstrichen.",
     ),
-    (ERROR_CREATE, "Das Profil konnte nicht angelegt werden."),
-    (ERROR_UNLOCK, "Das Profil konnte nicht entsperrt werden."),
-    (ERROR_BUSY, "Die letzte Anfrage läuft noch."),
-    (WORKING, "Bitte warten …"),
-    (CONTENT_LOCKED, "Inhalt verborgen"),
-    (INDICATOR_LOCKED, "Ungeschützte Anzeige — Inhalt gesperrt"),
-    (INDICATOR_PROTECTED, "Geschützte Anzeige"),
     (
-        INDICATOR_OVERRIDDEN,
+        key::ERROR_CREATE,
+        "Das Profil konnte nicht angelegt werden.",
+    ),
+    (
+        key::ERROR_UNLOCK,
+        "Das Profil konnte nicht entsperrt werden.",
+    ),
+    (key::ERROR_BUSY, "Die letzte Anfrage läuft noch."),
+    (key::WORKING, "Bitte warten …"),
+    (key::CONTENT_LOCKED, "Inhalt verborgen"),
+    (
+        key::INDICATOR_LOCKED,
+        "Ungeschützte Anzeige — Inhalt gesperrt",
+    ),
+    (key::INDICATOR_PROTECTED, "Geschützte Anzeige"),
+    (
+        key::INDICATOR_OVERRIDDEN,
         "Ungeschützte Anzeige — auf Ihren Wunsch für diese Sitzung angezeigt",
     ),
     (
-        OVERRIDE_SHOW,
+        key::OVERRIDE_SHOW,
         "Inhalt trotzdem anzeigen (nur diese Sitzung)",
     ),
     (
-        ERROR_STOPPED,
+        key::ERROR_STOPPED,
         "Die Verarbeitung wurde beendet. Schließen Sie die Anwendung und starten Sie sie neu.",
     ),
     (
-        ENGINE_UNAVAILABLE,
+        key::ENGINE_UNAVAILABLE,
         "Die Verarbeitung konnte etwas gerade nicht abschließen und versucht es erneut.",
     ),
     (
-        ONBOARDING_MODE_NOT_SAVED,
+        key::ONBOARDING_MODE_NOT_SAVED,
         "Das Profil wurde angelegt, aber der Verkehrsmodus wurde nicht gespeichert. Es gilt der Standard (Strikt).",
+    ),
+    (key::CONTACTS_INVITE, "Einladungen"),
+    (key::NAV_BACK, "Zurück"),
+    (key::INVITE_TITLE, "Einladungen"),
+    (key::INVITE_CREATE, "Einladung erstellen"),
+    (
+        key::INVITE_URI_LABEL,
+        "Ihre Einladung — wer sie hat, kann sie einmal verwenden",
+    ),
+    (key::INVITE_COPY, "Kopieren"),
+    (
+        key::INVITE_ACCEPT_LABEL,
+        "Eine erhaltene Einladung einfügen",
+    ),
+    (key::INVITE_ACCEPT, "Einladung annehmen"),
+    (key::INVITE_ACCEPTING, "Die Einladung wird angenommen …"),
+    (
+        key::INVITE_CONTACT_ADDED,
+        "Ein Kontakt wurde hinzugefügt. Prüfen Sie seine Sicherheitsnummer.",
+    ),
+    (key::INVITE_RETIRED, "Die Einladung ist nicht mehr gültig."),
+    (
+        key::INVITE_USED_ELSEWHERE,
+        "Die Einladung wurde von jemand anderem verwendet.",
+    ),
+    (
+        key::ERROR_INVITE_POOL_EMPTY,
+        "Noch keine Einladung möglich. Versuchen Sie es in einigen Minuten erneut.",
+    ),
+    (
+        key::ERROR_INVITE_CREATE,
+        "Die Einladung konnte nicht erstellt werden.",
+    ),
+    (
+        key::ERROR_INVITE_ACCEPT,
+        "Diese Einladung kann nicht angenommen werden.",
     ),
 ];
 

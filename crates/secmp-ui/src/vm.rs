@@ -7,6 +7,7 @@ use secmp_client_core::Zeroizing;
 
 use crate::bridge::{Bridge, CoreEvent, Refused, Request, Response};
 use crate::locale::{self, Lang, key};
+use crate::qr::Matrix;
 
 /// The screens of part 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +18,8 @@ pub enum Screen {
     Unlock,
     /// The contact list of the open profile.
     Contacts,
+    /// Issue and accept invitations.
+    Invitations,
     /// The engine has stopped: nothing is shown but the message.
     Stopped,
 }
@@ -87,6 +90,12 @@ pub enum Failure {
     Stopped,
     /// The profile was created, but the chosen mode was not stored.
     ModeNotSaved,
+    /// No invitation can be issued yet (the pool has no spare queue).
+    InvitePoolEmpty,
+    /// An invitation could not be issued.
+    InviteCreate,
+    /// An invitation was refused, whatever the reason (malformed, truncated, used, expired: one message).
+    InviteAccept,
 }
 
 impl Failure {
@@ -102,6 +111,9 @@ impl Failure {
             Self::Busy => key::ERROR_BUSY,
             Self::Stopped => key::ERROR_STOPPED,
             Self::ModeNotSaved => key::ONBOARDING_MODE_NOT_SAVED,
+            Self::InvitePoolEmpty => key::ERROR_INVITE_POOL_EMPTY,
+            Self::InviteCreate => key::ERROR_INVITE_CREATE,
+            Self::InviteAccept => key::ERROR_INVITE_ACCEPT,
         }
     }
 }
@@ -176,7 +188,17 @@ pub struct Vm {
     failure: Option<Failure>,
     busy: bool,
     unavailable: bool,
+    invite: InviteState,
     protection: Protection,
+}
+
+/// What the invitation screen holds. The URI is a capability: it lives in a zeroising buffer, is shown as content only and is
+/// dropped when the screen is left.
+#[derive(Default)]
+struct InviteState {
+    uri: Option<Zeroizing<String>>,
+    accepting: bool,
+    notice: Option<&'static str>,
 }
 
 impl Vm {
@@ -192,6 +214,7 @@ impl Vm {
             failure: None,
             busy: false,
             unavailable: false,
+            invite: InviteState::default(),
             protection: Protection::Locked,
         }
     }
@@ -344,6 +367,94 @@ impl Vm {
         };
     }
 
+    /// The user opens the invitation screen from the contact list.
+    pub fn open_invitations(&mut self) {
+        if self.screen == Screen::Contacts {
+            self.failure = None;
+            self.screen = Screen::Invitations;
+        }
+    }
+
+    /// The user leaves the screen they are on for the contact list; what the screen held is dropped (the invitation URI is
+    /// zeroised).
+    pub fn leave(&mut self) {
+        if matches!(self.screen, Screen::Invitations) {
+            self.invite = InviteState::default();
+            self.failure = None;
+            self.screen = Screen::Contacts;
+        }
+    }
+
+    /// The user asks for an invitation.
+    pub fn create_invitation(&mut self, bridge: &Bridge) {
+        if self.busy || self.screen != Screen::Invitations {
+            return;
+        }
+        self.invite.uri = None;
+        self.invite.notice = None;
+        self.submit(bridge, Request::InviteCreate);
+        self.busy = self.failure.is_none();
+    }
+
+    /// The user asks to accept the invitation `uri` they pasted; an empty field is refused like any other bad invitation.
+    pub fn accept_invitation(&mut self, bridge: &Bridge, uri: &str) {
+        if self.busy || self.screen != Screen::Invitations {
+            return;
+        }
+        self.invite.notice = None;
+        let uri = Zeroizing::new(uri.trim().to_owned());
+        if uri.is_empty() {
+            self.failure = Some(Failure::InviteAccept);
+            return;
+        }
+        self.submit(bridge, Request::InviteAccept(uri));
+        self.busy = self.failure.is_none();
+    }
+
+    /// Whether an invitation URI is held (it is dropped when the screen is left).
+    #[must_use]
+    pub const fn invitation_held(&self) -> bool {
+        self.invite.uri.is_some()
+    }
+
+    /// The invitation as text: empty if there is none, the placeholder while content is locked.
+    #[must_use]
+    pub fn invite_text(&self) -> String {
+        match &self.invite.uri {
+            None => String::new(),
+            Some(_) if !self.content_visible() => {
+                locale::text(self.lang, key::CONTENT_LOCKED).to_owned()
+            }
+            Some(uri) => uri.as_str().to_owned(),
+        }
+    }
+
+    /// Whether the invitation may be copied (there is one and content is visible).
+    #[must_use]
+    pub const fn invite_copyable(&self) -> bool {
+        self.invite.uri.is_some() && self.content_visible()
+    }
+
+    /// The QR code of the invitation, only while content is visible.
+    #[must_use]
+    pub fn invite_qr(&self) -> Option<Matrix> {
+        match &self.invite.uri {
+            Some(uri) if self.content_visible() => Matrix::of(uri),
+            _ => None,
+        }
+    }
+
+    /// The status line of the invitation screen, or empty.
+    #[must_use]
+    pub fn invite_status(&self) -> &'static str {
+        let key = if self.invite.accepting {
+            Some(key::INVITE_ACCEPTING)
+        } else {
+            self.invite.notice
+        };
+        key.map_or("", |k| locale::text(self.lang, k))
+    }
+
     /// The user asks for the relay's view of `mode` (the onboarding screen shows it before a profile exists).
     pub fn show_relay_view(&mut self, bridge: &Bridge, mode: ModeChoice) {
         // not an error of the form: a full queue leaves the lines as they were
@@ -424,23 +535,56 @@ impl Vm {
             }
             Response::Failed(failure) => {
                 self.busy = false;
+                if failure == Failure::InviteAccept {
+                    self.invite.accepting = false;
+                }
                 self.failure = Some(failure);
             }
             Response::Contacts(rows) => self.contacts = rows,
             Response::RelayView(lines) => self.relay_lines = lines,
+            Response::Invitation(uri) => {
+                self.busy = false;
+                self.failure = None;
+                self.invite.uri = Some(uri);
+                self.invite.notice = None;
+            }
+            Response::Accepting => {
+                self.busy = false;
+                self.failure = None;
+                self.invite.accepting = true;
+                self.invite.notice = None;
+            }
             Response::Event(CoreEvent::Unavailable) => self.unavailable = true,
             Response::Event(CoreEvent::Stopped) => {
                 self.busy = false;
                 self.screen = Screen::Stopped;
                 self.contacts.clear();
+                self.invite = InviteState::default();
                 self.failure = Some(Failure::Stopped);
             }
+            Response::Event(CoreEvent::InviteFailed) => {
+                // one message for every class of refusal
+                self.invite.accepting = false;
+                self.failure = Some(Failure::InviteAccept);
+            }
+            Response::Event(CoreEvent::InvitationRetired) => {
+                self.invite.uri = None;
+                self.invite.notice = Some(key::INVITE_RETIRED);
+            }
+            Response::Event(CoreEvent::InvitationUsedElsewhere) => {
+                self.invite.uri = None;
+                self.invite.notice = Some(key::INVITE_USED_ELSEWHERE);
+            }
             Response::Event(
-                CoreEvent::ContactAdded(_)
+                event @ (CoreEvent::ContactAdded(_)
                 | CoreEvent::ContactRemoved(_)
-                | CoreEvent::KeyChanged(_),
+                | CoreEvent::KeyChanged(_)),
             ) => {
-                if self.screen == Screen::Contacts {
+                if matches!(event, CoreEvent::ContactAdded(_)) {
+                    self.invite.accepting = false;
+                    self.invite.notice = Some(key::INVITE_CONTACT_ADDED);
+                }
+                if matches!(self.screen, Screen::Contacts | Screen::Invitations) {
                     // the list is read again; a full queue means a read is already waiting
                     let _ = bridge.submit(Request::Contacts);
                 }

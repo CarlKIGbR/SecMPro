@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 type Test = Result<(), Box<dyn std::error::Error>>;
 
+use secmp_client_core::Zeroizing;
 use secmp_client_core::api::runtime::create_profile;
 
 use slint::Model as _;
@@ -58,6 +59,9 @@ fn row(id: i64, name: &str, verified: bool) -> ContactRow {
     }
 }
 
+/// The invitation the stub issues.
+const INVITE_URI: &str = "secmp://i/QWJjZGVmZ2hpamtsbW5vcA";
+
 /// A backend with scripted answers: the contacts it lists are shared with the test; with a gate it holds every
 /// `Contacts` answer until the test sends on the gate.
 struct Stub {
@@ -68,6 +72,13 @@ struct Stub {
 impl Backend for Stub {
     fn handle(&mut self, request: Request, _events: &Sink) -> Response {
         match request {
+            Request::InviteCreate => Response::Invitation(Zeroizing::new(INVITE_URI.to_owned())),
+            // as the core: a URI that does not parse is refused at once, a used one only when the handshake's first step ran
+            // (an event after the answer, which the test raises)
+            Request::InviteAccept(uri) => match uri.as_str() {
+                "used-invitation" | "good-invitation" => Response::Accepting,
+                _ => Response::Failed(Failure::InviteAccept),
+            },
             Request::Contacts => {
                 if let Some(gate) = &self.gate {
                     let _ = gate.recv();
@@ -413,4 +424,80 @@ fn capture_failures_end_locked() {
         Vm::new(Lang::En, Screen::Contacts, "").protection(),
         Protection::Locked
     );
+}
+
+/// A model on the invitation screen of a stub core, protection as given.
+fn invitations(protection: Protection) -> (Vm, Bridge, Receiver<Response>) {
+    let (sink, rx) = queue();
+    let (backend, _) = stub(vec![row(1, "Zed", true)], None);
+    let bridge = Bridge::spawn(backend, sink);
+    let mut vm = Vm::new(Lang::En, Screen::Unlock, "alice");
+    vm.set_protection(protection);
+    vm.apply(Response::Opened, &bridge);
+    pump(&mut vm, &bridge, &rx, |vm| !vm.contacts().is_empty());
+    vm.open_invitations();
+    (vm, bridge, rx)
+}
+
+/// P2: a URI that does not parse, a truncated one and one that was used already (refused only later, as an event) show the
+/// same text, byte for byte.
+#[test]
+fn invite_accept_rejected_uris_show_one_message() {
+    let mut shown = Vec::new();
+    for uri in ["not-an-invitation", "secmp://i/abc", "used-invitation", ""] {
+        let (mut vm, bridge, rx) = invitations(Protection::Verified);
+        vm.accept_invitation(&bridge, uri);
+        if !uri.is_empty() {
+            assert!(vm.busy());
+            pump(&mut vm, &bridge, &rx, |vm| !vm.busy());
+            if uri == "used-invitation" {
+                // accepted by the core, refused when the handshake's first step ran
+                assert_eq!(
+                    vm.invite_status(),
+                    locale::text(Lang::En, key::INVITE_ACCEPTING)
+                );
+                vm.apply(Response::Event(CoreEvent::InviteFailed), &bridge);
+            }
+        }
+        assert_eq!(vm.invite_status(), "");
+        shown.push(vm.error_text());
+        bridge.shutdown();
+    }
+    let want = locale::text(Lang::En, Failure::InviteAccept.message_key());
+    for text in &shown {
+        assert_eq!(text.as_bytes(), want.as_bytes());
+    }
+    assert_eq!(shown.len(), 4);
+}
+
+/// P3: the invitation is content: while locked the text is the placeholder, the code is not drawn and nothing is copyable;
+/// leaving the screen drops it.
+#[test]
+fn invitation_uri_is_hidden_while_locked_and_cleared_on_leave() -> Test {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new()?;
+    let (mut vm, bridge, rx) = invitations(Protection::Locked);
+    vm.create_invitation(&bridge);
+    pump(&mut vm, &bridge, &rx, Vm::invitation_held);
+    render(&ui, &vm);
+    let locked = locale::text(Lang::En, key::CONTENT_LOCKED);
+    assert_eq!(ui.get_invite_uri().as_str(), locked);
+    assert!(!ui.get_invite_copyable());
+    assert_eq!(ui.get_invite_qr().size().width, 0);
+    assert!(!format!("{:?}", ui.get_invite_uri()).contains("secmp://"));
+
+    vm.set_protection(Protection::Verified);
+    render(&ui, &vm);
+    assert_eq!(ui.get_invite_uri().as_str(), INVITE_URI);
+    assert!(ui.get_invite_copyable());
+    assert!(ui.get_invite_qr().size().width > 0);
+
+    vm.leave();
+    assert!(!vm.invitation_held());
+    assert_eq!(vm.screen(), Screen::Contacts);
+    render(&ui, &vm);
+    assert_eq!(ui.get_invite_uri().as_str(), "");
+    assert_eq!(ui.get_invite_qr().size().width, 0);
+    bridge.shutdown();
+    Ok(())
 }

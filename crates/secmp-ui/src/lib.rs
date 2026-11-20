@@ -9,7 +9,7 @@
 //! **Structure.** [`bridge`] owns the thread that talks to the core and never blocks the UI thread; [`vm`] holds the view models
 //! (plain data and the state machine of the screens); [`screens`] is the Slint window; [`locale`] holds every user-visible
 //! string; [`core_backend`] is the bridge's backend over the client core; [`app`] binds all of it; [`capture`] and [`probe`] are
-//! the capture-exclusion hook and the spike's probe.
+//! the capture-exclusion hook and the spike's probe; [`qr`] makes the QR codes (ADR-064).
 //!
 //! **Allowed dependencies** (docs/02 §3): `secmp-client-core`, `secmp-sys-desktop`; `slint` (the single copyleft
 //! licence exception, docs/06 §3), ADR-063.
@@ -27,6 +27,7 @@ pub mod capture;
 pub mod core_backend;
 pub mod locale;
 pub mod probe;
+pub mod qr;
 mod screens;
 #[cfg(test)]
 mod tests;

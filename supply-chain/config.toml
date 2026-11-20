@@ -1789,6 +1789,11 @@ version = "0.1.30"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
+[[exemptions.qrcode]]
+version = "0.14.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): direct dependency of secmp-ui (QR matrix, ADR-064), pure Rust, no dependencies with default features off; outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at the hardening phase."
+
 [[exemptions.quick-error]]
 version = "2.0.1"
 criteria = "safe-to-deploy"

@@ -16,6 +16,8 @@ secmp-sys-desktop.workspace = true
 slint.workspace = true
 # ADR-063: only to switch on its feature `fontconfig-dlopen` (fontconfig is loaded at run time); no code uses the crate.
 i-slint-common.workspace = true
+# ADR-064: the module matrix of the invitation's and the safety number's QR code.
+qrcode.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true

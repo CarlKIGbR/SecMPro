@@ -114,6 +114,7 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
         "secmp-ui",
         &[
             "i-slint-common",
+            "qrcode",
             "secmp-client-core",
             "secmp-sys-desktop",
             "slint",

@@ -55,6 +55,7 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
         Screen::Unlock => 1,
         Screen::Contacts => 2,
         Screen::Stopped => 3,
+        Screen::Invitations => 4,
     });
     ui.set_indicator_text(t(vm.indicator_key()));
     ui.set_indicator_locked(!matches!(vm.protection(), Protection::Verified));
@@ -88,6 +89,20 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
 
     ui.set_contacts_title(t(key::CONTACTS_TITLE));
     ui.set_contacts_empty(t(key::CONTACTS_EMPTY));
+    ui.set_contacts_invite_text(t(key::CONTACTS_INVITE));
+    ui.set_back_text(t(key::NAV_BACK));
+
+    ui.set_invite_title(t(key::INVITE_TITLE));
+    ui.set_invite_create_text(t(key::INVITE_CREATE));
+    ui.set_invite_uri_label(t(key::INVITE_URI_LABEL));
+    ui.set_invite_copy_text(t(key::INVITE_COPY));
+    ui.set_invite_accept_label(t(key::INVITE_ACCEPT_LABEL));
+    ui.set_invite_accept_text(t(key::INVITE_ACCEPT));
+    ui.set_invite_uri(SharedString::from(vm.invite_text()));
+    ui.set_invite_copyable(vm.invite_copyable());
+    ui.set_invite_qr(vm.invite_qr().map(|m| m.image()).unwrap_or_default());
+    ui.set_invite_status(SharedString::from(vm.invite_status()));
+
     ui.set_contacts(ModelRc::new(VecModel::from(
         vm.rows()
             .into_iter()
@@ -123,6 +138,34 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
         with_shell(|sh| {
             sh.vm.unlock(&sh.bridge, &pass);
             sh.ui.set_unlock_pass(SharedString::new());
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_open_invitations(|| {
+        with_shell(|sh| {
+            sh.vm.open_invitations();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_back(|| {
+        with_shell(|sh| {
+            sh.vm.leave();
+            // the field is emptied with the model's copy
+            sh.ui.set_invite_input(SharedString::new());
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_invite_create(|| {
+        with_shell(|sh| {
+            sh.vm.create_invitation(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_invite_accept(|uri| {
+        with_shell(|sh| {
+            sh.vm.accept_invitation(&sh.bridge, &uri);
+            // the field is emptied whatever came of the request; the model passed the URI on in a zeroising buffer
+            sh.ui.set_invite_input(SharedString::new());
             render(&sh.ui, &sh.vm);
         });
     });

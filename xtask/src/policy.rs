@@ -1723,6 +1723,7 @@ mod tests {
             "tokio",
             "slint",
             "i-slint-common",
+            "qrcode",
             "windows-sys",
         ];
         let id = |n: &str| {
@@ -2519,6 +2520,7 @@ mod tests {
             row,
             Some(vec![
                 "i-slint-common",
+                "qrcode",
                 "secmp-client-core",
                 "secmp-sys-desktop",
                 "slint"
@@ -2529,6 +2531,7 @@ mod tests {
             ("secmp-ui", "secmp-sys-desktop", "null"),
             ("secmp-ui", "slint", "null"),
             ("secmp-ui", "i-slint-common", "null"),
+            ("secmp-ui", "qrcode", "null"),
         ]);
         assert_eq!(
             normal_dependency_findings(&Workspace::parse(&ok)?),
@@ -2571,8 +2574,8 @@ mod tests {
             ("secmp-client-core", &["tokio"]),
             ("secmp-cli", &["tokio"]),
             ("secmp-testkit", &["serde_json", "tokio"]),
-            // ADR-063
-            ("secmp-ui", &["i-slint-common", "slint"]),
+            // ADR-063, ADR-064
+            ("secmp-ui", &["i-slint-common", "qrcode", "slint"]),
             ("secmp-sys-desktop", &["windows-sys"]),
             // ADR-055
             ("secmp-store", &["rusqlite"]),

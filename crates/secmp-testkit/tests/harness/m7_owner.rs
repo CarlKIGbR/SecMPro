@@ -689,7 +689,7 @@ fn answered_consume_fails_the_accept_once() {
     assert!(contact_ids(&mut d, guest.idx).is_empty());
 }
 
-/// Q304 (EXT3b-4; V-EXT3b-34 T4-3): the relay answers every `LINK_PUT` of an invitation `ERR_FULL` from the issue on, so every owner-status answer is `{0, 0}`: over 24 h the put stays one operation (one chain), the owner query keeps running, and no two starts of the link data are less than a minute apart.
+/// Q304 (EXT3b-4; V-EXT3b-34 T4-3): the relay answers every `LINK_PUT` of an invitation `ERR_FULL` from the issue on, so every owner-status answer is `{0, 0}`: over 24 h the put stays one operation (one chain), the owner query keeps running, and no two starts of the link data are less than a minute apart. The single put operation holds because the virtual driver runs an operation to its end before the next event; the product allows a put to be queued while one runs (M7-S9, HB-61).
 #[test]
 fn absent_answers_keep_one_put_chain() {
     let mut d = driver();

@@ -119,7 +119,7 @@ impl ControlOps {
         });
     }
 
-    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; an attempt lasts up to `CONNECT_TIMEOUT_MS` and delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
+    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; a link's life after `prepare` lasts up to `CONNECT_TIMEOUT_MS`; `prepare` and `commit` are outside that limit (HB-62 (3)), so the bound of three or four assumes a bounded `prepare`; delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
     #[must_use]
     pub fn coalesced(&self, kind: ControlKind, relay: RelayId) -> Option<OpId> {
         let joins = |o: &Op| {
@@ -664,7 +664,7 @@ mod tests {
         Ok(())
     }
 
-    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + CONNECT_TIMEOUT_MS` — the running one may still send its command until then; with none running, from `now` or the latest related start, as before.
+    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + CONNECT_TIMEOUT_MS` — the running one may still send its command until then; with none running, from `now` or the latest related start, as before; an operation of another correlation does not move it.
     #[test]
     fn deletion_armed_while_a_related_operation_runs_waits_out_the_attempt()
     -> Result<(), Unavailable> {
@@ -674,29 +674,43 @@ mod tests {
         };
         // the second operation's due time after the first (`first`, correlation 7) started at `t0`, the deletion of `q` was
         // queued at `t0 + 1 000` and armed at `t0 + 2 000`; `finish` ends the first before the arming
-        let armed = |first: ControlKind, finish: bool| -> Result<(Option<u64>, u64), Unavailable> {
-            let (mut rng, mut ops, q) = (TimingRng::seeded(45), ControlOps::new(), QueueId(5));
-            ops.schedule(&params, &mut rng, OpId(1), 0, spec(first, 7, When::Delayed))?;
-            let t0 = ops.due_of(OpId(1)).ok_or(Unavailable)?;
-            assert_eq!(ops.take_due(t0).len(), 1);
-            let del = spec(ControlKind::QueueDel(q), 7, When::AfterEmptyFetch(q));
-            ops.schedule(&params, &mut rng, OpId(2), t0.saturating_add(1_000), del)?;
-            if finish {
-                ops.done(OpId(1));
-            }
-            ops.note_empty_fetch(&params, &mut rng, q, t0.saturating_add(2_000));
-            Ok((ops.due_of(OpId(2)), t0))
-        };
-        let (due, t0) = armed(ControlKind::LinkPut(7), false)?;
+        let armed =
+            |first: (ControlKind, u64), finish: bool| -> Result<(Option<u64>, u64), Unavailable> {
+                let (mut rng, mut ops, q) = (TimingRng::seeded(45), ControlOps::new(), QueueId(5));
+                let (kind, related) = first;
+                ops.schedule(
+                    &params,
+                    &mut rng,
+                    OpId(1),
+                    0,
+                    spec(kind, related, When::Delayed),
+                )?;
+                let t0 = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+                assert_eq!(ops.take_due(t0).len(), 1);
+                let del = spec(ControlKind::QueueDel(q), 7, When::AfterEmptyFetch(q));
+                ops.schedule(&params, &mut rng, OpId(2), t0.saturating_add(1_000), del)?;
+                if finish {
+                    ops.done(OpId(1));
+                }
+                ops.note_empty_fetch(&params, &mut rng, q, t0.saturating_add(2_000));
+                Ok((ops.due_of(OpId(2)), t0))
+            };
+        let (due, t0) = armed((ControlKind::LinkPut(7), 7), false)?;
         let running = t0.saturating_add(2_000 + 120_000 + 60_000);
         assert_eq!(due, Some(running), "c) a put runs");
-        let (due, t0) = armed(ControlKind::LinkPut(7), true)?;
+        let (due, t0) = armed((ControlKind::LinkPut(7), 7), true)?;
         assert_eq!(due, Some(t0.saturating_add(2_000 + 60_000)), "d) done");
-        let (due, t0) = armed(ControlKind::LinkGetOwner(7), false)?;
+        let (due, t0) = armed((ControlKind::LinkGetOwner(7), 7), false)?;
         assert_eq!(
             due,
             Some(t0.saturating_add(2_000 + 120_000 + 60_000)),
             "e) a query runs"
+        );
+        let (due, t0) = armed((ControlKind::LinkPut(8), 8), false)?;
+        assert_eq!(
+            due,
+            Some(t0.saturating_add(2_000 + 60_000)),
+            "f) an unrelated operation runs"
         );
         Ok(())
     }

@@ -36,7 +36,7 @@ struct Op {
     /// The correlation this operation belongs to (a queue, an invitation, a contact), chosen by the host.
     related: u64,
     due: u64,
-    /// The delay drawn for a [`When::Delayed`] operation (again at an answer, or at its empty `FETCH`): it never starts before the latest related start plus this delay (spec §10.6 (2): `U[1 min, 60 min]` from any related operation, whenever that one actually ran) — a retry after a link failure neither, its own failed start included (EXT3b-1 (i), Q304). `None` for an operation a user waits for or that has its own time.
+    /// The delay drawn for a [`When::Delayed`] operation (again at an answer, or at its empty `FETCH`): it never starts before the latest related start plus this delay (spec §10.6 (2): `U[1 min, 60 min]` from any related operation, whenever that one actually ran) — a retry after a link failure neither, its own failed start included (EXT3b-1 (i), Q304). `None` for an operation a user waits for until it is answered: an answered operation is re-queued with a drawn delay (`ControlOps::answered`) and keeps it as its floor after a later link failure.
     delay: Option<u64>,
     running: bool,
     failures: u32,

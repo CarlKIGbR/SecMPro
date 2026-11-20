@@ -1612,14 +1612,15 @@ fn engine<P: Providers>(
             .adopt_pool_queue(now, start.relay, *queue, cap)
             .map_err(|_| Error::Unavailable)?;
     }
+    // EXT3b-3 (Q304): the open's registrations (the contacts' recv-queues) first, so `World::room_for` counts them
+    let visit = engine.visit();
+    engine.apply(visit);
     if have_relay {
         engine
             .sched
             .manage_pool(now, start.relay)
             .map_err(|_| Error::Unavailable)?;
     }
-    let visit = engine.visit();
-    engine.apply(visit);
     Ok(Serve(Box::pin(engine.run())))
 }
 

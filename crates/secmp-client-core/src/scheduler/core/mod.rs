@@ -1202,7 +1202,7 @@ impl World {
         Ok(true)
     }
 
-    /// `missing` capped per relay by the entries its `FETCH_MULTI` link has left, in a mode with one (spec D.2: at most [`FETCH_MULTI_LIMIT`]; EXT3b-3, Q304): a created spare must be admitted (`Scheduler::check_balanced` counts every recv queue of the relay), so the creations under way count too. Strict mode has no such link: `missing` as it is.
+    /// `missing` capped per relay by the entries its `FETCH_MULTI` link has left, in a mode with one (spec D.2: at most [`FETCH_MULTI_LIMIT`]; EXT3b-3, Q304): a created spare must be admitted (`Scheduler::check_balanced` counts every recv queue of the relay), so the creations under way count too. Strict mode has no such link: `missing` as it is. At an open the runtime manages the pool after the hub's registrations (`runtime::engine`), so the count includes the contacts' recv-queues.
     fn room_for(&self, missing: Vec<(RelayId, usize)>) -> Vec<(RelayId, usize)> {
         if self.params.slot_ms(self.effective_mode()).is_none() {
             return missing;
@@ -3619,6 +3619,57 @@ mod tests {
             (taken, sched.world.control.len()),
             (Some(spare), 0),
             "no refill beyond 32 entries"
+        );
+        Ok(())
+    }
+
+    /// S7-1 (Q304 (C)): why the runtime manages the pool after the open's registrations — `World::room_for` only counts queues that are registered when the pool is managed.
+    #[test]
+    fn pool_managed_after_registrations_plans_no_creation() -> Result<(), Fail> {
+        let relay = RelayId(1);
+        let cap = |n: u8| -> Result<RecvCap, Fail> {
+            RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?)
+                .map_err(|_| "cap")
+        };
+        let recvs = |sched: &Scheduler| {
+            sched
+                .world
+                .recvs
+                .iter()
+                .filter(|r| r.relay == relay)
+                .count()
+        };
+        // (i) the registrations first: 31 queues and one adopted spare fill the relay, so the pool plans nothing
+        let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(47));
+        for n in 1..=31_u8 {
+            sched
+                .add_recv_queue(0, relay, cap(n)?, 80_000)
+                .map_err(|_| "queue")?;
+        }
+        sched
+            .adopt_pool_queue(0, relay, QueueId(100), cap(0x56)?)
+            .map_err(|_| "adopt")?;
+        sched.manage_pool(0, relay).map_err(|_| "manage pool (i)")?;
+        assert_eq!((recvs(&sched), sched.world.control.len()), (32, 0), "(i)");
+        // (ii) the pool first: with only the spare registered one creation is planned, and the 31 queues that follow fill
+        // the relay to 32 entries — the creation would be refused with `TooManyQueues` when it completes
+        let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(48));
+        sched
+            .adopt_pool_queue(0, relay, QueueId(100), cap(0x56)?)
+            .map_err(|_| "adopt")?;
+        sched
+            .manage_pool(0, relay)
+            .map_err(|_| "manage pool (ii)")?;
+        let before = sched.world.control.len();
+        for n in 1..=31_u8 {
+            sched
+                .add_recv_queue(0, relay, cap(n)?, 80_000)
+                .map_err(|_| "queue")?;
+        }
+        assert_eq!(
+            (before, recvs(&sched), sched.world.control.len()),
+            (1, 32, 1),
+            "(ii)"
         );
         Ok(())
     }

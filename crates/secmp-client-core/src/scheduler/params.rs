@@ -75,6 +75,11 @@ impl Default for Params {
 /// The `FETCH_MULTI` entry limit (spec D.2).
 pub const FETCH_MULTI_LIMIT: usize = 32;
 
+/// How long a connection attempt (stream and SecMP-LINK handshake) may take before it counts as failed: a provider that
+/// never answers must not leave a link in `Connecting`, which has no deadline in the core (obligation (iii)). Two
+/// minutes: a Tor circuit to an onion service plus the handshake.
+pub const CONNECT_TIMEOUT_MS: u64 = 120_000;
+
 impl Params {
     /// Whether `period_ms` is in `PERIODS` (spec §9.8).
     #[must_use]

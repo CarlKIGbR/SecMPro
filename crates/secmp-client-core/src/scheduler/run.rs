@@ -784,10 +784,9 @@ pub use crate::scheduler::core::pure::FLUSH_WAIT_MS;
 /// pending): the shortest period of `PERIODS`, so no link ever writes a tick late (EXTB-3).
 pub const WRITE_STALL_MS: u64 = 10_000;
 
-/// How long a connection attempt (stream and SecMP-LINK handshake) may take before it counts as failed: a provider that
-/// never answers must not leave a link in `Connecting`, which has no deadline in the core (obligation (iii)). Two
-/// minutes: a Tor circuit to an onion service plus the handshake.
-pub const CONNECT_TIMEOUT_MS: u64 = 120_000;
+/// The connection-attempt limit; defined in [`crate::scheduler::params`] so the pure control module can use it under Kani,
+/// where this module is compiled out (M7-S9d).
+pub use crate::scheduler::params::CONNECT_TIMEOUT_MS;
 
 impl<P, D, R, H, W, C> Driver<P, D, R, H, W, C>
 where

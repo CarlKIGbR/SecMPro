@@ -7,8 +7,7 @@
 //! timing randomness only (CO-08).
 
 use crate::scheduler::core::backoff::reconnect_delay;
-use crate::scheduler::params::Params;
-use crate::scheduler::run::CONNECT_TIMEOUT_MS;
+use crate::scheduler::params::{CONNECT_TIMEOUT_MS, Params};
 use crate::scheduler::types::{ControlKind, OpId, QueueId, RelayId};
 use crate::timing::{TimingRng, Unavailable};
 

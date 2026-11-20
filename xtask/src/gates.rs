@@ -259,9 +259,13 @@ pub(crate) fn doctest(_: &Ctx) -> Result<Outcome> {
 pub(crate) fn hello(_: &Ctx) -> Result<Outcome> {
     let mut banners = Vec::new();
     for bin in expect::BINARIES {
-        let out = Cmd::cargo()
-            .args(["run", "--quiet", "--locked", "--package", bin, "--bin", bin])
-            .read()?;
+        let mut cmd =
+            Cmd::cargo().args(["run", "--quiet", "--locked", "--package", bin, "--bin", bin]);
+        if *bin == "secmp-ui" {
+            // M8: the binary opens its window unless asked for the banner
+            cmd = cmd.args(["--", "--version"]);
+        }
+        let out = cmd.read()?;
         let line = out.trim().to_owned();
         if !line.starts_with(&format!("{bin} ")) {
             bail!("{bin}: unexpected banner {line:?}");
@@ -9486,7 +9490,8 @@ mod tests {
                 "Zlib",
                 "Unicode-3.0",
                 "Unicode-DFS-2016",
-                "MPL-2.0"
+                "MPL-2.0",
+                "BSL-1.0"
             ]
         );
         assert!(allow.contains(&"Apache-2.0") && allow.contains(&"BSD-3-Clause"));
@@ -9495,7 +9500,10 @@ mod tests {
             .and_then(|(_, r)| r.split_once("\n]"))
             .map(|(b, _)| b.matches("crate = ").count())
             .unwrap_or_default();
-        assert_eq!(exceptions, 3, "slint, async_executors, notify only");
+        assert_eq!(
+            exceptions, 12,
+            "the ten Slint-family crates (ADR-063), async_executors, notify only"
+        );
         let ws = crate::meta::Workspace::load()?;
         for krate in [
             "argon2",

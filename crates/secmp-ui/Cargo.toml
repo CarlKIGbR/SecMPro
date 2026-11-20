@@ -9,5 +9,14 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# docs/02 §3, ADR-063: the client core, the desktop system layer and the toolkit; nothing else (`cargo xtask policy`).
+[dependencies]
+secmp-client-core.workspace = true
+secmp-sys-desktop.workspace = true
+slint.workspace = true
+
+[dev-dependencies]
+i-slint-backend-testing.workspace = true
+
 [lints]
 workspace = true

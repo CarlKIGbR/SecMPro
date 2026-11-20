@@ -1715,8 +1715,16 @@ mod tests {
             "secmp-crypto",
             "secmp-cli",
             "secmp-proto",
+            "secmp-ui",
+            "secmp-sys-desktop",
         ];
-        let external = ["serde_json", "tokio"];
+        let external = [
+            "serde_json",
+            "tokio",
+            "slint",
+            "i-slint-common",
+            "windows-sys",
+        ];
         let id = |n: &str| {
             if external.contains(&n) {
                 format!("registry+x#{n}@1.0.0")
@@ -1932,7 +1940,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(n, 46);
+        assert_eq!(n, 68);
         Ok(())
     }
 
@@ -2023,7 +2031,8 @@ mod tests {
                 "Zlib",
                 "Unicode-3.0",
                 "Unicode-DFS-2016",
-                "MPL-2.0"
+                "MPL-2.0",
+                "BSL-1.0"
             ]
         );
         let exceptions: Vec<(String, String)> = section("\nexceptions = [\n")
@@ -2042,6 +2051,27 @@ mod tests {
             exceptions,
             [
                 ("slint".to_owned(), "GPL-3.0-only".to_owned()),
+                ("slint-macros".to_owned(), "GPL-3.0-only".to_owned()),
+                (
+                    "i-slint-backend-selector".to_owned(),
+                    "GPL-3.0-only".to_owned()
+                ),
+                (
+                    "i-slint-backend-winit".to_owned(),
+                    "GPL-3.0-only".to_owned()
+                ),
+                ("i-slint-common".to_owned(), "GPL-3.0-only".to_owned()),
+                ("i-slint-compiler".to_owned(), "GPL-3.0-only".to_owned()),
+                ("i-slint-core".to_owned(), "GPL-3.0-only".to_owned()),
+                ("i-slint-core-macros".to_owned(), "GPL-3.0-only".to_owned()),
+                (
+                    "i-slint-renderer-femtovg".to_owned(),
+                    "GPL-3.0-only".to_owned()
+                ),
+                (
+                    "i-slint-renderer-software".to_owned(),
+                    "GPL-3.0-only".to_owned()
+                ),
                 ("async_executors".to_owned(), "Unlicense".to_owned()),
                 ("notify".to_owned(), "CC0-1.0".to_owned()),
             ]
@@ -2392,7 +2422,6 @@ mod tests {
         "RUSTSEC-2026-0173",
         "RUSTSEC-2025-0141",
         "RUSTSEC-2026-0387",
-        "RUSTSEC-2026-0543",
     ];
 
     #[test]
@@ -2436,6 +2465,42 @@ mod tests {
         Ok(())
     }
 
+    /// T4 (ADR-063): the normal dependencies of `secmp-ui` are within {`secmp-client-core`, `secmp-sys-desktop`, `slint`};
+    /// a manifest that adds `secmp-store` (or a dev-only crate as a normal dependency) is a finding naming it.
+    #[test]
+    fn ui_crate_dependencies_are_allowlisted() -> Result<()> {
+        let row = expect::NORMAL_DEPENDENCY_ALLOW
+            .iter()
+            .find(|(k, _)| *k == "secmp-ui")
+            .map(|(_, v)| v.to_vec());
+        assert_eq!(
+            row,
+            Some(vec!["secmp-client-core", "secmp-sys-desktop", "slint"])
+        );
+        let ok = metadata_fixture(&[
+            ("secmp-ui", "secmp-client-core", "null"),
+            ("secmp-ui", "secmp-sys-desktop", "null"),
+            ("secmp-ui", "slint", "null"),
+        ]);
+        assert_eq!(
+            normal_dependency_findings(&Workspace::parse(&ok)?),
+            Vec::<String>::new()
+        );
+        let bad = metadata_fixture(&[
+            ("secmp-ui", "secmp-client-core", "null"),
+            ("secmp-ui", "secmp-store", "null"),
+        ]);
+        let found = normal_dependency_findings(&Workspace::parse(&bad)?);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("package secmp-ui has the normal dependency secmp-store,")),
+            "{found:?}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn normal_dependencies_match_adr_allowlist() -> Result<()> {
         // the tree itself
@@ -2458,6 +2523,9 @@ mod tests {
             ("secmp-client-core", &["tokio"]),
             ("secmp-cli", &["tokio"]),
             ("secmp-testkit", &["serde_json", "tokio"]),
+            // ADR-063
+            ("secmp-ui", &["slint"]),
+            ("secmp-sys-desktop", &["i-slint-common", "windows-sys"]),
             // ADR-055
             ("secmp-store", &["rusqlite"]),
             (

@@ -62,6 +62,9 @@ pub(crate) struct Captured {
     pub(crate) stderr: String,
 }
 
+/// The environment variable that makes `yeslogic-fontconfig-sys` (Slint) load fontconfig at run time (ADR-063).
+const FONTCONFIG_DLOPEN: &str = "RUST_FONTCONFIG_DLOPEN";
+
 impl Cmd {
     pub(crate) fn new(program: impl Into<String>) -> Self {
         Self {
@@ -146,6 +149,13 @@ impl Cmd {
         c.args(&self.args);
         for k in &self.removed {
             c.env_remove(k);
+        }
+        // ADR-063: Slint's text stack loads fontconfig at run time (the crate's own switch) instead of linking it at build
+        // time; a value the caller or the command already carries is left as it is
+        if std::env::var_os(FONTCONFIG_DLOPEN).is_none()
+            && !self.envs.iter().any(|(k, _)| k == FONTCONFIG_DLOPEN)
+        {
+            c.env(FONTCONFIG_DLOPEN, "1");
         }
         c.envs(self.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         if let Some(d) = &self.dir {
@@ -278,4 +288,25 @@ pub(crate) fn rel(root: &Path, p: &Path) -> String {
         .display()
         .to_string()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod fontconfig_tests {
+    use super::*;
+
+    /// ADR-063: the environment xtask builds for a child cargo carries `RUST_FONTCONFIG_DLOPEN=1`.
+    #[test]
+    fn child_cargo_env_sets_fontconfig_dlopen() {
+        let command = Cmd::cargo().arg("build").command();
+        let set = command
+            .get_envs()
+            .find(|(k, _)| *k == OsStr::new(FONTCONFIG_DLOPEN))
+            .and_then(|(_, v)| v);
+        // a value in the caller's environment is left alone (then nothing is set here)
+        if std::env::var_os(FONTCONFIG_DLOPEN).is_none() {
+            assert_eq!(set, Some(OsStr::new("1")));
+        } else {
+            assert_eq!(set, None);
+        }
+    }
 }

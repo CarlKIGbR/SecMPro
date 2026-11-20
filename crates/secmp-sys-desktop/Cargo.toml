@@ -9,5 +9,14 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# ADR-063: `SetWindowDisplayAffinity` / `GetWindowDisplayAffinity` (capture exclusion, docs/04).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
+
+# ADR-063: Slint's text stack loads fontconfig at run time (feature `fontconfig-dlopen` of `i-slint-common`, enabled here by
+# feature unification so that `secmp-ui`'s dependency set stays {client-core, sys-desktop, slint}); no code uses the crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+i-slint-common.workspace = true
+
 [lints]
 workspace = true

@@ -19,10 +19,65 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
+[[exemptions.ab_glyph]]
+version = "0.2.32"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.ab_glyph_rasterizer]]
+version = "0.1.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit]]
+version = "0.24.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_atspi_common]]
+version = "0.19.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_consumer]]
+version = "0.38.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_ios]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_macos]]
+version = "0.26.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_unix]]
+version = "0.22.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_windows]]
+version = "0.34.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.accesskit_winit]]
+version = "0.33.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.aes]]
 version = "0.9.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ahash]]
+version = "0.8.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.amplify]]
 version = "4.9.0"
@@ -44,15 +99,45 @@ version = "2.0.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.android-activity]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.android-properties]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.android_system_properties]]
 version = "0.1.6"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.annotate-snippets]]
+version = "0.12.18"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.anstyle]]
+version = "1.0.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.arboard]]
+version = "3.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.arrayvec]]
 version = "0.7.8"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.as-raw-xcb-connection]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.asn1-rs]]
 version = "0.7.2"
@@ -74,10 +159,50 @@ version = "1.5.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.async-broadcast]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.async-channel]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.async-compression]]
 version = "0.4.50"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.async-executor]]
+version = "1.14.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.async-io]]
+version = "2.6.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.async-lock]]
+version = "3.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.async-process]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.async-recursion]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.async-signal]]
+version = "0.2.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.async-trait]]
 version = "0.1.92"
@@ -104,6 +229,21 @@ version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.atspi]]
+version = "0.29.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.atspi-common]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.atspi-proxies]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.base64]]
 version = "0.23.1"
 criteria = "safe-to-deploy"
@@ -129,6 +269,21 @@ version = "0.3.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.block2]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.blocking]]
+version = "1.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.borsh]]
+version = "1.8.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.bs58]]
 version = "0.5.1"
 criteria = "safe-to-deploy"
@@ -149,15 +304,45 @@ version = "1.25.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.bytemuck_derive]]
+version = "1.12.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.byteorder-lite]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.bytes]]
 version = "1.12.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
 
+[[exemptions.calloop]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.calloop]]
+version = "0.14.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.calloop-wayland-source]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.cc]]
 version = "1.4.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): build-dependency of cmake/aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests) and of crabgrind (cfg(valgrind_ct_test) only); outside the normal closure (ADR-036). Pinned below 1.5.x by the 7-day cooldown. Review at every release."
+
+[[exemptions.cfg_aliases]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.chrono]]
 version = "0.4.45"
@@ -169,10 +354,25 @@ version = "1.9.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.clipboard-win]]
+version = "5.4.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.clru]]
+version = "0.6.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.coarsetime]]
 version = "0.1.38"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.combine]]
+version = "4.6.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.compression-codecs]]
 version = "0.4.45"
@@ -183,6 +383,21 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.4.33"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.concurrent-queue]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.const-field-offset]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.const-field-offset-macro]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.const-oid]]
 version = "0.9.6"
@@ -199,6 +414,16 @@ version = "0.3.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.core-graphics]]
+version = "0.23.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.countme]]
+version = "3.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.cpubits]]
 version = "0.1.1"
 criteria = "safe-to-deploy"
@@ -213,6 +438,16 @@ notes = "Tracked exemption (supply-chain/README.md): dependency of libcrux-secre
 version = "1.5.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.critical-section]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.crossbeam-channel]]
+version = "0.5.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.crossbeam-queue]]
 version = "0.3.14"
@@ -229,10 +464,20 @@ version = "0.1.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.ctor]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.ctr]]
 version = "0.10.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.cursor-icon]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.darling]]
 version = "0.14.4"
@@ -284,6 +529,11 @@ version = "2.11.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.data-url]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.defmt]]
 version = "1.1.1"
 criteria = "safe-to-deploy"
@@ -329,15 +579,65 @@ version = "0.5.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.dispatch]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.dispatch2]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.displaydoc]]
 version = "0.2.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.dlib]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.downcast-rs]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.downcast-rs]]
 version = "2.0.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.dpi]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.drm]]
+version = "0.14.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.drm-ffi]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.drm-fourcc]]
+version = "2.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.drm-sys]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.dtor]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.dyn-clone]]
 version = "1.0.20"
@@ -349,6 +649,11 @@ version = "0.4.23"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.endi]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.enum-ordinalize]]
 version = "3.1.15"
 criteria = "safe-to-deploy"
@@ -358,6 +663,16 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.3.13"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.enumflags2]]
+version = "0.7.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.enumflags2_derive]]
+version = "0.7.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.enumset]]
 version = "1.1.14"
@@ -369,20 +684,40 @@ version = "0.15.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.error-code]]
+version = "3.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.event-listener]]
 version = "5.4.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.event-listener-strategy]]
+version = "0.5.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.fastrand]]
 version = "2.5.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.femtovg]]
+version = "0.27.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.ff]]
 version = "0.13.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.field-offset]]
+version = "0.3.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.figment]]
 version = "0.10.19"
@@ -399,70 +734,70 @@ version = "0.1.13"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of cc, a build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests); outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.fixed_decimal]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.fixedbitset]]
+version = "0.5.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.flate2]]
 version = "1.1.10"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.float-cmp]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.fluid-let]]
 version = "1.0.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.font-types]]
+version = "0.12.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.fontdb]]
+version = "0.24.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.fontique]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.foreign-types-macros]]
+version = "0.2.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.fs_extra]]
 version = "1.3.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
-
-[[exemptions.fs_extra]]
-version = "1.3.0"
-criteria = "safe-to-run"
-notes = "Tracked exemption (supply-chain/README.md): build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests); outside the normal closure (ADR-036). Review at every release."
 
 [[exemptions.funty]]
 version = "2.0.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
-[[exemptions.futures]]
-version = "0.3.34"
+[[exemptions.futures-lite]]
+version = "2.6.1"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.futures-channel]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
-
-[[exemptions.futures-core]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
-
-[[exemptions.futures-executor]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.futures-io]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
-
-[[exemptions.futures-macro]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.futures-rustls]]
 version = "0.26.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.futures-sink]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
 
 [[exemptions.futures-task]]
 version = "0.3.34"
@@ -474,10 +809,25 @@ version = "0.3.34"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
+[[exemptions.gbm]]
+version = "0.18.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.gbm-sys]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.generic-array]]
 version = "0.14.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.gethostname]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.getrandom]]
 version = "0.2.17"
@@ -494,40 +844,85 @@ version = "0.1.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.gif]]
+version = "0.14.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.gl_generator]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.glob-match]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.glow]]
+version = "0.18.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.glutin]]
+version = "0.32.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.glutin-winit]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.glutin_egl_sys]]
+version = "0.7.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.glutin_glx_sys]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.glutin_wgl_sys]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.grid]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.group]]
 version = "0.13.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
-[[exemptions.hashbrown]]
-version = "0.12.3"
+[[exemptions.half]]
+version = "2.7.1"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.harfrust]]
+version = "0.12.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.hashbrown]]
-version = "0.15.5"
+version = "0.14.2"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.hashbrown]]
-version = "0.16.1"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.hashbrown]]
-version = "0.17.1"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.hashlink]]
 version = "0.11.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hermit-abi]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.hkdf]]
 version = "0.12.4"
@@ -539,6 +934,11 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.htmlparser]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.http]]
 version = "1.5.0"
 criteria = "safe-to-deploy"
@@ -549,15 +949,65 @@ version = "1.10.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
-[[exemptions.humantime]]
-version = "2.4.0"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
 [[exemptions.humantime-serde]]
 version = "1.1.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.i-slint-backend-linuxkms]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-backend-selector]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-backend-testing]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-backend-winit]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-common]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-compiler]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-core]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-core-macros]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-renderer-femtovg]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-renderer-skia]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.i-slint-renderer-software]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.iana-time-zone]]
 version = "0.1.65"
@@ -569,10 +1019,30 @@ version = "2.3.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.icu_decimal]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.icu_decimal_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.icu_locale_core]]
 version = "2.3.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_locale_fallback]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.icu_locale_fallback_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.icu_normalizer]]
 version = "2.3.0"
@@ -583,6 +1053,16 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "2.3.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_plurals]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.icu_plurals_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.icu_properties]]
 version = "2.3.0"
@@ -599,6 +1079,16 @@ version = "2.3.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.icu_segmenter]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.icu_segmenter_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.ident_case]]
 version = "1.0.1"
 criteria = "safe-to-deploy"
@@ -614,10 +1104,30 @@ version = "1.2.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.image]]
+version = "0.25.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.image-webp]]
+version = "0.2.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.imagesize]]
+version = "0.15.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.imara-diff]]
 version = "0.2.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.imgref]]
+version = "1.12.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.indexmap]]
 version = "1.9.3"
@@ -689,10 +1199,45 @@ version = "0.1.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.jni]]
+version = "0.22.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.jni-macros]]
+version = "0.22.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.jni-sys]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.jni-sys]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.jni-sys-macros]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.js-sys]]
 version = "0.3.105"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): wasm32-only dependency of getrandom and uuid; outside the normal closure (ADR-036). Pinned below 0.3.106 by the 7-day cooldown. Review at every release."
+
+[[exemptions.keyboard-types]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.khronos_api]]
+version = "3.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.kqueue]]
 version = "1.2.1"
@@ -703,6 +1248,11 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "1.1.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.kurbo]]
+version = "0.13.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.lazy_static]]
 version = "1.5.1"
@@ -724,6 +1274,21 @@ version = "0.37.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency of rusqlite (secmp-store, ADR-055) and arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of rusqlite/arti-client."
 
+[[exemptions.linebender_resource_handle]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.linux-raw-sys]]
+version = "0.4.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.linux-raw-sys]]
+version = "0.9.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
@@ -733,6 +1298,11 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.8.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.litrs]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.lock_api]]
 version = "0.4.14"
@@ -744,10 +1314,35 @@ version = "0.4.34"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.lyon_algorithms]]
+version = "1.0.22"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.lyon_extra]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.lyon_geom]]
+version = "1.0.20"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.lyon_path]]
+version = "1.0.19"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.memmap2]]
 version = "0.9.11"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.memoffset]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.merlin]]
 version = "3.0.0"
@@ -768,6 +1363,51 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "1.2.4"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
+
+[[exemptions.moxcms]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.muda]]
+version = "0.19.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.naga]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.naga-types]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.ndk]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.ndk-context]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.ndk-sys]]
+version = "0.6.0+11769913"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.nix]]
+version = "0.31.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.nom]]
+version = "8.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.nonany]]
 version = "0.3.0"
@@ -809,10 +1449,105 @@ version = "0.7.6"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.objc-sys]]
+version = "0.3.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-app-kit]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-app-kit]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-cloud-kit]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-contacts]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-core-data]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-core-image]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-core-location]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-core-text]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-foundation]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.objc2-io-kit]]
 version = "0.3.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.objc2-link-presentation]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-metal]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-quartz-core]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-symbols]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-ui-kit]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-ui-kit]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-uniform-type-identifiers]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.objc2-user-notifications]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.once_cell]]
 version = "1.12.0"
@@ -829,15 +1564,40 @@ version = "0.9.117"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): ADR-055 item 5, build input of the vendored OpenSSL pulled by rusqlite (secmp-store); C code not audited. Review at every release and at every bump of rusqlite/arti-client."
 
+[[exemptions.orbclient]]
+version = "0.3.55"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.ordered-float]]
 version = "2.10.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.ordered-float]]
+version = "5.5.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.ordered-stream]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.os_pipe]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.os_str_bytes]]
 version = "6.6.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.owned_ttf_parser]]
+version = "0.25.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.parking_lot]]
 version = "0.12.5"
@@ -849,15 +1609,35 @@ version = "0.9.12"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.parlance]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.parley]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.parley_data]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.paste]]
 version = "1.0.15"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
-[[exemptions.pastey]]
-version = "0.2.3"
+[[exemptions.petgraph]]
+version = "0.8.3"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): proc-macro dependency of core-models <- libcrux-intrinsics under cfg(hax) only (hax verification builds), never compiled; outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.phf]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.phf]]
 version = "0.14.0"
@@ -865,9 +1645,19 @@ criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.phf_generator]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.phf_generator]]
 version = "0.14.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.phf_macros]]
+version = "0.13.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.phf_macros]]
 version = "0.14.0"
@@ -875,9 +1665,19 @@ criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.phf_shared]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.phf_shared]]
 version = "0.14.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.pico-args]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.pin-project]]
 version = "1.1.13"
@@ -894,10 +1694,40 @@ version = "0.2.17"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
-[[exemptions.pkg-config]]
-version = "0.3.34"
+[[exemptions.pin-utils]]
+version = "0.1.1"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto) and of crabgrind (cfg(valgrind_ct_test) only); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.pin-weak]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.piper]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.plain]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.png]]
+version = "0.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.polling]]
+version = "3.11.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.polycool]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.polyval]]
 version = "0.7.3"
@@ -906,11 +1736,6 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 
 [[exemptions.portable-atomic]]
 version = "1.15.0"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.portable-atomic-util]]
-version = "0.2.8"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
@@ -934,6 +1759,11 @@ version = "0.2.21"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
 
+[[exemptions.presser]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.priority-queue]]
 version = "2.7.0"
 criteria = "safe-to-deploy"
@@ -943,6 +1773,31 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "3.5.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.profiling]]
+version = "1.0.18"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.pulldown-cmark]]
+version = "0.13.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.pxfm]]
+version = "0.1.30"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.quick-error]]
+version = "2.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.quick-xml]]
+version = "0.41.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.r-efi]]
 version = "5.3.0"
@@ -970,16 +1825,6 @@ criteria = "safe-to-run"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the dev-dependency closure (test-only) of turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of turmoil."
 
 [[exemptions.rand_chacha]]
-version = "0.3.1"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.rand_chacha]]
-version = "0.9.0"
-criteria = "safe-to-run"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the dev-dependency closure (test-only) of turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of turmoil."
-
-[[exemptions.rand_chacha]]
 version = "0.10.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
@@ -988,6 +1833,11 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.6.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.range-alloc]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.rangemap]]
 version = "1.8.0"
@@ -1000,9 +1850,19 @@ criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.redox_syscall]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.redox_syscall]]
 version = "0.5.18"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.redox_syscall]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.redox_users]]
 version = "0.5.3"
@@ -1019,15 +1879,40 @@ version = "1.0.27"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.renderdoc-sys]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.reseeding_rng]]
 version = "0.10.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.resvg]]
+version = "0.48.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.rgb]]
+version = "0.8.53"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.ring]]
 version = "0.17.14"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.rowan]]
+version = "0.17.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.roxmltree]]
+version = "0.21.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.rsa]]
 version = "0.9.10"
@@ -1048,6 +1933,11 @@ notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- cr
 version = "4.1.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rustix]]
+version = "0.38.44"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.rustix]]
 version = "1.1.5"
@@ -1089,15 +1979,35 @@ version = "1.2.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.scoped-tls]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.scoped-tls-hkt]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.scopeguard]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.sctk-adwaita]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.serde_ignored]]
 version = "0.1.14"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.serde_repr]]
+version = "0.1.21"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.serde_spanned]]
 version = "0.6.9"
@@ -1139,10 +2049,40 @@ version = "0.3.10"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.simd_cesu8]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.simplecss]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.siphasher]]
 version = "1.0.4"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.skia-bindings]]
+version = "0.153.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.skia-safe]]
+version = "0.153.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.slint]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.slint-macros]]
+version = "1.18.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.slotmap]]
 version = "1.1.1"
@@ -1154,15 +2094,45 @@ version = "1.16.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.smithay-client-toolkit]]
+version = "0.19.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.smol_str]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.smol_str]]
+version = "0.3.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.socket2]]
 version = "0.6.5"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
 
+[[exemptions.softbuffer]]
+version = "0.4.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.spin]]
 version = "0.9.9"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.spin_on]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.spirv]]
+version = "0.2.0+1.5.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.spki]]
 version = "0.7.3"
@@ -1179,6 +2149,11 @@ version = "1.2.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.strict-num]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.strum]]
 version = "0.28.0"
 criteria = "safe-to-deploy"
@@ -1189,35 +2164,55 @@ version = "0.28.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
-[[exemptions.sync_wrapper]]
-version = "1.0.2"
+[[exemptions.svgtypes]]
+version = "0.16.2"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
-[[exemptions.synstructure]]
-version = "0.13.2"
+[[exemptions.swash]]
+version = "0.2.10"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.synstructure]]
 version = "0.14.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.sys-locale]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.sysinfo]]
 version = "0.38.4"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.taffy]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.tap]]
 version = "1.0.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.tar]]
+version = "0.4.38"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.tempfile]]
 version = "3.27.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.text-size]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.thiserror]]
 version = "1.0.69"
@@ -1254,13 +2249,33 @@ version = "0.2.32"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.tiny-skia]]
+version = "0.11.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.tiny-skia]]
+version = "0.12.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.tiny-skia-path]]
+version = "0.11.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.tiny-skia-path]]
+version = "0.12.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.tiny-xlib]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.tinystr]]
 version = "0.8.4"
-criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
-
-[[exemptions.tinyvec]]
-version = "1.13.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
@@ -1344,6 +2359,16 @@ version = "0.2.6"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.tree_magic_mini]]
+version = "3.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.ttf-parser]]
+version = "0.25.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.turmoil]]
 version = "0.7.2"
 criteria = "safe-to-run"
@@ -1354,15 +2379,35 @@ version = "3.5.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.uds_windows]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.uncased]]
 version = "0.9.10"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
-[[exemptions.untrusted]]
-version = "0.9.0"
+[[exemptions.unicase]]
+version = "2.10.0"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.unicode-script]]
+version = "0.5.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.unicode-vo]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.unicode-width]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.unty]]
 version = "0.0.4"
@@ -1373,6 +2418,11 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "2.5.8"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.usvg]]
+version = "0.48.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.uuid]]
 version = "1.26.1"
@@ -1388,6 +2438,16 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.9.5"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.vtable]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.vtable-macro]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.walkdir]]
 version = "2.5.0"
@@ -1409,6 +2469,11 @@ version = "0.2.128"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): wasm32-only dependency of getrandom and uuid; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.wasm-bindgen-futures]]
+version = "0.4.78"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.wasm-bindgen-macro]]
 version = "0.2.128"
 criteria = "safe-to-deploy"
@@ -1424,10 +2489,100 @@ version = "0.2.128"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): shared crate of wasm-bindgen, wasm32 targets only; outside the normal closure (ADR-036). Review at every release."
 
-[[exemptions.web-time]]
-version = "1.1.0"
+[[exemptions.wayland-backend]]
+version = "0.3.17"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-client]]
+version = "0.31.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-csd-frame]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-cursor]]
+version = "0.31.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-protocols]]
+version = "0.32.13"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-protocols-plasma]]
+version = "0.3.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-protocols-wlr]]
+version = "0.3.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-scanner]]
+version = "0.31.11"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wayland-sys]]
+version = "0.31.11"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.web-sys]]
+version = "0.3.105"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.webbrowser]]
+version = "1.2.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.weezl]]
+version = "0.1.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu-core]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu-core-deps-apple]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu-core-deps-windows-linux-android]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu-hal]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu-naga-bridge]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.wgpu-types]]
+version = "30.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.winapi]]
 version = "0.3.9"
@@ -1589,6 +2744,11 @@ version = "0.53.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.winit]]
+version = "0.30.13"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.winnow]]
 version = "0.7.15"
 criteria = "safe-to-deploy"
@@ -1598,6 +2758,16 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "1.0.4"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.wl-clipboard-rs]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.write-fonts]]
+version = "0.50.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.writeable]]
 version = "0.6.4"
@@ -1609,6 +2779,61 @@ version = "0.5.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
+[[exemptions.x11-dl]]
+version = "2.21.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.x11rb]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.x11rb-protocol]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.xattr]]
+version = "1.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.xcursor]]
+version = "0.3.11"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.xkbcommon-dl]]
+version = "0.4.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.xkeysym]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.xml-rs]]
+version = "0.8.29"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.xmlwriter]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.yazi]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.yeslogic-fontconfig-sys]]
+version = "6.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
 [[exemptions.yoke]]
 version = "0.8.3"
 criteria = "safe-to-deploy"
@@ -1618,6 +2843,46 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.8.4"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zbus]]
+version = "5.19.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zbus-lockstep]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zbus-lockstep-macros]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zbus_macros]]
+version = "5.19.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zbus_names]]
+version = "4.3.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zbus_xml]]
+version = "5.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zcheapstr]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zeno]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
 
 [[exemptions.zerocopy]]
 version = "0.8.60"
@@ -1658,3 +2923,28 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 version = "0.6.8"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zune-core]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zune-jpeg]]
+version = "0.5.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zvariant]]
+version = "5.15.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zvariant_derive]]
+version = "5.15.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."
+
+[[exemptions.zvariant_utils]]
+version = "4.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of slint (ADR-063); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every Slint upgrade."

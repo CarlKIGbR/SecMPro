@@ -108,6 +108,13 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
             "tokio",
         ],
     ),
+    // ADR-063 (M8): the desktop UI — the client core, the desktop system layer and the toolkit, nothing else
+    (
+        "secmp-ui",
+        &["secmp-client-core", "secmp-sys-desktop", "slint"],
+    ),
+    // ADR-063: the Windows display-affinity bindings and `i-slint-common` (only its feature `fontconfig-dlopen`)
+    ("secmp-sys-desktop", &["i-slint-common", "windows-sys"]),
 ];
 
 /// The targets over which that closure is taken and united: the `[graph] targets` of `deny.toml` (the two
@@ -193,7 +200,27 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
     ),
     (
         "RUSTSEC-2026-0543",
-        "ADR-051 Am. 10: chrono 0.4.45 — unmaintained (chronotope/chrono#1768), no patched version; lock-only as an optional dependency of serde_with 3.24.0 (via Arti), never compiled (cargo tree -i prints nothing; cargo deny does not report it); no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Arti's serde_with drops chrono from the lock, whichever is first",
+        "ADR-051 Am. 10: chrono 0.4.45 — unmaintained (chronotope/chrono#1768), no patched version; as an optional dependency of serde_with 3.24.0 (via Arti) not compiled (cargo tree -i prints nothing for that path), and since M8 compiled via i-slint-core 1.18.1 and reported by cargo deny (ADR-063, HB-66); no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Arti's serde_with drops chrono from the lock, whichever is first",
+    ),
+    (
+        "RUSTSEC-2026-0441",
+        "ADR-063: pin-utils 0.1.1 — unmaintained, no patched version; pulled only via spin_on 0.1.1 ← i-slint-renderer-skia 1.18.1, an iOS-only dependency of i-slint-backend-winit (no shipped target builds it; the lock holds it); no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Slint drops it, whichever is first",
+    ),
+    (
+        "RUSTSEC-2026-0192",
+        "ADR-063: ttf-parser 0.25.1 — unmaintained, no patched version; pulled via owned_ttf_parser ← ab_glyph ← sctk-adwaita ← winit 0.30.13 (window decorations of Slint's winit backend on Wayland) ← secmp-ui; no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Slint drops it, whichever is first",
+    ),
+    (
+        "RUSTSEC-2026-0371",
+        "ADR-063: zbus_names 4.3.5 — unmaintained, no patched version; pulled via zbus ← accesskit_atspi_common ← accesskit_unix ← accesskit_winit (AT-SPI accessibility of Slint on Linux) ← secmp-ui; no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Slint drops it, whichever is first",
+    ),
+    (
+        "RUSTSEC-2026-0370",
+        "ADR-063: zvariant 5.15.1 — unmaintained, no patched version; pulled via accesskit_atspi_common ← accesskit_unix ← accesskit_winit (AT-SPI accessibility of Slint on Linux) ← secmp-ui; no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Slint drops it, whichever is first",
+    ),
+    (
+        "RUSTSEC-2026-0372",
+        "ADR-063: zvariant_derive 5.15.1 — unmaintained, no patched version; pulled via zvariant (see RUSTSEC-2026-0370) ← secmp-ui; no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Slint drops it, whichever is first",
     ),
 ];
 
@@ -2352,7 +2379,9 @@ fn normal_dependency_allow_m7() {
             "secmp-testkit",
             "secmp-store",
             "secmp-crypto",
-            "secmp-cli"
+            "secmp-cli",
+            "secmp-ui",
+            "secmp-sys-desktop"
         ]
     );
 }
@@ -2684,6 +2713,11 @@ mod tests {
                 "RUSTSEC-2026-0459",
                 "RUSTSEC-2026-0542",
                 "RUSTSEC-2026-0543",
+                "RUSTSEC-2026-0441",
+                "RUSTSEC-2026-0192",
+                "RUSTSEC-2026-0371",
+                "RUSTSEC-2026-0370",
+                "RUSTSEC-2026-0372",
             ]
         );
         let bigint = AUDIT_IGNORES

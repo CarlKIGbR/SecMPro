@@ -8,6 +8,7 @@ use std::process::Command;
 #[test]
 fn prints_banner_and_exits_successfully() -> Result<(), String> {
     let out = Command::new(env!("CARGO_BIN_EXE_secmp-ui"))
+        .arg("--version")
         .output()
         .map_err(|e| format!("cannot start the binary: {e}"))?;
     if !out.status.success() {

@@ -1675,6 +1675,102 @@ pub fn start(dir: &Path, passphrase: &[u8], cfg: RuntimeConfig) -> Result<(Clien
     ))
 }
 
+/// The stack of the threads that run a [`Host`]'s engine (as the CLI's: the handshake and the ratchet keep large frames, and
+/// the main thread of a Windows process has 1 MiB).
+const HOST_STACK: usize = 64 << 20;
+
+/// A runtime on threads of its own, for a host that has no async runtime (the desktop UI): [`spawn_host`] runs [`start`] and
+/// the loop there; calls go in without blocking the caller, answers and notices come back to closures.
+pub struct Host {
+    runtime: tokio::runtime::Handle,
+    caller: Caller,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Open the profile in `dir` under `passphrase` and run its runtime on a thread of its own ([`start`] and [`Serve::run`]);
+/// every [`Notice`] goes to `on_notice`, on the runtime's threads.
+///
+/// # Errors
+/// As [`start`]; [`Error::Unavailable`] if a thread or the runtime cannot be made.
+pub fn spawn_host(
+    dir: &Path,
+    passphrase: &[u8],
+    cfg: RuntimeConfig,
+    on_notice: impl Fn(Notice) + Send + 'static,
+) -> Result<Host, Error> {
+    let dir = dir.to_path_buf();
+    let passphrase = Zeroizing::new(passphrase.to_vec());
+    let (ready, started) = std::sync::mpsc::channel();
+    let thread = std::thread::Builder::new()
+        .stack_size(HOST_STACK)
+        .spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(HOST_STACK)
+                .build()
+            else {
+                let _ = ready.send(Err(Error::Unavailable));
+                return;
+            };
+            runtime.block_on(async move {
+                let (mut client, serve) = match start(&dir, &passphrase, cfg) {
+                    Ok(parts) => parts,
+                    Err(e) => {
+                        let _ = ready.send(Err(e));
+                        return;
+                    }
+                };
+                let _ = ready.send(Ok((tokio::runtime::Handle::current(), client.caller())));
+                let notices = tokio::spawn(async move {
+                    while let Some(notice) = client.next_event().await {
+                        on_notice(notice);
+                    }
+                });
+                serve.run().await;
+                let _ = notices.await;
+            });
+        })
+        .map_err(|_| Error::Unavailable)?;
+    match started.recv() {
+        Ok(Ok((runtime, caller))) => Ok(Host {
+            runtime,
+            caller,
+            thread: Some(thread),
+        }),
+        Ok(Err(e)) => {
+            let _ = thread.join();
+            Err(e)
+        }
+        Err(_) => Err(Error::Unavailable),
+    }
+}
+
+impl Host {
+    /// Send `call` to the loop and return at once; `reply` runs, on the runtime's threads, with its one answer (see
+    /// [`Caller::call`]).
+    pub fn call(&self, call: Call, reply: impl FnOnce(Result<Answer, Error>) + Send + 'static) {
+        let caller = self.caller.clone();
+        self.runtime
+            .spawn(async move { reply(caller.call(call).await) });
+    }
+}
+
+impl Drop for Host {
+    /// Shut the loop down (`Call::Quit`) and wait for its thread.
+    fn drop(&mut self) {
+        let caller = self.caller.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        self.runtime.spawn(async move {
+            let _ = caller.call(Call::Quit).await;
+            let _ = done.send(());
+        });
+        let _ = finished.recv();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

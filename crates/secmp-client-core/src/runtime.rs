@@ -1688,7 +1688,9 @@ pub struct Host {
 }
 
 /// Open the profile in `dir` under `passphrase` and run its runtime on a thread of its own ([`start`] and [`Serve::run`]);
-/// every [`Notice`] goes to `on_notice`, on the runtime's threads.
+/// every [`Notice`] goes to `on_notice`, on the runtime's threads. **The call blocks** until the runtime has started or
+/// failed (the profile's key derivation runs inside it); call it from a thread that may wait. Its own copy of the passphrase
+/// is dropped (zeroised) as soon as the runtime has started.
 ///
 /// # Errors
 /// As [`start`]; [`Error::Unavailable`] if a thread or the runtime cannot be made.
@@ -1713,7 +1715,10 @@ pub fn spawn_host(
                 return;
             };
             runtime.block_on(async move {
-                let (mut client, serve) = match start(&dir, &passphrase, cfg) {
+                let started = start(&dir, &passphrase, cfg);
+                // the passphrase is not needed once the runtime has started (or failed to)
+                drop(passphrase);
+                let (mut client, serve) = match started {
                     Ok(parts) => parts,
                     Err(e) => {
                         let _ = ready.send(Err(e));

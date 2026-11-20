@@ -60,6 +60,8 @@ pub enum CoreEvent {
     ContactRemoved(i64),
     /// A contact's key changed.
     KeyChanged(i64),
+    /// The core's loop stopped or could not work: nothing more is shown.
+    Stopped,
 }
 
 /// What comes back to the UI.
@@ -67,6 +69,8 @@ pub enum CoreEvent {
 pub enum Response {
     /// The profile is open.
     Opened,
+    /// The profile was created but could not be opened: it is to be unlocked.
+    NotOpened,
     /// The request did not go through.
     Failed(Failure),
     /// The contacts.
@@ -87,9 +91,14 @@ pub trait Backend: Send + 'static {
     fn handle(&mut self, request: Request, events: &Sink) -> Response;
 }
 
-/// The request queue is full.
+/// Why a request was not queued.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Busy;
+pub enum Refused {
+    /// [`QUEUE_DEPTH`] requests are waiting.
+    Full,
+    /// The bridge's thread is not running (it could not be started or has ended).
+    Stopped,
+}
 
 /// The UI's handle: requests go in, nothing comes out here.
 pub struct Bridge {
@@ -114,11 +123,12 @@ impl Bridge {
     /// Queue `request` and return at once.
     ///
     /// # Errors
-    /// [`Busy`] if [`QUEUE_DEPTH`] requests are waiting or the thread has ended.
-    pub fn submit(&self, request: Request) -> Result<(), Busy> {
+    /// [`Refused::Full`] if [`QUEUE_DEPTH`] requests are waiting; [`Refused::Stopped`] if the thread is not running.
+    pub fn submit(&self, request: Request) -> Result<(), Refused> {
         match self.requests.try_send(request) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => Err(Busy),
+            Err(TrySendError::Full(_)) => Err(Refused::Full),
+            Err(TrySendError::Disconnected(_)) => Err(Refused::Stopped),
         }
     }
 

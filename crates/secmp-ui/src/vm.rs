@@ -5,7 +5,7 @@
 
 use secmp_client_core::Zeroizing;
 
-use crate::bridge::{Bridge, CoreEvent, Request, Response};
+use crate::bridge::{Bridge, CoreEvent, Refused, Request, Response};
 use crate::locale::{self, Lang, key};
 
 /// The screens of part 1.
@@ -17,6 +17,20 @@ pub enum Screen {
     Unlock,
     /// The contact list of the open profile.
     Contacts,
+    /// The engine has stopped: nothing is shown but the message.
+    Stopped,
+}
+
+/// Whether the display is known to be protected against capture (docs/04 CS-1.2, CS-1.18). The model starts
+/// [`Locked`](Self::Locked); no content is shown until the state changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Protection {
+    /// The platform confirmed the exclusion from capture.
+    Verified,
+    /// Not verified (or not possible on this platform yet): contact names and everything later are not shown.
+    Locked,
+    /// The user chose, for this process only, to show content on an unprotected display (CS-1.9). Never persisted.
+    Overridden,
 }
 
 /// The scheduler mode a user picks (spec §10.2).
@@ -69,6 +83,8 @@ pub enum Failure {
     Unlock,
     /// The bridge's queue is full.
     Busy,
+    /// The engine or the bridge's thread is gone.
+    Stopped,
 }
 
 impl Failure {
@@ -82,6 +98,7 @@ impl Failure {
             Self::Create => key::ERROR_CREATE,
             Self::Unlock => key::ERROR_UNLOCK,
             Self::Busy => key::ERROR_BUSY,
+            Self::Stopped => key::ERROR_STOPPED,
         }
     }
 }
@@ -155,6 +172,7 @@ pub struct Vm {
     relay_lines: Vec<String>,
     failure: Option<Failure>,
     busy: bool,
+    protection: Protection,
 }
 
 impl Vm {
@@ -169,6 +187,48 @@ impl Vm {
             relay_lines: Vec::new(),
             failure: None,
             busy: false,
+            protection: Protection::Locked,
+        }
+    }
+
+    /// The protection state of the display.
+    #[must_use]
+    pub const fn protection(&self) -> Protection {
+        self.protection
+    }
+
+    /// Record what the platform check found (`Verified` after a confirmed exclusion, `Locked` for every other outcome).
+    pub fn set_protection(&mut self, protection: Protection) {
+        self.protection = protection;
+    }
+
+    /// Whether content (names, keys, later messages) may be rendered.
+    #[must_use]
+    pub const fn content_visible(&self) -> bool {
+        !matches!(self.protection, Protection::Locked)
+    }
+
+    /// Whether the per-session override of CS-1.9 is offered: only while locked, and not on Windows (where M8 has none).
+    #[must_use]
+    pub const fn override_available(&self) -> bool {
+        !cfg!(windows) && matches!(self.protection, Protection::Locked)
+    }
+
+    /// The user chose to show content on an unprotected display for this process. Held in memory only: nothing is written,
+    /// and no file, flag or environment variable can set it.
+    pub fn override_session(&mut self) {
+        if self.override_available() {
+            self.protection = Protection::Overridden;
+        }
+    }
+
+    /// The key of the indicator line in the locale tables.
+    #[must_use]
+    pub const fn indicator_key(&self) -> &'static str {
+        match self.protection {
+            Protection::Verified => key::INDICATOR_PROTECTED,
+            Protection::Locked => key::INDICATOR_LOCKED,
+            Protection::Overridden => key::INDICATOR_OVERRIDDEN,
         }
     }
 
@@ -219,6 +279,19 @@ impl Vm {
     /// The rows as the contacts screen shows them.
     #[must_use]
     pub fn rows(&self) -> Vec<RowText> {
+        if !self.content_visible() {
+            // fail closed: one placeholder per row, nothing of the contact
+            return self
+                .contacts
+                .iter()
+                .map(|_| RowText {
+                    name: locale::text(self.lang, key::CONTENT_LOCKED).to_owned(),
+                    key: String::new(),
+                    status: String::new(),
+                    verified: false,
+                })
+                .collect();
+        }
         self.contacts
             .iter()
             .map(|c| RowText {
@@ -244,10 +317,11 @@ impl Vm {
     }
 
     fn submit(&mut self, bridge: &Bridge, request: Request) {
-        match bridge.submit(request) {
-            Ok(()) => self.failure = None,
-            Err(_) => self.failure = Some(Failure::Busy),
-        }
+        self.failure = match bridge.submit(request) {
+            Ok(()) => None,
+            Err(Refused::Full) => Some(Failure::Busy),
+            Err(Refused::Stopped) => Some(Failure::Stopped),
+        };
     }
 
     /// The user asks for the relay's view of `mode` (the onboarding screen shows it before a profile exists).
@@ -310,12 +384,24 @@ impl Vm {
                 self.screen = Screen::Contacts;
                 self.submit(bridge, Request::Contacts);
             }
+            Response::NotOpened => {
+                // the profile exists: unlock it instead of creating it again
+                self.busy = false;
+                self.screen = Screen::Unlock;
+                self.failure = Some(Failure::Unlock);
+            }
             Response::Failed(failure) => {
                 self.busy = false;
                 self.failure = Some(failure);
             }
             Response::Contacts(rows) => self.contacts = rows,
             Response::RelayView(lines) => self.relay_lines = lines,
+            Response::Event(CoreEvent::Stopped) => {
+                self.busy = false;
+                self.screen = Screen::Stopped;
+                self.contacts.clear();
+                self.failure = Some(Failure::Stopped);
+            }
             Response::Event(
                 CoreEvent::ContactAdded(_)
                 | CoreEvent::ContactRemoved(_)

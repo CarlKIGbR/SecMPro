@@ -2465,7 +2465,37 @@ mod tests {
         Ok(())
     }
 
-    /// T4 (ADR-063): the normal dependencies of `secmp-ui` are within {`secmp-client-core`, `secmp-sys-desktop`, `slint`};
+    /// T2 (ADR-063; the testing backend cannot read a window title, so the component's source is checked): the title of the
+    /// window of `secmp-ui` is the literal `"SecMPro"`, assigned once, on every screen state — no property or binding feeds it.
+    #[test]
+    fn window_title_is_constant_product_name() -> Result<()> {
+        let src = repo_file("crates/secmp-ui/src/screens.rs")?;
+        let titles: Vec<&str> = src
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("title:") || l.starts_with("title :"))
+            .collect();
+        assert_eq!(titles, ["title: \"SecMPro\";"]);
+        // nothing sets a window title at run time
+        for file in [
+            "app.rs",
+            "probe.rs",
+            "capture.rs",
+            "vm.rs",
+            "core_backend.rs",
+            "bridge.rs",
+        ] {
+            let text = repo_file(&format!("crates/secmp-ui/src/{file}"))?;
+            assert!(
+                !text.contains("set_title") && !text.contains("with_title"),
+                "{file}"
+            );
+        }
+        Ok(())
+    }
+
+    /// T4 (ADR-063): the normal dependencies of `secmp-ui` are within {`secmp-client-core`, `secmp-sys-desktop`, `slint`,
+    /// `i-slint-common`};
     /// a manifest that adds `secmp-store` (or a dev-only crate as a normal dependency) is a finding naming it.
     #[test]
     fn ui_crate_dependencies_are_allowlisted() -> Result<()> {
@@ -2475,12 +2505,18 @@ mod tests {
             .map(|(_, v)| v.to_vec());
         assert_eq!(
             row,
-            Some(vec!["secmp-client-core", "secmp-sys-desktop", "slint"])
+            Some(vec![
+                "i-slint-common",
+                "secmp-client-core",
+                "secmp-sys-desktop",
+                "slint"
+            ])
         );
         let ok = metadata_fixture(&[
             ("secmp-ui", "secmp-client-core", "null"),
             ("secmp-ui", "secmp-sys-desktop", "null"),
             ("secmp-ui", "slint", "null"),
+            ("secmp-ui", "i-slint-common", "null"),
         ]);
         assert_eq!(
             normal_dependency_findings(&Workspace::parse(&ok)?),
@@ -2524,8 +2560,8 @@ mod tests {
             ("secmp-cli", &["tokio"]),
             ("secmp-testkit", &["serde_json", "tokio"]),
             // ADR-063
-            ("secmp-ui", &["slint"]),
-            ("secmp-sys-desktop", &["i-slint-common", "windows-sys"]),
+            ("secmp-ui", &["i-slint-common", "slint"]),
+            ("secmp-sys-desktop", &["windows-sys"]),
             // ADR-055
             ("secmp-store", &["rusqlite"]),
             (

@@ -6205,7 +6205,6 @@ dependencies = [
 name = "secmp-sys-desktop"
 version = "0.0.0"
 dependencies = [
- "i-slint-common",
  "windows-sys 0.61.2",
 ]
 
@@ -6257,6 +6256,7 @@ name = "secmp-ui"
 version = "0.0.0"
 dependencies = [
  "i-slint-backend-testing",
+ "i-slint-common",
  "secmp-client-core",
  "secmp-sys-desktop",
  "slint",

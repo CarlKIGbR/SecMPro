@@ -8219,6 +8219,66 @@ mod tests {
 
     /// The pin-edit variants of `deleting_or_neutering_a_pinned_job_is_a_finding` (LF text).
     fn pin_edit_variants(ci: &str) -> Vec<(&'static str, String)> {
+        let mut all = pin_edit_variants_base(ci);
+        all.extend(pin_edit_variants_f37(ci));
+        all
+    }
+
+    /// F-37 (M8 U0): the same edits for the jobs `miri` and `coverage` (deleted, gate line, condition, delegation, verdict need).
+    fn pin_edit_variants_f37(ci: &str) -> Vec<(&'static str, String)> {
+        vec![
+            // the miri job deleted, its gate line or condition changed, its delegation or verdict need dropped
+            ("delete miri", without_job(ci, "miri")),
+            (
+                "miri without --strict",
+                ci.replacen("cargo xtask step --strict miri", "cargo xtask step miri", 1),
+            ),
+            (
+                "linux-full without --delegated miri",
+                ci.replacen(" --delegated miri", "", 1),
+            ),
+            (
+                "miri skipped on schedule",
+                ci.replacen(
+                    "  miri:\n    if: github.event_name == 'schedule' || ",
+                    "  miri:\n    if: ",
+                    1,
+                ),
+            ),
+            (
+                "ci-verdict without miri",
+                ci.replacen("      - miri\n", "", 1),
+            ),
+            // the coverage job deleted, its gate line or condition changed, its delegation or verdict need dropped
+            ("delete coverage", without_job(ci, "coverage")),
+            (
+                "coverage without --strict",
+                ci.replacen(
+                    "cargo xtask step --strict coverage",
+                    "cargo xtask step coverage",
+                    1,
+                ),
+            ),
+            (
+                "linux-full without --delegated coverage",
+                ci.replacen(" --delegated coverage", "", 1),
+            ),
+            (
+                "coverage skipped on schedule",
+                ci.replacen(
+                    "  coverage:\n    if: github.event_name == 'schedule' || ",
+                    "  coverage:\n    if: ",
+                    1,
+                ),
+            ),
+            (
+                "ci-verdict without coverage",
+                ci.replacen("      - coverage\n", "", 1),
+            ),
+        ]
+    }
+
+    fn pin_edit_variants_base(ci: &str) -> Vec<(&'static str, String)> {
         {
             let variants = [
                 ("v01 delete mutants", without_job(ci, "mutants")),

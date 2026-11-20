@@ -7,7 +7,7 @@ Status: v1 baseline (2026-09-25). Normative for every crate. `CLAUDE.md` summari
 - Rust stable, pinned exactly in `rust-toolchain.toml` (`channel = "1.9x.y"`, `components = ["clippy", "rustfmt", "llvm-tools"]`, `targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]`). MSRV = the pinned version. Upgrades are their own PR with an ADR note.
 - Edition 2024. One Cargo workspace; all versions in `[workspace.dependencies]`; every crate uses `workspace = true` for deps and lints.
 - `Cargo.lock` committed. `cargo build --locked` everywhere. `cargo vendor` for release builds.
-- `secmp-ui` (Slint) loads fontconfig at run time: `secmp-sys-desktop` enables the Cargo feature `fontconfig-dlopen` of `i-slint-common` (Slint's text stack), and `cargo xtask` additionally sets `RUST_FONTCONFIG_DLOPEN=1` for every child cargo; the variable alone is not enough (the `fontique` code needs the feature). No fontconfig development files are needed, a bare `cargo build` works. ADR-063.
+- `secmp-ui` (Slint) loads fontconfig at run time: `secmp-ui` depends on `i-slint-common` (exact version of `slint`) only to enable its Cargo feature `fontconfig-dlopen`, which Slint does not forward. No fontconfig development files and no environment variable are needed; a bare `cargo build` works. ADR-063.
 
 ## 2. Lints and code rules (`[workspace.lints]`)
 

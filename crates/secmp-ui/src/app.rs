@@ -15,7 +15,7 @@ use crate::capture;
 use crate::core_backend::CoreBackend;
 use crate::locale::{self, Lang, key};
 use crate::screens::{ContactRowData, MainWindow};
-use crate::vm::{ModeChoice, Screen, Vm, name_is_valid};
+use crate::vm::{ModeChoice, Protection, Screen, Vm, name_is_valid};
 
 struct Shell {
     ui: MainWindow,
@@ -54,7 +54,12 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
         Screen::Onboarding => 0,
         Screen::Unlock => 1,
         Screen::Contacts => 2,
+        Screen::Stopped => 3,
     });
+    ui.set_indicator_text(t(vm.indicator_key()));
+    ui.set_indicator_locked(!matches!(vm.protection(), Protection::Verified));
+    ui.set_show_override(vm.override_available());
+    ui.set_override_text(t(key::OVERRIDE_SHOW));
     ui.set_tagline(t(key::APP_TAGLINE));
     ui.set_busy(vm.busy());
     ui.set_busy_text(t(key::WORKING));
@@ -120,6 +125,12 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
             render(&sh.ui, &sh.vm);
         });
     });
+    ui.on_override_requested(|| {
+        with_shell(|sh| {
+            sh.vm.override_session();
+            render(&sh.ui, &sh.vm);
+        });
+    });
     render(ui, &vm);
     SHELL.with(|cell| {
         *cell.borrow_mut() = Some(Shell {
@@ -134,6 +145,14 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
 fn deliver(response: Response) {
     with_shell(|sh| {
         sh.vm.apply(response, &sh.bridge);
+        render(&sh.ui, &sh.vm);
+    });
+}
+
+/// Take the result of the platform check on the UI thread.
+fn deliver_protection(protection: Protection) {
+    with_shell(|sh| {
+        sh.vm.set_protection(protection);
         render(&sh.ui, &sh.vm);
     });
 }
@@ -215,18 +234,16 @@ pub fn run(root: &Path, direct: bool) -> ExitCode {
     }
     wire(&ui, vm, bridge);
 
-    let refused = std::rc::Rc::new(std::cell::Cell::new(false));
-    let flag = refused.clone();
-    let weak = ui.as_weak();
-    capture::arm(&ui, move |outcome| {
-        if outcome.is_err() {
-            flag.set(true);
-            if let Some(ui) = weak.upgrade() {
-                let _ = ui.hide();
-            }
-            let _ = slint::quit_event_loop();
-        }
+    // Windows: the check runs once the native window exists and decides the protection state; every other outcome, and every
+    // other platform, leaves the display locked (fail closed)
+    let armed = capture::arm(&ui, |outcome| {
+        let protection = outcome.map_or(Protection::Locked, |report| report.protection());
+        let _ = slint::invoke_from_event_loop(move || deliver_protection(protection));
     });
+    if armed.is_err() {
+        // the model starts locked and stays so; the window is still shown, without content
+        deliver_protection(Protection::Locked);
+    }
     if ui.show().is_err() {
         return ExitCode::FAILURE;
     }
@@ -237,7 +254,7 @@ pub fn run(root: &Path, direct: bool) -> ExitCode {
     if let Some(shell) = shell {
         shell.bridge.shutdown();
     }
-    if ran.is_ok() && !refused.get() {
+    if ran.is_ok() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

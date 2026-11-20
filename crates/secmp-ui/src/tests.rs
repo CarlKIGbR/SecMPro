@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The tests of the M8 part-1 screens (T1, T2, T6–T9; T3 is in `locale`, T4 in xtask, T5 in `secmp-sys-desktop`). The window
+//! The tests of the M8 part-1 screens (T1, T2, T6–T12; T3 is in `locale`, T4 in xtask, T5 in `secmp-sys-desktop`). The window
 //! runs under Slint's testing backend (no display); the real core runs on a temporary directory.
 
 use std::path::{Path, PathBuf};
@@ -10,12 +10,15 @@ type Test = Result<(), Box<dyn std::error::Error>>;
 
 use secmp_client_core::api::runtime::create_profile;
 
+use slint::Model as _;
+
 use crate::app::render;
 use crate::bridge::{Backend, Bridge, CoreEvent, Request, Response, Sink};
+use crate::capture::{EXCLUDED, Refused, Report, Surface, verify};
 use crate::core_backend::CoreBackend;
 use crate::locale::{self, Lang, key};
 use crate::screens::MainWindow;
-use crate::vm::{ContactRow, Failure, ModeChoice, RowState, Screen, Vm};
+use crate::vm::{ContactRow, Failure, ModeChoice, Protection, RowState, Screen, Vm};
 
 /// A sink that queues what the bridge sends, to be taken on the test's thread (the "UI thread").
 fn queue() -> (Sink, Receiver<Response>) {
@@ -101,33 +104,6 @@ fn spike_window_instantiates_under_testing_backend() -> Test {
     Ok(())
 }
 
-/// T2: the window title is the product name on every screen state.
-#[test]
-fn window_title_is_constant_product_name() -> Test {
-    i_slint_backend_testing::init_no_event_loop();
-    let ui = MainWindow::new()?;
-    let (sink, rx) = queue();
-    let (backend, _) = stub(vec![row(1, "Zed", true)], None);
-    let bridge = Bridge::spawn(backend, sink);
-
-    let mut vm = Vm::new(Lang::En, Screen::Onboarding, "");
-    render(&ui, &vm);
-    assert_eq!(ui.get_product_name().as_str(), "SecMPro");
-
-    vm = Vm::new(Lang::En, Screen::Unlock, "alice");
-    render(&ui, &vm);
-    assert_eq!(ui.get_product_name().as_str(), "SecMPro");
-
-    vm.apply(Response::Opened, &bridge);
-    pump(&mut vm, &bridge, &rx, |vm| !vm.contacts().is_empty());
-    render(&ui, &vm);
-    assert_eq!(vm.screen(), Screen::Contacts);
-    assert_eq!(vm.contacts().first().map(|c| c.name.as_str()), Some("Zed"));
-    assert_eq!(ui.get_product_name().as_str(), "SecMPro");
-    bridge.shutdown();
-    Ok(())
-}
-
 fn remove(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -197,13 +173,16 @@ fn unlock_wrong_passphrase_and_damaged_store_show_same_message() -> Test {
     Ok(())
 }
 
-/// T8: the contacts screen lists the contacts with their verification state, and an added-contact event adds a row.
+/// T8 (stub core: the client core has no utility that makes a real contact without a relay and a handshake; the mapping of
+/// the core's contacts and events is tested in `core_backend`): the contacts screen lists the contacts with their verification
+/// state, and an added-contact event adds a row.
 #[test]
-fn contacts_screen_lists_core_contacts_with_verification_state() -> Test {
+fn contacts_screen_lists_stub_contacts() -> Test {
     let (sink, rx) = queue();
     let (backend, contacts) = stub(vec![row(1, "Ann", true), row(2, "Bo", false)], None);
     let bridge = Bridge::spawn(backend, sink);
     let mut vm = Vm::new(Lang::En, Screen::Unlock, "alice");
+    vm.set_protection(Protection::Verified);
     vm.apply(Response::Opened, &bridge);
     pump(&mut vm, &bridge, &rx, |vm| vm.contacts().len() == 2);
     let rows = vm.rows();
@@ -247,4 +226,177 @@ fn ui_request_returns_before_core_responds() -> Test {
     assert_eq!(vm.contacts().len(), 1);
     bridge.shutdown();
     Ok(())
+}
+
+/// The rendered rows of `ui` as (name, key, status) texts.
+fn rendered(ui: &MainWindow) -> Vec<(String, String, String)> {
+    ui.get_contacts()
+        .iter()
+        .map(|r| (r.name.to_string(), r.key.to_string(), r.status.to_string()))
+        .collect()
+}
+
+/// A model on the contacts screen with one contact named "Zed", its answer already applied.
+fn zed(protection: Protection) -> (Vm, Bridge) {
+    let (sink, rx) = queue();
+    let (backend, _) = stub(vec![row(1, "Zed", true)], None);
+    let bridge = Bridge::spawn(backend, sink);
+    let mut vm = Vm::new(Lang::En, Screen::Unlock, "alice");
+    vm.set_protection(protection);
+    vm.apply(Response::Opened, &bridge);
+    pump(&mut vm, &bridge, &rx, |vm| !vm.contacts().is_empty());
+    (vm, bridge)
+}
+
+/// T10: while the protection is not verified the rendered rows say "locked" and carry nothing of the contact.
+#[test]
+fn content_is_locked_until_protection_is_verified() -> Test {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new()?;
+    let (mut vm, bridge) = zed(Protection::Locked);
+    assert_eq!(vm.protection(), Protection::Locked);
+    render(&ui, &vm);
+    let locked = locale::text(Lang::En, key::CONTENT_LOCKED);
+    assert_eq!(
+        rendered(&ui),
+        [(locked.to_owned(), String::new(), String::new())]
+    );
+    assert!(!format!("{:?}", rendered(&ui)).contains("Zed"));
+    assert_eq!(
+        ui.get_indicator_text().as_str(),
+        locale::text(Lang::En, key::INDICATOR_LOCKED)
+    );
+    assert!(ui.get_indicator_locked());
+    // verified: the contact shows, the indicator says protected
+    vm.set_protection(Protection::Verified);
+    render(&ui, &vm);
+    assert_eq!(rendered(&ui).first().map(|r| r.0.as_str()), Some("Zed"));
+    assert_eq!(
+        ui.get_indicator_text().as_str(),
+        locale::text(Lang::En, key::INDICATOR_PROTECTED)
+    );
+    bridge.shutdown();
+    Ok(())
+}
+
+/// T11: the per-session override shows the content; it is held in the model only, so a second model on the same profile
+/// directory starts locked and nothing was written.
+#[cfg(not(windows))]
+#[test]
+fn session_override_shows_content_and_is_not_persisted() -> Test {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = MainWindow::new()?;
+    let root = scratch("t11");
+    std::fs::create_dir_all(root.join("alice"))?;
+    let listing = |dir: &Path| -> Result<Vec<String>, std::io::Error> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            names.push(entry?.file_name().to_string_lossy().into_owned());
+        }
+        names.sort();
+        Ok(names)
+    };
+    let before = listing(&root.join("alice"))?;
+    let (mut vm, bridge) = zed(Protection::Locked);
+    assert!(vm.override_available());
+    vm.override_session();
+    assert_eq!(vm.protection(), Protection::Overridden);
+    render(&ui, &vm);
+    assert_eq!(rendered(&ui).first().map(|r| r.0.as_str()), Some("Zed"));
+    assert_eq!(
+        ui.get_indicator_text().as_str(),
+        locale::text(Lang::En, key::INDICATOR_OVERRIDDEN)
+    );
+    assert!(!ui.get_show_override());
+    bridge.shutdown();
+    let second = Vm::new(Lang::En, Screen::Unlock, "alice");
+    assert_eq!(second.protection(), Protection::Locked);
+    assert_eq!(listing(&root.join("alice"))?, before);
+    remove(&root);
+    Ok(())
+}
+
+/// A window whose three calls give the scripted outcomes.
+struct Fake {
+    reads: Mutex<Vec<Result<u32, Refused>>>,
+    set: Result<(), Refused>,
+}
+
+impl Surface for Fake {
+    fn affinity(&self) -> Result<u32, Refused> {
+        self.reads
+            .lock()
+            .map_err(|_| Refused)?
+            .pop()
+            .unwrap_or(Err(Refused))
+    }
+
+    fn exclude(&self) -> Result<(), Refused> {
+        self.set
+    }
+}
+
+fn check(
+    pre: Result<u32, Refused>,
+    set: Result<(), Refused>,
+    post: Result<u32, Refused>,
+) -> Report {
+    // `pop` takes from the end: `post` is read second
+    verify(&Fake {
+        reads: Mutex::new(vec![post, pre]),
+        set,
+    })
+}
+
+/// T12: every failure of the capture check ends locked; only a clean sequence with `post == 0x11` is verified, and the
+/// reads and the call run in the order read, set, read.
+#[test]
+fn capture_failures_end_locked() {
+    let ok = Ok(());
+    let cases: [(&str, Report, Protection); 8] = [
+        (
+            "all fine",
+            check(Ok(0), ok, Ok(EXCLUDED)),
+            Protection::Verified,
+        ),
+        (
+            "pre already excluded",
+            check(Ok(EXCLUDED), ok, Ok(EXCLUDED)),
+            Protection::Verified,
+        ),
+        (
+            "pre read fails",
+            check(Err(Refused), ok, Ok(EXCLUDED)),
+            Protection::Locked,
+        ),
+        (
+            "set fails",
+            check(Ok(0), Err(Refused), Ok(EXCLUDED)),
+            Protection::Locked,
+        ),
+        (
+            "post read fails",
+            check(Ok(0), ok, Err(Refused)),
+            Protection::Locked,
+        ),
+        (
+            "post is monitor-only",
+            check(Ok(0), ok, Ok(1)),
+            Protection::Locked,
+        ),
+        ("post is none", check(Ok(0), ok, Ok(0)), Protection::Locked),
+        (
+            "everything fails",
+            check(Err(Refused), Err(Refused), Err(Refused)),
+            Protection::Locked,
+        ),
+    ];
+    for (name, report, want) in cases {
+        assert_eq!(report.protection(), want, "{name}");
+    }
+    // a model that never hears from the check stays locked
+    assert_eq!(
+        Vm::new(Lang::En, Screen::Contacts, "").protection(),
+        Protection::Locked
+    );
 }

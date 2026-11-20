@@ -108,13 +108,19 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
             "tokio",
         ],
     ),
-    // ADR-063 (M8): the desktop UI — the client core, the desktop system layer and the toolkit, nothing else
+    // ADR-063 (M8): the desktop UI — the client core, the desktop system layer, the toolkit and `i-slint-common` (only its feature
+    // `fontconfig-dlopen`), nothing else
     (
         "secmp-ui",
-        &["secmp-client-core", "secmp-sys-desktop", "slint"],
+        &[
+            "i-slint-common",
+            "secmp-client-core",
+            "secmp-sys-desktop",
+            "slint",
+        ],
     ),
-    // ADR-063: the Windows display-affinity bindings and `i-slint-common` (only its feature `fontconfig-dlopen`)
-    ("secmp-sys-desktop", &["i-slint-common", "windows-sys"]),
+    // ADR-063: the Windows display-affinity bindings
+    ("secmp-sys-desktop", &["windows-sys"]),
 ];
 
 /// The targets over which that closure is taken and united: the `[graph] targets` of `deny.toml` (the two
@@ -196,7 +202,7 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
     ),
     (
         "RUSTSEC-2026-0542",
-        "ADR-051 Am. 10: humantime 2.4.0 — unmaintained (chronotope/chrono#1768), no patched version; pulled only via arti-client 0.46.0 (directly and through humantime-serde 1.1.1 from tor-config, tor-circmgr and other tor-* 0.46.0) ← secmp-transport ← secmp-client-core ← secmp-cli (since M7-C1, ADR-051 Am. 10 correction); not secmp-relay, secmp-ui, secmp-crypto, secmp-proto; no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Arti drops humantime, whichever is first",
+        "ADR-051 Am. 10: humantime 2.4.0 — unmaintained (chronotope/chrono#1768), no patched version; pulled only via arti-client 0.46.0 (directly and through humantime-serde 1.1.1 from tor-config, tor-circmgr and other tor-* 0.46.0) ← secmp-transport ← secmp-client-core ← secmp-cli (since M7-C1, ADR-051 Am. 10 correction); and, since M8 (ADR-063), secmp-ui through secmp-client-core; not secmp-relay, secmp-crypto, secmp-proto; no known vulnerability; re-evaluate at the pre-release hardening phase (ADR-062) or when Arti drops humantime, whichever is first",
     ),
     (
         "RUSTSEC-2026-0543",

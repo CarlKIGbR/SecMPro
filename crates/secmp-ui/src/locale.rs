@@ -89,15 +89,28 @@ pub mod key {
     pub const ERROR_BUSY: &str = "error.busy";
     /// Something is under way.
     pub const WORKING: &str = "working";
+    /// A row of the contact list while the display is not protected.
+    pub const CONTENT_LOCKED: &str = "content.locked";
+    /// The indicator while the display is not verified as protected.
+    pub const INDICATOR_LOCKED: &str = "indicator.locked";
+    /// The indicator while the display is verified as protected.
+    pub const INDICATOR_PROTECTED: &str = "indicator.protected";
+    /// The indicator while the user chose to show content on an unprotected display.
+    pub const INDICATOR_OVERRIDDEN: &str = "indicator.overridden";
+    /// The button that shows content on an unprotected display for this session.
+    pub const OVERRIDE_SHOW: &str = "override.show";
+    /// The engine ended or its thread is gone.
+    pub const ERROR_STOPPED: &str = "error.stopped";
 }
 
 use key::{
     APP_TAGLINE, CONTACTS_EMPTY, CONTACTS_REINVITE, CONTACTS_REMOVED, CONTACTS_TITLE,
-    CONTACTS_UNNAMED, CONTACTS_UNVERIFIED, CONTACTS_VERIFIED, ERROR_BUSY, ERROR_CREATE,
-    ERROR_EMPTY_PASS, ERROR_MISMATCH, ERROR_NAME, ERROR_UNLOCK, MODE_BALANCED, MODE_LOWBW,
+    CONTACTS_UNNAMED, CONTACTS_UNVERIFIED, CONTACTS_VERIFIED, CONTENT_LOCKED, ERROR_BUSY,
+    ERROR_CREATE, ERROR_EMPTY_PASS, ERROR_MISMATCH, ERROR_NAME, ERROR_STOPPED, ERROR_UNLOCK,
+    INDICATOR_LOCKED, INDICATOR_OVERRIDDEN, INDICATOR_PROTECTED, MODE_BALANCED, MODE_LOWBW,
     MODE_STRICT, ONBOARDING_CREATE, ONBOARDING_MODE, ONBOARDING_NAME, ONBOARDING_PASS,
-    ONBOARDING_PASS_AGAIN, ONBOARDING_RELAY_VIEW, ONBOARDING_TITLE, UNLOCK_BUTTON, UNLOCK_PASS,
-    UNLOCK_TITLE, WORKING,
+    ONBOARDING_PASS_AGAIN, ONBOARDING_RELAY_VIEW, ONBOARDING_TITLE, OVERRIDE_SHOW, UNLOCK_BUTTON,
+    UNLOCK_PASS, UNLOCK_TITLE, WORKING,
 };
 
 /// The English table.
@@ -133,6 +146,18 @@ pub static EN: &[(&str, &str)] = &[
     (ERROR_UNLOCK, "The profile could not be unlocked."),
     (ERROR_BUSY, "Still working on the last request."),
     (WORKING, "Working…"),
+    (CONTENT_LOCKED, "Content hidden"),
+    (INDICATOR_LOCKED, "Unprotected display — content locked"),
+    (INDICATOR_PROTECTED, "Protected display"),
+    (
+        INDICATOR_OVERRIDDEN,
+        "Unprotected display — shown by your choice for this session",
+    ),
+    (OVERRIDE_SHOW, "Show content anyway (this session only)"),
+    (
+        ERROR_STOPPED,
+        "The engine has stopped. Close and start the application again.",
+    ),
 ];
 
 /// The German table.
@@ -168,6 +193,21 @@ pub static DE: &[(&str, &str)] = &[
     (ERROR_UNLOCK, "Das Profil konnte nicht entsperrt werden."),
     (ERROR_BUSY, "Die letzte Anfrage läuft noch."),
     (WORKING, "Bitte warten …"),
+    (CONTENT_LOCKED, "Inhalt verborgen"),
+    (INDICATOR_LOCKED, "Ungeschützte Anzeige — Inhalt gesperrt"),
+    (INDICATOR_PROTECTED, "Geschützte Anzeige"),
+    (
+        INDICATOR_OVERRIDDEN,
+        "Ungeschützte Anzeige — auf Ihren Wunsch für diese Sitzung angezeigt",
+    ),
+    (
+        OVERRIDE_SHOW,
+        "Inhalt trotzdem anzeigen (nur diese Sitzung)",
+    ),
+    (
+        ERROR_STOPPED,
+        "Die Verarbeitung wurde beendet. Schließen Sie die Anwendung und starten Sie sie neu.",
+    ),
 ];
 
 /// The table of `lang`.

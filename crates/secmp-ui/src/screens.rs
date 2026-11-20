@@ -15,8 +15,7 @@ slint::slint! {
 
     export component MainWindow inherits Window {
         // the product name; the title never carries content (docs/04)
-        out property <string> product-name: "SecMPro";
-        title: product-name;
+        title: "SecMPro";
         preferred-width: 600px;
         preferred-height: 600px;
         min-width: 420px;
@@ -25,6 +24,12 @@ slint::slint! {
         // 0 onboarding, 1 unlock, 2 contacts
         in property <int> screen: 0;
         in property <string> tagline;
+        // the protection indicator is always shown; the override button only while the display is locked
+        in property <string> indicator-text;
+        in property <bool> indicator-locked: true;
+        in property <bool> show-override: false;
+        in property <string> override-text;
+        callback override-requested();
         in property <bool> busy: false;
         in property <string> busy-text;
         in property <string> error-text;
@@ -65,7 +70,7 @@ slint::slint! {
             alignment: start;
 
             Text {
-                text: root.product-name;
+                text: "SecMPro";
                 font-size: 24px;
                 font-weight: 700;
                 accessible-role: text;
@@ -73,6 +78,17 @@ slint::slint! {
             Text {
                 text: root.tagline;
                 accessible-role: text;
+            }
+            Text {
+                text: root.indicator-text;
+                color: root.indicator-locked ? #b3261e : #1b6e2d;
+                font-weight: 700;
+                wrap: word-wrap;
+                accessible-role: text;
+            }
+            if root.show-override : Button {
+                text: root.override-text;
+                clicked => { root.override-requested(); }
             }
             Text {
                 text: root.error-text;

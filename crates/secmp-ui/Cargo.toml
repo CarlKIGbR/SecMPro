@@ -14,6 +14,8 @@ publish.workspace = true
 secmp-client-core.workspace = true
 secmp-sys-desktop.workspace = true
 slint.workspace = true
+# ADR-063: only to switch on its feature `fontconfig-dlopen` (fontconfig is loaded at run time); no code uses the crate.
+i-slint-common.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true

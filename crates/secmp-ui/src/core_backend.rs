@@ -48,8 +48,11 @@ fn row_of(contact: &Contact) -> ContactRow {
 
 /// The event of the UI's list for a notice of the runtime, if the list cares.
 fn event_of(notice: &Notice) -> Option<CoreEvent> {
-    let Notice::Event(stamped) = notice else {
-        return None;
+    let stamped = match notice {
+        Notice::Event(stamped) => stamped,
+        // the loop ended or could not work: the UI shows nothing more (fail closed)
+        Notice::Stopped | Notice::Unavailable => return Some(CoreEvent::Stopped),
+        _ => return None,
     };
     match stamped.event {
         Event::ContactAdded(ContactId(id)) => Some(CoreEvent::ContactAdded(id)),
@@ -114,8 +117,9 @@ impl CoreBackend {
         {
             return UiResponse::Failed(Failure::Create);
         }
+        // from here the profile exists: a failure to open it leads to the unlock screen, not to "could not be created"
         if self.open(name, pass, events).is_err() {
-            return UiResponse::Failed(Failure::Create);
+            return UiResponse::NotOpened;
         }
         let settings = Settings {
             mode: mode_of(mode),
@@ -125,9 +129,12 @@ impl CoreBackend {
             .host
             .as_ref()
             .map(|host| ask(host, Call::Core(Request::SetSettings(settings))));
-        match set {
-            Some(Ok(_)) => UiResponse::Opened,
-            _ => UiResponse::Failed(Failure::Create),
+        if let Some(Ok(_)) = set {
+            UiResponse::Opened
+        } else {
+            // the mode was not stored: close the runtime, the profile is unlocked by the user (default mode Strict)
+            self.host = None;
+            UiResponse::NotOpened
         }
     }
 
@@ -164,5 +171,64 @@ impl Backend for CoreBackend {
                     .collect(),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use secmp_client_core::api::Stamped;
+
+    fn contact(id: i64, state: ContactState, verified: bool) -> Contact {
+        Contact {
+            id: ContactId(id),
+            fingerprint: [0xAB; 32],
+            verified,
+            display_name: Some("Ann".to_owned()),
+            state,
+        }
+    }
+
+    /// Every contact state of the core has its row state; name, verification and a key prefix of the fixed length carry over.
+    #[test]
+    fn row_of_maps_every_contact_state() {
+        for (state, want) in [
+            (ContactState::Active, RowState::Active),
+            (ContactState::ReinviteRequired, RowState::ReinviteRequired),
+            (ContactState::Removed, RowState::Removed),
+        ] {
+            let row = row_of(&contact(7, state, true));
+            assert_eq!(row.state, want);
+            assert_eq!(row.id, 7);
+            assert_eq!(row.name, "Ann");
+            assert!(row.verified);
+            assert_eq!(row.key, "abababababababab");
+        }
+        let mut nameless = contact(1, ContactState::Active, false);
+        nameless.display_name = None;
+        assert_eq!(row_of(&nameless).name, "");
+    }
+
+    /// The contact events and the loop's end map to the UI's events; others do not.
+    #[test]
+    fn event_of_maps_contact_events() {
+        let at = |event| Notice::Event(Stamped { at_ms: 0, event });
+        assert_eq!(
+            event_of(&at(Event::ContactAdded(ContactId(3)))),
+            Some(CoreEvent::ContactAdded(3))
+        );
+        assert_eq!(
+            event_of(&at(Event::ContactRemoved(ContactId(4)))),
+            Some(CoreEvent::ContactRemoved(4))
+        );
+        assert_eq!(
+            event_of(&at(Event::KeyChanged(ContactId(5)))),
+            Some(CoreEvent::KeyChanged(5))
+        );
+        assert_eq!(event_of(&at(Event::InvitationUsedElsewhere)), None);
+        assert_eq!(event_of(&Notice::Stopped), Some(CoreEvent::Stopped));
+        assert_eq!(event_of(&Notice::Unavailable), Some(CoreEvent::Stopped));
+        assert_eq!(event_of(&Notice::Refused), None);
     }
 }

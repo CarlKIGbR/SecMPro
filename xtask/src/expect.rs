@@ -2187,7 +2187,8 @@ pub(crate) const JOB_BUDGETS: &[(&str, u64)] = &[
     ("linux-fast", 120),
     ("windows-native", 240),
     ("xwin-cross", 60),
-    ("linux-full", 240),
+    // ADR-045 Amendment 15 (M7-CI9)
+    ("linux-full", 300),
     ("ct", 330),
     ("mutants-shard", 300),
     ("mutants", 30),

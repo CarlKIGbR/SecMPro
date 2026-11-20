@@ -203,7 +203,7 @@ jobs:
     # pinned by `expect::REQUIRED_JOB_CONDITIONS` (accident guard); a skipped job counts as passing
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -5,18 +5,20 @@
 //! recomputes every entry from `sizes.rs`, the `secmp-crypto` constants and live encodings, so the table cannot
 //! drift from the structures it bounds.
 
-use secmp_crypto::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing};
+use secmp_crypto::{
+    AEAD_TAG_LEN, COM_LEN, MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing,
+};
 use secmp_proto::sizes::{
     CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN, FRAME_LEN,
     FRAME_PLAINTEXT_LEN, HANDSHAKE_CELL_PT_LEN, HEADER_LEN, HOST_MAX, HS1_LEN, HYBRID_SIG_LEN,
-    ID_LEN, INNER_LEN, LINK_BLOB_LEN, LINKDATA_PADDED_LEN, MAX_MSG_BYTES, MLKEM1024_CT_LEN,
-    MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN, RELAYINFO_LEN,
-    X25519_PK_LEN,
+    ID_LEN, INNER_LEN, KEYCHANGE_BODY_LEN, LINK_BLOB_LEN, LINKDATA_PADDED_LEN, MAX_MSG_BYTES,
+    MLKEM1024_CT_LEN, MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN,
+    RELAYINFO_LEN, X25519_PK_LEN,
 };
 use secmp_proto::tr::RatchetState;
 use secmp_proto::tr::content::Inbox;
 use secmp_proto::wire::Period;
-use secmp_proto::wire::cell::{Cell, HandshakeBody, RouteDescriptor};
+use secmp_proto::wire::cell::{Cell, HandshakeBody, RouteDescriptor, RouteUpdateBody};
 use secmp_proto::wire::inv::{Direct, Host, InvitationV1, Onion, Profile, RelayRef};
 use secmp_proto::wire::signed;
 use secmp_proto::{Encode, Error};
@@ -86,6 +88,41 @@ fn link_entries() -> [(&'static str, usize); 6] {
     ]
 }
 
+/// TEST-SPEC-M7 FZ-01, FZ-02 (ADR-053 items 5, 6 and Appendix): the two store targets, and FZ-04 (Phase B). A sealed record and a backup
+/// file carry `N` (24), `COM` and the tag around their plaintext.
+fn m7_entries() -> Vec<(&'static str, usize)> {
+    let seal = sum(&[NONCE_LEN, COM_LEN, AEAD_TAG_LEN]);
+    // ver ‖ salt ‖ params ‖ bwrap (N' ‖ COM ‖ MK_bk ‖ tag) ‖ section table (count ‖ {tag ‖ len u32} × 4)
+    let header = sum(&[1, 16, 12, sum(&[seal, 32]), 1, 4 * 5]);
+    assert_eq!(header, 154);
+    // FZ-04 (Phase B): one round is `n` (1), at most 128 fetched ids of 2 bytes, `k` (1) and at most 8 spent indices of 1
+    let round = sum(&[1, 128 * 2, 1, 8]);
+    assert_eq!(round, 266);
+    vec![
+        // FZ-05 (M7 FZ): an encoding error leaves 0, which the table comparison refuses
+        control_entry().unwrap_or(("client_control_rows", 0)),
+        // at most 16 rounds
+        ("invitation_queue_retention", round.saturating_mul(16)),
+        // mode, then the magic, the header and the body seal around a body of the 64 KiB seed cap (ADR-052)
+        ("backup_import", sum(&[1, 13, header, seal, 65_536])),
+        // table, col_len, column, row_len, row key, mode, then the largest record (`RatchetStateV1` at its maximum
+        // bounds the fixed part) sealed
+        (
+            "store_record_open",
+            sum(&[
+                1,
+                1,
+                U8_MAX_LEN,
+                1,
+                U8_MAX_LEN,
+                1,
+                RatchetState::MAX_ENCODED_LEN,
+                seal,
+            ]),
+        ),
+    ]
+}
+
 /// The structured relay targets (M5 Phase B): the longest input the harness reads.
 fn relay_entries() -> [(&'static str, usize); 2] {
     // the longest command: opcode, cmd_seq byte, count byte, 12 FETCH_MULTI entries of (key byte, ack byte)
@@ -144,9 +181,27 @@ fn m6_entries() -> [(&'static str, usize); 4] {
     ]
 }
 
+/// FZ-05 (M7 FZ): the bound's largest CONTROL row is a `RouteUpdate` (tag 1) of one route (lists at one element, as
+/// every entry; up to 255 routes also decode, HB-9) of an unknown kind with a full blob; a marker row is 25 bytes, an
+/// overlap row 68 and a `KeyChange` row 1 + 5390. The input is the mode, the tag and the body.
+fn control_entry() -> Result<(&'static str, usize), Error> {
+    let control = RouteUpdateBody {
+        routes: vec![RouteDescriptor::Unknown {
+            kind: 2,
+            blob: Zeroizing::new(vec![0; MAX_MSG_BYTES]),
+        }],
+    }
+    .encode()?
+    .len();
+    assert!(sum(&[1, KEYCHANGE_BODY_LEN]) < control && 68 < control);
+    assert_eq!(control, 65_540);
+    Ok(("client_control_rows", sum(&[1, 1, control])))
+}
+
 #[test]
 fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
-    // the largest `HandshakeBody`: a 64-byte name with an avatar, one route of an unknown kind with a full blob
+    // the bound's largest `HandshakeBody` (one route, as every list; up to 255 routes also decode, HB-9): a 64-byte
+    // name with an avatar, one route of an unknown kind with a full blob
     let handshake = HandshakeBody {
         profile: Profile::new(&"a".repeat(NAME_MAX), Some([0; 32]))?,
         routes: vec![RouteDescriptor::Unknown {
@@ -244,7 +299,7 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
         ),
     ]
     .into_iter()
-    .chain(m5_entries())
+    .chain(m5_entries().chain(m7_entries()))
     .collect();
     assert_eq!(handshake, 65_642);
     assert_eq!(send, 4_146);

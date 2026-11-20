@@ -1,0 +1,11 @@
+head e7a84dc7e9e5a947caaed7e1ff888e6579e8884f
+command: cargo test --locked -p secmp-client-core --features kat --lib -- --test-threads=1 switch_
+temporary edit: sed -i '929s#(r, !e.done || stranded.contains(&r))#(r, !e.done)#' crates/secmp-client-core/src/sessions/actor.rs
+25:thread 'sessions::actor::tests::switch_resends_settled_control_in_window' (3503572) panicked at crates/secmp-client-core/src/sessions/actor.rs:2859:9:
+26:Q238: settled control content stranded on the old queue is planned again
+31:thread '<unnamed>' (3503574) panicked at crates/secmp-client-core/src/sessions/tests.rs:2319:9:
+32:assertion `left == right` failed: Q225: the row is written again before a cell of the new attempt is sealed
+33:  left: 0
+34: right: 1
+42:test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 222 filtered out; finished in 2.03s
+cause: without the stranded check, a switch plans only unsettled control content, so settled content still in the old queue's last QUEUE_CAPACITY cells is not re-sent.

@@ -1,0 +1,24 @@
+cargo xtask step coverage at HEAD c420953 (WEISUNG M7-B-4 B-7; modell=claude-sonnet-5-5); tail of the output, raw log target/wip/coverage.log
+
+### gate `coverage`
+
+| item | verdict |
+|---|---|
+| status | PASS (1124 s) |
+| line 1 | secmp-cli: 5/6 lines = 83.3 % (min 80 %) |
+| line 2 | secmp-client-core: 10249/10722 lines = 95.6 % (min 90 %) |
+| line 3 | secmp-crypto: 2783/2802 lines = 99.3 % (min 90 %) |
+| line 4 | secmp-proto: 7090/7260 lines = 97.7 % (min 90 %) |
+| line 5 | secmp-relay: 2846/2918 lines = 97.5 % (min 80 %) |
+| line 6 | secmp-store: 5256/5470 lines = 96.1 % (min 90 %) |
+| line 7 | secmp-sys-desktop: no code |
+| line 8 | secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %) |
+| line 9 | secmp-testkit: 4508/4818 lines = 93.6 % (min 80 %) |
+| line 10 | secmp-transport: 2271/2525 lines = 89.9 % (min 80 %) |
+| line 11 | secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured) |
+
+
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: false) ===
+   7 coverage        PASS       1124s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: 10249/10722 lines = 95.6 % (min 90 %); secmp-crypto: 2783/2802 lines = 99.3 % (min 90 %); secmp-proto: 7090/7260 lines = 97.7 % (min 90 %); secmp-relay: 2846/2918 lines = 97.5 % (min 80 %); secmp-store: 5256/5470 lines = 96.1 % (min 90 %); secmp-sys-desktop: no code; secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %); secmp-testkit: 4508/4818 lines = 93.6 % (min 80 %); secmp-transport: 2271/2525 lines = 89.9 % (min 80 %); secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+step: PASS

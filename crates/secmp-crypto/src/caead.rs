@@ -21,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::kdf::hkdf_expand;
 use crate::label::Label;
 use crate::nonce::Nonce24;
-use crate::secret::SecretBytes;
+use crate::secret::{LockedSecret, SecretBytes};
 
 /// Length of the commitment `COM`.
 pub const COM_LEN: usize = 32;
@@ -31,9 +31,9 @@ pub const AEAD_TAG_LEN: usize = 16;
 pub const NONCE_LEN: usize = 24;
 
 /// `(K_enc, COM)` of spec §3.4.
-fn derive(k: &SecretBytes<32>, n: &[u8; NONCE_LEN]) -> Result<(XChaCha20Poly1305, [u8; COM_LEN])> {
+fn derive(k: &[u8; 32], n: &[u8; NONCE_LEN]) -> Result<(XChaCha20Poly1305, [u8; COM_LEN])> {
     // (K_enc ‖ COM) = HKDF-Expand(PRK = K, info = "SecMP-commit/1" ‖ N, L = 64)
-    let okm = hkdf_expand::<64>(k.expose_secret(), Label::Commit, &[n])?;
+    let okm = hkdf_expand::<64>(k, Label::Commit, &[n])?;
     let (k_enc, com) = okm
         .expose_secret()
         .split_first_chunk::<32>()
@@ -51,6 +51,23 @@ impl Caead {
     /// # Errors
     /// [`Error::Rejected`] only if the AEAD refuses the length (more than 2^38 bytes).
     pub fn seal(k: &SecretBytes<32>, nonce: Nonce24, ad: &[u8], p: &[u8]) -> Result<Vec<u8>> {
+        Self::seal_key(k.expose_secret(), nonce, ad, p)
+    }
+
+    /// [`Caead::seal`] under a key in a locked page (CS-2.2): the same bytes.
+    ///
+    /// # Errors
+    /// As [`Caead::seal`].
+    pub fn seal_locked(
+        k: &LockedSecret<32>,
+        nonce: Nonce24,
+        ad: &[u8],
+        p: &[u8],
+    ) -> Result<Vec<u8>> {
+        Self::seal_key(k.expose_secret(), nonce, ad, p)
+    }
+
+    fn seal_key(k: &[u8; 32], nonce: Nonce24, ad: &[u8], p: &[u8]) -> Result<Vec<u8>> {
         let n = nonce.into_bytes();
         let (aead, com) = derive(k, &n)?;
         let mut out =
@@ -73,6 +90,28 @@ impl Caead {
     /// not match, or the tag does not verify.
     pub fn open(
         k: &SecretBytes<32>,
+        nonce: &[u8; NONCE_LEN],
+        ad: &[u8],
+        com_c: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        Self::open_key(k.expose_secret(), nonce, ad, com_c)
+    }
+
+    /// [`Caead::open`] under a key in a locked page (CS-2.2): the same result, the same uniform error.
+    ///
+    /// # Errors
+    /// As [`Caead::open`].
+    pub fn open_locked(
+        k: &LockedSecret<32>,
+        nonce: &[u8; NONCE_LEN],
+        ad: &[u8],
+        com_c: &[u8],
+    ) -> Result<Zeroizing<Vec<u8>>> {
+        Self::open_key(k.expose_secret(), nonce, ad, com_c)
+    }
+
+    fn open_key(
+        k: &[u8; 32],
         nonce: &[u8; NONCE_LEN],
         ad: &[u8],
         com_c: &[u8],
@@ -115,7 +154,7 @@ impl Caead {
         k: &SecretBytes<32>,
         nonce: &[u8; NONCE_LEN],
     ) -> Result<(XChaCha20Poly1305, [u8; COM_LEN])> {
-        derive(k, nonce)
+        derive(k.expose_secret(), nonce)
     }
 }
 
@@ -236,6 +275,27 @@ mod tests {
         }
         assert_eq!(
             Caead::open(&key(4)?, &nb, b"", &sealed).err(),
+            Some(Error::Rejected)
+        );
+        Ok(())
+    }
+
+    /// A-4 §2 (extra test): the locked-key forms seal and open the bytes of [`Caead::seal`]/[`Caead::open`].
+    #[test]
+    fn locked_key_forms_equal_seal_and_open() -> Result<()> {
+        let k = SecretBytes::<32>::from_slice(&[0x11; 32])?;
+        let lk = LockedSecret::<32>::from_slice(&[0x11; 32])?;
+        let n = *Nonce24::from_link_counter(7).as_bytes();
+        let sealed = Caead::seal(&k, Nonce24::from_link_counter(7), b"ad", b"record")?;
+        let sealed_locked =
+            Caead::seal_locked(&lk, Nonce24::from_link_counter(7), b"ad", b"record")?;
+        assert_eq!(sealed, sealed_locked);
+        assert_eq!(
+            Caead::open_locked(&lk, &n, b"ad", &sealed)?.as_slice(),
+            b"record"
+        );
+        assert_eq!(
+            Caead::open_locked(&lk, &n, b"other", &sealed).err(),
             Some(Error::Rejected)
         );
         Ok(())

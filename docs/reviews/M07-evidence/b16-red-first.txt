@@ -1,0 +1,17 @@
+head ba61e4be343a4c737d564ce8d4d6100ffe3f773f
+temporary edit (not committed): sed -i '705s|^        message_time(ts_ms, app.expire_after)?;$|        // RED message_time(ts_ms, app.expire_after)?;|' crates/secmp-store/src/backup.rs
+command: cargo test --locked -p secmp-store --features kat --lib -- --test-threads=1 decode_refuses_unrepresentable_message_time import_refuses_unrepresentable_message_time wrapping_and_header_kat > target/b16-red.txt 2>&1
+result: 0 passed; 3 failed
+thread 'backup::tests::decode_refuses_unrepresentable_message_time' panicked at crates/secmp-store/src/backup.rs:2047:13:
+assertion `left == right` failed: ts = 2^63, expire_after 0
+  left: None
+ right: Some(Unlock)
+thread 'backup::tests::import_refuses_unrepresentable_message_time' panicked at crates/secmp-store/src/backup.rs:2084:13:
+assertion `left == right` failed: ts = 2^63, expire_after 0
+  left: Err(Unavailable)
+ right: Err(Unlock)
+wrapping_and_header_kat: Error: "a reject case failed with another error"
+cause: without the check in decode, a body with ts + 1000 * expire_after > i64::MAX is accepted by decode, and import_bytes fails later with Unavailable (i64::try_from in expire_at) instead of the uniform Unlock.
+== ref/ (REF-M7-store4)
+E   secmp_ref.cases.TableMismatch: a reject case was accepted
+1 error in 2.56s

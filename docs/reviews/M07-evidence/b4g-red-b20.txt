@@ -1,0 +1,14 @@
+head 840e72b073faa3bdb578f1a194c4de0df653c73e
+command: cargo test --locked -p secmp-client-core --features kat --lib -- --test-threads=1 route_back_to_a_queue_in_overlap_registers_nothing route_to_the_current_queue_registers_nothing route_back_after_its_overlap_registers_once new_routes_register_once_each restart_after_a_stale_route_registers_the_current_queue
+temporary edit: sed -i '336s#if self.send_targets#if false && self.send_targets#' crates/secmp-client-core/src/hub.rs
+16:thread '<unnamed>' (3502235) panicked at crates/secmp-client-core/src/hub.rs:1582:13:
+18:  left: [[9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]]
+19: right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]
+25:thread '<unnamed>' (3502240) panicked at crates/secmp-client-core/src/hub.rs:1474:13:
+27:  left: [1, 1, 1]
+28: right: [1, 1, 0]
+33:thread '<unnamed>' (3502242) panicked at crates/secmp-client-core/src/hub.rs:1495:13:
+35:  left: (1, 1)
+36: right: (1, 0)
+45:test result: FAILED. 2 passed; 3 failed; 0 ignored; 0 measured; 217 filtered out; finished in 8.07s
+cause: with the send_targets check disabled, a stale RouteUpdate naming an already registered physical queue registers it again (second AddSend, switch, stored route not written back).

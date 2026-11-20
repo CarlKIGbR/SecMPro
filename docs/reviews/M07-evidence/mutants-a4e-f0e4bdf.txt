@@ -1,0 +1,34 @@
+mutants of the A-4e diff (WEISUNG M7-A4e §6.0; `gates::mutants_args` first-run form, excludes and skips as A-3b §6; one package at a time, `timeout 1800`)
+diff: `git diff 9d0f22f9280ebf911e1794635068e9258e01c308..HEAD -- crates/secmp-crypto/src crates/secmp-store/src` (9d0f22f = HEAD the guard saw)
+
+first run on f0e4bdf318267abf5e183351138b2dfa39fb2896 (the §5 commit): 1150-line diff
+  secmp-crypto: c/m/u/t = 0/0/1/0 of 1  ( WARN No mutants were viable: perhaps there is a problem with building in a scratch directory. Look in mutants.out/log/* for more information.; the one mutant, `LockedSecret::with_fill -> Ok(Default::default())`, is unviable: `LockedSecret` has no `Default`)
+  secmp-store : c/m/u/t = 49/3/28/0 of 80  (80 mutants tested in 4m: 3 missed, 49 caught, 28 unviable)
+    MISSED   crates/secmp-store/src/backup.rs:163:20: replace match guard !p.as_os_str().is_empty() with true in resolved in 1s build + 3s test
+    MISSED   crates/secmp-store/src/store.rs:70:9: replace DbKey::has_db -> bool with true in 1s build + 2s test
+    MISSED   crates/secmp-store/src/store.rs:299:53: replace || with && in Store::open_inner in 0s build + 2s test
+
+killers (commit `test(crypto,store): killers for the A-4e mutants`): store::tests::incomplete_keys_open_nothing (has_db, the `||` of open_inner), backup::tests::bare_file_name_resolves_against_the_current_dir (the `resolved` match guard)
+
+rerun after the killers (HEAD e88fd227ee07697315890658f68de164f7bbd219):
+  secmp-store : c/m/u/t = 52/0/28/0 of 80  (80 mutants tested in 4m: 52 caught, 28 unviable)
+  secmp-crypto: unchanged (0/0/1/0 of 1; no test or product change in `secmp-crypto` after the first run)
+
+existing `docs/mutants-accepted.md` rows of the touched files re-verified (A-4c lesson): `secmp-crypto/src/secret.rs:59` (`SecretBytes::drop`) unchanged line; `secmp-store/src/wrap.rs:123:9` -> `:133:9` (`Unlocked::lock`, moved by `kdf_error`/imports; `cargo mutants --list -f crates/secmp-store/src/wrap.rs` shows `wrap.rs:133:9: replace Unlocked::lock with ()`); the row is updated in `docs(m7): mutants-accepted wrap.rs row follows the code (A-4e)`; the mutant is not in the A-4e diff so the run does not list it
+
+--- tail of the store first-run log ---
+mutants on HEAD f0e4bdf318267abf5e183351138b2dfa39fb2896
+# diff: git diff 9d0f22f..HEAD -- crates/secmp-crypto/src crates/secmp-store/src > target/m7-a4e-mutants.diff (1150 lines)
+== run crypto
+$ timeout 1800 cargo mutants --no-shuffle -j 3 --output target/m7-a4e-mutants-crypto --features kat --caught --unviable --package secmp-crypto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt --in-diff target/m7-a4e-mutants.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+exit status: 0
+unviable crates/secmp-crypto/src/secret.rs:121:9: replace LockedSecret<N>::with_fill -> Result<Self> with Ok(Default::default()) in 0s build
+1 mutant tested in 2m: 1 unviable
+ WARN No mutants were viable: perhaps there is a problem with building in a scratch directory. Look in mutants.out/log/* for more information.
+== run store
+$ timeout 1800 cargo mutants --no-shuffle -j 3 --output target/m7-a4e-mutants-store --features kat --caught --unviable --package secmp-store --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt --in-diff target/m7-a4e-mutants.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+exit status: 2
+unviable crates/secmp-store/src/wrap.rs:327:5: replace open_mk -> Result<Unlocked> with Ok(Default::default()) in 0s build
+caught   crates/secmp-store/src/wrap.rs:88:9: delete match arm secmp_crypto::Error::Unavailable in kdf_error in 0s build + 2s test
+80 mutants tested in 4m: 3 missed, 49 caught, 28 unviable
+

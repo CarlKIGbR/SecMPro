@@ -1,29 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! `secmp-cli` — the headless, scriptable SecMPro client.
-//!
-//! **Responsibility.** Profile, invitation, contact, send/tail and status commands with JSON-lines output for
-//! integration/E2E tests and operations (M7). Output timestamps are a sanctioned `SystemTime::now` site
-//! (docs/06 §2).
-//!
-//! **Allowed dependencies** (docs/02 §3): `secmp-client-core` (and the crates below it); no key material
-//! handling outside the core's API.
-//!
-//! **Status.** M0 skeleton — prints its name and version and exits (the M0 hello-world binary).
+//! The `secmp-cli` binary: collects the arguments and exits with the code [`secmp_cli::run`] returns.
 #![forbid(unsafe_code)]
 
-use std::io::Write as _;
 use std::process::ExitCode;
 
-/// M0 hello-world: print the package name and version, nothing else.
 fn main() -> ExitCode {
-    let banner = concat!(
-        env!("CARGO_PKG_NAME"),
-        " ",
-        env!("CARGO_PKG_VERSION"),
-        " (M0 skeleton: no functionality)"
-    );
-    match writeln!(std::io::stdout().lock(), "{banner}") {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::FAILURE,
+    let mut args = Vec::new();
+    for arg in std::env::args_os().skip(1) {
+        // an argument that is not UTF-8 is a usage error, never a panic
+        args.push(arg.into_string().unwrap_or_default());
     }
+    ExitCode::from(secmp_cli::run(&args))
 }

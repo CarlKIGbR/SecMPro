@@ -1,0 +1,31 @@
+cargo xtask ci-fast at HEAD 5d2be5f (WEISUNG M7-B3b §5; modell=claude-opus-5-5); working tree: HEAD + the uncommitted
+§5 docs (M07-report.md, OPEN-M7.md, OPEN-M7-decided.md, evidence files), no code change. Summary form (Q174);
+raw log target/fable/b3b-ci-fast.log.
+
+     Summary [  13.505s] 1305 tests run: 1305 passed, 0 skipped
+     Summary [   0.121s] 164 tests run: 164 passed, 0 skipped
+     Summary [   9.499s] 97 tests run: 97 passed, 0 skipped
+     Summary [   0.303s] 133 tests run: 133 passed, 0 skipped
+     Summary [   2.584s] 390 tests run: 390 passed, 0 skipped
+     Summary [  11.384s] 192 tests run: 192 passed, 0 skipped
+     Summary [   1.489s] 89 tests run: 89 passed, 0 skipped
+     Summary [  70.203s] 39 tests run: 39 passed (1 slow), 0 skipped
+     Summary [   0.117s] 22 tests run: 22 passed, 0 skipped
+     Summary [   0.467s] 209 tests run: 209 passed, 0 skipped
+     Summary [ 896.553s] 292 tests run: 292 passed (22 slow), 0 skipped
+
+=== ci-fast summary (host x86_64-unknown-linux-gnu, strict: false) ===
+   1 fmt             PASS          1s  rustfmt: no changes
+   2 clippy          PASS          6s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          1s  unsafe-attrs: 43 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 157 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 458 files; relay-events: 7 names as expect::RELAY_TRACE_ALLOW; normal-deps: 6 crates within expect::NORMAL_DEPENDENCY_ALLOW; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted; tracked exemptions elsewhere: 328; workflows: 5 files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani, fuzz, harness, ci-verdict) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, delegations mapped (accident guard, not tamper-proof); large-files: 3161 tracked files, none over 2 MiB except 5 allowlisted (hard cap 8 MiB); mutants-profile: mutants-harness starts m0_early::* first (priority 100)
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          1s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted; tracked exemptions elsewhere: 328
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141, RUSTSEC-2026-0387
+   3 cooldown        PASS         26s  567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: ctutils 0.4.4, 8 days
+   4 nextest         PASS         23s  cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat); both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step)
+   4 doctest         PASS          1s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        128s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-store, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend; property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions)
+   5 harness         PASS        897s  secmp-testkit harness binary; property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions)
+ci-fast: PASS
+exit status: 0

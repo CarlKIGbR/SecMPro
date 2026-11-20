@@ -122,7 +122,7 @@ fn ci_verdict_fails_on_skipped_cancelled_or_failed() {
     for (job, result) in [
         ("ct", "skipped"),
         ("kani", "cancelled"),
-        ("mutants", "failure"),
+        ("fuzz", "failure"),
     ] {
         let results: Vec<(&str, &str)> = all_success()
             .into_iter()

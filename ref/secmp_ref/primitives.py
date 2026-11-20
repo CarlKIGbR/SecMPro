@@ -13,6 +13,7 @@ import nacl.bindings
 import nacl.exceptions
 from cryptography.hazmat.primitives import constant_time, hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF, HKDFExpand
 from dilithium_py.ml_dsa import ML_DSA_65
 from kyber_py.ml_kem import ML_KEM_768, ML_KEM_1024
@@ -70,6 +71,17 @@ def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
 def hkdf(salt: bytes, ikm: bytes, info: bytes, length: int) -> bytes:
     """HKDF-SHA-256 = Expand(Extract(salt, ikm), info, length) (RFC 5869 §2)."""
     return HKDF(hashes.SHA256(), length, salt, info).derive(ikm)
+
+
+# ---------------------------------------------------------------------------------------------
+# Argon2id (RFC 9106 §3.1, v = 0x13) (cryptography; qualified in tests/test_kat_argon2.py)
+
+
+def argon2id(password: bytes, salt: bytes, t: int, m_kib: int, p: int, length: int,
+             secret: bytes = b"", ad: bytes = b"") -> bytes:
+    """Argon2id with t passes, m_kib KiB of memory, p lanes; secret (K) and ad (X) default to empty."""
+    return Argon2id(salt=salt, length=length, iterations=t, lanes=p, memory_cost=m_kib,
+                    ad=ad or None, secret=secret or None).derive(password)
 
 
 # ---------------------------------------------------------------------------------------------

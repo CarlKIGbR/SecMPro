@@ -1,0 +1,355 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+────────────
+ Nextest run ID 9a6e0bc7-7e31-4cf4-8d43-870c1b9ca567 with nextest profile: mutants-harness
+    Starting 349 tests across 8 binaries (33 tests skipped)
+        PASS [   0.005s] (  1/349) secmp-client-core clock::tests::system_clock_reads_real_time
+        PASS [   0.005s] (  2/349) secmp-client-core clock::tests::manual_clock_moves_only_when_told
+        PASS [   0.006s] (  3/349) secmp-client-core clock::tests::system_clock_counts_from_its_origin
+        PASS [   0.006s] (  4/349) secmp-client-core scheduler::core::pure::tests::tick_time_never_wraps
+        PASS [   0.006s] (  5/349) secmp-client-core scheduler::core::pure::tests::rr_walks_from_the_pointer_and_pings_when_nothing_is_due
+        PASS [   0.007s] (  6/349) secmp-testkit::harness m0_early::tokio_clock_follows_the_paused_runtime
+        PASS [   0.008s] (  7/349) secmp-client-core scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs
+        PASS [   0.006s] (  8/349) secmp-testkit ks::tests::a_gap_that_spans_the_split_is_in_neither_sample
+        PASS [   0.007s] (  9/349) secmp-testkit ks::tests::a_handshake_sized_unit_in_the_middle_is_not_a_frame
+        PASS [   0.006s] ( 10/349) secmp-testkit ks::tests::frames_of_one_slot_are_one_departure
+        PASS [   0.016s] ( 11/349) secmp-client-core scheduler::core::pure::tests::unwritten_max_is_twice_the_ticks_in_flight
+        PASS [   0.010s] ( 12/349) secmp-testkit ks::tests::control_slot_with_a_wrong_sized_unit_is_not_met
+        PASS [   0.016s] ( 13/349) secmp-client-core scheduler::params::tests::rate_bound_is_integer
+        PASS [   0.016s] ( 14/349) secmp-client-core scheduler::core::pure::tests::flight_allows_two
+        PASS [   0.016s] ( 15/349) secmp-testkit kat::tests::wrong_count_is_malformed
+        PASS [   0.017s] ( 16/349) secmp-client-core scheduler::run::tests::late_delivery_of_an_old_generation_commits_nothing
+        PASS [   0.011s] ( 17/349) secmp-testkit ks::tests::control_slot_with_two_units_is_not_met
+        PASS [   0.011s] ( 18/349) secmp-testkit ks::tests::control_slot_without_handshake_is_not_met
+        PASS [   0.017s] ( 19/349) secmp-client-core scheduler::run::tests::m6_mut_deferred_queues_every_notification_in_order
+        PASS [   0.007s] ( 20/349) secmp-testkit kat::tests::tally_summary
+        PASS [   0.017s] ( 21/349) secmp-client-core scheduler::params::tests::backoff_caps_follow_the_table
+        PASS [   0.017s] ( 22/349) secmp-client-core timing::tests::rejection_round_is_unbiased_at_the_edge
+        PASS [   0.017s] ( 23/349) secmp-testkit kat::tests::wycheproof_shape
+        PASS [   0.017s] ( 24/349) secmp-testkit kat::tests::acvp_shape_and_fields
+        PASS [   0.007s] ( 25/349) secmp-client-core timing::tests::uniform_stays_in_range_and_counts_draws
+        PASS [   0.017s] ( 26/349) secmp-client-core timing::tests::os_source_draws
+        PASS [   0.010s] ( 27/349) secmp-testkit ks::tests::eight_one_frame_control_slots_stay_met
+        PASS [   0.018s] ( 28/349) secmp-testkit kat::tests::hex_codec
+        PASS [   0.018s] ( 29/349) secmp-client-core scheduler::run::tests::m6_mut_link_io_stop_aborts_both_tasks
+        PASS [   0.009s] ( 30/349) secmp-testkit ks::tests::ks_tool_detects_planted_dependence
+        PASS [   0.005s] ( 31/349) secmp-testkit two_clients::cli::tests::defaults_and_flags
+        PASS [   0.006s] ( 32/349) secmp-testkit ks::tests::two_sample_known_values
+        PASS [   0.006s] ( 33/349) secmp-testkit ks::tests::the_cut_drops_a_straddling_departure_whole
+        PASS [   0.006s] ( 34/349) secmp-testkit two_clients::cli::tests::refuses_what_cannot_run
+        PASS [   0.006s] ( 35/349) secmp-testkit two_clients::run::control_slot_tests::control_slots_match_driver_and_key_never_the_key_alone
+        PASS [   0.006s] ( 36/349) secmp-testkit two_clients::cli::tests::script_grammar
+        PASS [   0.006s] ( 37/349) secmp-testkit two_clients::script_tests::hex_round_trip_and_refusals
+        PASS [   0.007s] ( 38/349) secmp-testkit two_clients::script_tests::the_schedule_of_the_active_hour
+        PASS [   0.006s] ( 39/349) secmp-testkit two_clients::tests::two_clients_engine_panic_exits_101
+        PASS [   0.024s] ( 40/349) secmp-testkit kat::tests::external_files_are_present
+        PASS [   0.007s] ( 41/349) secmp-testkit two_clients::script_tests::message_ids_are_distinct_per_direction_and_ordinal
+        PASS [   0.009s] ( 42/349) secmp-testkit ks::tests::short_connection_with_clean_frames_stays_met
+        PASS [   0.009s] ( 43/349) secmp-testkit ks::tests::short_connection_with_a_three_frame_departure_is_not_met
+        PASS [   0.010s] ( 44/349) secmp-testkit ks::tests::real_run_shape_is_met
+        PASS [   0.010s] ( 45/349) secmp-testkit ks::tests::link_slot_with_only_wrong_sized_units_is_not_met
+        PASS [   0.010s] ( 46/349) secmp-testkit ks::tests::short_connection_with_a_4353_byte_unit_is_not_met
+        PASS [   0.011s] ( 47/349) secmp-testkit ks::tests::one_frame_departure_on_a_link_slot_is_not_met
+        PASS [   0.011s] ( 48/349) secmp-testkit ks::tests::ks_tool_flags_an_extra_frame_in_a_slot
+        PASS [   0.008s] ( 49/349) secmp-testkit::harness m6_activity::tick_path_reads_no_outbox
+        PASS [   0.007s] ( 50/349) secmp-testkit::harness m6_control::control_op_delay_from_related_op
+        PASS [   0.026s] ( 51/349) secmp-testkit ks::tests::ks_tool_detects_shift_under_realistic_jitter
+        PASS [   0.016s] ( 52/349) secmp-testkit::harness m6_control::control_op_delay_uniform_1_to_60_min
+        PASS [   0.029s] ( 53/349) secmp-testkit two_clients::script_tests::payloads_are_seeded_and_cover_the_range
+        PASS [   0.091s] ( 54/349) secmp-testkit::harness m0_early::async_session_send_writes_the_request_the_relay_answers
+        PASS [   0.007s] ( 55/349) secmp-testkit::harness m6_control::pool_admission_respects_fetch_multi_limit
+        PASS [   0.124s] ( 56/349) secmp-client-core scheduler::conversation::tests::message_key_digest_not_recorded_when_persist_fails
+        PASS [   0.116s] ( 57/349) secmp-testkit ks::tests::ks_tool_accepts_equal_distributions
+        PASS [   0.136s] ( 58/349) secmp-testkit::harness m0_early::async_handshake_writes_its_records
+        PASS [   0.129s] ( 59/349) secmp-testkit::harness m6_channel::prepare_seals_before_write
+        PASS [   0.136s] ( 60/349) secmp-testkit::harness m6_channel::fetch_multi_error_and_cells_same_queue_rejected
+        PASS [   0.138s] ( 61/349) secmp-testkit::harness m6_channel::closed_before_relayinfo_is_its_own_outcome
+        PASS [   0.139s] ( 62/349) secmp-testkit::harness m6_channel::prepared_frames_written_in_counter_order
+        PASS [   0.008s] ( 63/349) secmp-testkit::harness m6_control::rejected_pool_handout_keeps_spare
+        PASS [   0.007s] ( 64/349) secmp-testkit::harness m6_control::related_control_ops_never_start_within_a_minute
+        PASS [   0.145s] ( 65/349) secmp-testkit::harness m6_channel::pipelined_responses_matched_in_order
+        PASS [   0.137s] ( 66/349) secmp-testkit::harness m6_control::control_op_retried_after_link_failure
+        PASS [   0.007s] ( 67/349) secmp-testkit::harness m6_driver::blocking_worker_runs_jobs_on_the_blocking_pool
+        PASS [   0.180s] ( 68/349) secmp-client-core scheduler::conversation::tests::message_key_digests_track_each_seal
+        PASS [   0.135s] ( 69/349) secmp-testkit::harness m6_control::owner_status_reissues_identical_put
+        PASS [   0.015s] ( 70/349) secmp-testkit::harness m6_driver::driver_has_no_wall_clock
+        PASS [   0.111s] ( 71/349) secmp-testkit::harness m6_control::pool_queue_fetched_at_pool_period
+        PASS [   0.230s] ( 72/349) secmp-testkit::harness invitation::harness_invitation_and_handshake_over_relay
+        PASS [   0.268s] ( 73/349) secmp-testkit::harness m0_early::period_of_gives_the_deadline_of_the_first_tick
+        PASS [   0.042s] ( 74/349) secmp-testkit::harness m6_driver::only_refuses_the_other_transport
+        PASS [   0.263s] ( 75/349) secmp-testkit::harness m6_control::control_op_draws_from_timing_rng
+        PASS [   0.149s] ( 76/349) secmp-testkit::harness m6_control::prompt_ops_are_not_delayed
+        PASS [   0.202s] ( 77/349) secmp-testkit::harness m6_control::pool_handout_recreates_link_with_announced_period
+        PASS [   0.326s] ( 78/349) secmp-testkit::harness m6_channel::pipelined_mismatch_closes_link
+        PASS [   0.359s] ( 79/349) secmp-testkit::harness m6_control::control_ops_run_on_one_shot_links
+        PASS [   0.168s] ( 80/349) secmp-testkit::harness m6_driver::queue_transport_async_signature
+        PASS [   0.382s] ( 81/349) secmp-testkit::harness m6_driver::async_session_equals_sync_session
+        PASS [   0.426s] ( 82/349) secmp-testkit::harness m6_control::pool_keeps_two_spares_per_relay
+        PASS [   0.494s] ( 83/349) secmp-testkit::harness m6_control::pool_handout_needs_no_queue_new
+        PASS [   0.461s] ( 84/349) secmp-testkit::harness m6_driver::async_transport_matches_m5_outcomes
+        PASS [   0.699s] ( 85/349) secmp-testkit::harness invitation::harness_scenario_api_is_public_for_two_clients
+        PASS [   0.451s] ( 86/349) secmp-testkit::harness m6_driver::stream_provider_impls
+        PASS [   0.721s] ( 87/349) secmp-testkit::harness m6_channel::frames_reassembled_from_any_chunking
+        PASS [   0.500s] ( 88/349) secmp-testkit::harness m6_driver_io::direct_blackhole_link_is_closed_within_idle_bound
+        PASS [   0.704s] ( 89/349) secmp-testkit::harness m6_driver::driver_releases_unused_cells
+        PASS [   0.868s] ( 90/349) secmp-testkit two_clients::tests::control_slots_are_exactly_the_pool_connections
+        PASS [   0.572s] ( 91/349) secmp-testkit::harness m6_driver_fix::driver_queue_recreation_does_not_ack_undelivered_cells
+        PASS [   0.487s] ( 92/349) secmp-testkit::harness m6_driver_io::driver_closes_a_link_whose_write_is_pending_at_its_next_tick
+        PASS [   0.730s] ( 93/349) secmp-testkit::harness m6_driver::driver_wakes_at_the_fetch_lead
+        PASS [   0.477s] ( 94/349) secmp-testkit::harness m6_driver_io::driver_hanging_writer_does_not_delay_other_links
+        PASS [   0.512s] ( 95/349) secmp-testkit::harness m6_driver_io::driver_hanging_writer_does_not_shift_staggered_tick
+        PASS [   1.224s] ( 96/349) secmp-testkit::harness m6_control::control_ops_leave_scheduled_traces_unchanged
+        PASS [   0.081s] ( 97/349) secmp-testkit::harness m6_followups::h01_identical_queue_new_answers_ok
+        PASS [   0.734s] ( 98/349) secmp-testkit::harness m6_driver_io::driver_partial_write_is_completed_before_work
+        PASS [   0.998s] ( 99/349) secmp-testkit::harness m6_driver_io::driver_close_reconnect_race_discards_old_completion
+        PASS [   0.008s] (100/349) secmp-testkit::harness m6_followups::scheduler_core_has_no_tokio
+        PASS [   0.735s] (101/349) secmp-testkit::harness m6_driver_io::driver_pending_flush_same_tick
+        PASS [   0.485s] (102/349) secmp-testkit::harness m6_driver_io::flush_wait_ends_at_the_completion_of_the_pass_writes
+        PASS [   0.146s] (103/349) secmp-testkit::harness m6_mut::async_link_is_open_after_connect_and_ping
+        PASS [   0.536s] (104/349) secmp-testkit::harness m6_driver_io::receive_throughput_per_fetch_is_measured
+        PASS [   0.266s] (105/349) secmp-testkit::harness m6_followups::harness_cap_setters_take_effect
+        PASS [   0.869s] (106/349) secmp-testkit::harness m6_driver_io::driver_reports_no_unmatched_written
+        PASS [   0.005s] (107/349) secmp-testkit::harness m6_mut::change_mode_to_strict_over_tor_gives_per_queue_links
+        PASS [   0.145s] (108/349) secmp-testkit::harness m6_mut::async_link_reports_closed_when_the_stream_ends
+        PASS [   1.451s] (109/349) secmp-testkit::harness m6_driver::driver_resolves_every_connect
+        PASS [   0.146s] (110/349) secmp-testkit::harness m6_mut::async_ping_at_the_frame_limit_fails_locally_and_leaves_the_session_open
+        PASS [   0.686s] (111/349) secmp-testkit::harness m6_driver_io::flush_wait_does_not_wait_for_an_earlier_pass_write
+        PASS [   0.145s] (112/349) secmp-testkit::harness m6_mut::async_send_closes_the_session_when_the_bound_falls_inside_a_command
+        PASS [   0.007s] (113/349) secmp-testkit::harness m6_mut::control_done_removes_the_operation
+        PASS [   0.007s] (114/349) secmp-testkit::harness m6_mut::control_failed_makes_the_operation_due_again
+        PASS [   0.006s] (115/349) secmp-testkit::harness m6_mut::control_ops_is_empty_follows_the_queue
+        PASS [   0.007s] (116/349) secmp-testkit::harness m6_mut::control_ops_kind_of_finds_the_operation_by_id
+        PASS [   0.006s] (117/349) secmp-testkit::harness m6_mut::control_ops_schedule_ignores_the_starts_of_other_correlations
+        PASS [   0.147s] (118/349) secmp-testkit::harness m6_mut::begin_work_closes_the_frames_of_the_previous_pass
+        PASS [   0.148s] (119/349) secmp-testkit::harness m6_mut::blocking_session_closes_on_a_failed_write_and_stays_closed
+        PASS [   1.587s] (120/349) secmp-testkit::harness m6_driver::driver_reports_late_preparation_as_overrun
+        PASS [   0.146s] (121/349) secmp-testkit::harness m6_mut::channel_prepare_at_the_frame_limit_needs_a_new_link_and_stays_open
+        PASS [   0.147s] (122/349) secmp-testkit::harness m6_mut::channel_prepare_bounds_the_fetch_multi_list
+        PASS [   0.930s] (123/349) secmp-testkit::harness m6_driver_io::driver_shutdown_aborts_pending_control_operations
+        PASS [   0.152s] (124/349) secmp-testkit::harness m6_mut::conversation_cells_carry_the_senders_clock
+        PASS [   1.043s] (125/349) secmp-testkit::harness m6_driver_io::driver_shutdown_aborts_pending_connects
+        PASS [   0.279s] (126/349) secmp-testkit::harness m6_mut::channel_single_rejects_a_ping_answered_with_the_wrong_type
+        PASS [   0.198s] (127/349) secmp-testkit::harness m6_mut::conversation_discarded_counts_cells_that_do_not_decrypt
+        PASS [   0.202s] (128/349) secmp-testkit::harness m6_mut::conversation_rebinding_the_queues_redirects_the_cell_source
+        PASS [   0.218s] (129/349) secmp-testkit::harness m6_mut::conversation_durable_follows_each_commit
+        PASS [   0.007s] (130/349) secmp-testkit::harness m6_mut::manual_clock_set_ms_moves_forward_never_back
+        PASS [   0.218s] (131/349) secmp-testkit::harness m6_mut::conversation_has_pending_real_follows_the_queue_and_the_receipts
+        PASS [   0.007s] (132/349) secmp-testkit::harness m6_mut::mem_persist_counts_its_commits
+        PASS [   0.007s] (133/349) secmp-testkit::harness m6_mut::mem_persist_set_durable_is_read_back
+        PASS [   0.007s] (134/349) secmp-testkit::harness m6_mut::owner_status_schedules_only_when_nothing_is_known
+        PASS [   1.446s] (135/349) secmp-testkit::harness m6_driver_io::driver_never_completing_connect_is_bounded
+        PASS [   0.679s] (136/349) secmp-testkit::harness m6_followups::ok_send_with_implausible_evicted_id_is_rejected
+        PASS [   0.219s] (137/349) secmp-testkit::harness m6_mut::conversations_discard_puts_the_message_back
+        PASS [   0.008s] (138/349) secmp-testkit::harness m6_mut::queue_pool_lists_only_relays_that_are_short_and_knows_its_spares
+        PASS [   1.411s] (139/349) secmp-testkit::harness m6_driver_io::driver_pending_flush_later_tick_other_link
+        PASS [   0.147s] (140/349) secmp-testkit::harness m6_mut::queue_error_raises_the_auth_and_rate_alerts_of_a_recv_queue
+        PASS [   0.159s] (141/349) secmp-testkit::harness m6_mut::prepare_fetch_takes_exactly_thirty_two_queues
+        PASS [   0.490s] (142/349) secmp-testkit::harness m6_mut::close_stalled_closes_a_write_pending_for_the_stall_bound
+        PASS [   0.007s] (143/349) secmp-testkit::harness m6_mut::remove_queue_ends_exactly_the_links_of_the_queue
+        PASS [   0.133s] (144/349) secmp-testkit::harness m6_mut::recv_link_needs_its_fetch_at_every_tick
+        PASS [   0.140s] (145/349) secmp-testkit::harness m6_mut::reason_of_a_closed_channel_is_closed
+        PASS [   0.007s] (146/349) secmp-testkit::harness m6_mut::sample_with_accepts_below_and_rejects_at_the_ceiling
+        PASS [   0.007s] (147/349) secmp-testkit::harness m6_mut::set_queue_period_accepts_only_the_periods_of_the_spec
+        PASS [   0.145s] (148/349) secmp-testkit::harness m6_mut::relay_with_a_recv_queue_needs_its_fetch_at_every_tick
+        PASS [   0.412s] (149/349) secmp-testkit::harness m6_mut::conversation_restore_drops_the_rest_of_a_failed_message
+        PASS [   0.007s] (150/349) secmp-testkit::harness m6_mut::set_queue_period_replaces_only_the_links_of_its_queue
+        PASS [   0.008s] (151/349) secmp-testkit::harness m6_mut::take_due_records_the_start_under_the_operations_correlation
+        PASS [   0.006s] (152/349) secmp-testkit::harness m6_mut::timing_rng_seeded_is_splitmix64
+        PASS [   0.006s] (153/349) secmp-testkit::harness m6_mut::unavailable_displays_its_message
+        PASS [   2.054s] (154/349) secmp-testkit::harness m6_driver::driver_flushes_due_writes_before_work
+        PASS [   0.007s] (155/349) secmp-testkit::harness m6_outbox::outbox_failed_after_30_days
+        PASS [   0.278s] (156/349) secmp-testkit::harness m6_mut::in_flight_counts_a_tick_until_every_answer_is_in
+        PASS [   0.008s] (157/349) secmp-testkit::harness m6_outbox::outbox_is_the_store_boundary
+        PASS [   0.132s] (158/349) secmp-testkit::harness m6_mut::release_failed_by_a_closed_link_reaches_the_cell_source
+        PASS [   0.152s] (159/349) secmp-testkit::harness m6_mut::release_failed_by_a_mode_change_reaches_the_cell_source
+        PASS [   0.155s] (160/349) secmp-testkit::harness m6_mut::route_dead_marks_only_the_queue_the_relay_refused
+        PASS [   0.439s] (161/349) secmp-testkit::harness m6_mut::driver_submit_carries_out_the_hosts_outputs_at_once
+        PASS [   0.491s] (162/349) secmp-testkit::harness m6_mut::driver_shutdown_aborts_every_pending_control_operation
+        PASS [   2.077s] (163/349) secmp-testkit::harness m6_driver_fix::driver_balanced_first_tick_sends_and_fetches_in_order
+        PASS [   2.171s] (164/349) secmp-testkit::harness m6_driver::prop_pipelined_matching_any_chunking
+        PASS [   0.256s] (165/349) secmp-testkit::harness m6_mut::unwritten_len_is_the_ledger_of_the_named_link
+        PASS [   0.276s] (166/349) secmp-testkit::harness m6_mut::tick_without_a_prepared_send_is_an_overrun
+        PASS [   0.284s] (167/349) secmp-testkit::harness m6_mut::tick_tolerates_a_wake_exactly_at_the_jitter_bound
+        PASS [   0.217s] (168/349) secmp-testkit::harness m6_outbox::outbox_requeues_evicted_real_with_new_key
+        PASS [   0.016s] (169/349) secmp-testkit::harness m6_props::prop_control_ops_isolated_and_delayed
+        PASS [   0.221s] (170/349) secmp-testkit::harness m6_outbox::outbox_resends_unreceipted_after_restart
+        PASS [   0.123s] (171/349) secmp-testkit::harness m6_outbox::receiver_dedups_by_msg_id
+        PASS [   0.217s] (172/349) secmp-testkit::harness m6_outbox::outbox_states
+        PASS [   0.163s] (173/349) secmp-testkit::harness m6_outbox::receive_commit_failure_keeps_partial_and_trust
+        PASS [   0.070s] (174/349) secmp-testkit::harness m6_props::prop_outbox_matches_model
+        PASS [   0.173s] (175/349) secmp-testkit::harness m6_outbox::requeued_relayed_message_is_not_failed_after_30d
+        PASS [   0.009s] (176/349) secmp-testkit::harness m6_reconnect::reconnect_never_changes_transport
+        PASS [   0.978s] (177/349) secmp-testkit::harness m6_mut::channel_finish_rejects_misfit_send_answers
+        PASS [   0.489s] (178/349) secmp-testkit::harness m6_mut::release_unused_hands_the_untaken_cell_back
+        PASS [   0.490s] (179/349) secmp-testkit::harness m6_mut::start_io_reports_a_failed_write_and_close_link_closes_the_link
+        PASS [   1.869s] (180/349) secmp-testkit::harness m6_driver_io::driver_rr_does_not_advance_for_a_send_never_written
+        PASS [   0.212s] (181/349) secmp-testkit::harness m6_sched::period_outside_set_rejected
+        PASS [   0.306s] (182/349) secmp-testkit::harness m6_reconnect::backoff_closed_before_relayinfo
+        PASS [   0.298s] (183/349) secmp-testkit::harness m6_reconnect::new_link_required_rotates
+        PASS [   0.392s] (184/349) secmp-testkit::harness m6_props::prop_draws_in_range
+        PASS [   0.536s] (185/349) secmp-testkit::harness m6_reconnect::backoff_uses_timing_rng_only
+        PASS [   0.012s] (186/349) secmp-testkit::harness m6_sched_bal::balanced_rate_bound_integer_form
+        PASS [   0.385s] (187/349) secmp-testkit::harness m6_sched::tick_anchor_after_hs2
+        PASS [   0.399s] (188/349) secmp-testkit::harness m6_sched_bal::balanced_ping_when_none_due
+        PASS [   1.484s] (189/349) secmp-testkit::harness m6_mut::fetch_multi_cells_go_to_their_own_queue
+        PASS [   0.425s] (190/349) secmp-testkit::harness m6_sched_bal::balanced_slot_frames
+        PASS [   3.642s] (191/349) secmp-testkit::harness m6_activity::activity_comparator_detects_a_late_emission
+        PASS [   1.023s] (192/349) secmp-testkit::harness m6_sched::strict_recv_link_one_fetch_per_period
+        PASS [   0.493s] (193/349) secmp-testkit::harness m6_sched_bal::direct_mode_implies_balanced
+        PASS [   2.874s] (194/349) secmp-testkit::harness m6_driver_io::driver_stashed_connect_is_anchored_at_its_occurrence
+        PASS [   0.776s] (195/349) secmp-testkit::harness m6_sched_bal::balanced_round_robin_due_rule
+        PASS [   1.377s] (196/349) secmp-testkit::harness m6_reconnect::rotation_and_reconnect_keep_send_spacing
+        PASS [   1.631s] (197/349) secmp-testkit::harness m6_outbox::receipts_ride_normal_slots
+        PASS [   0.268s] (198/349) secmp-testkit::harness m6_sched_io::balanced_rr_does_not_advance_on_teardown_before_tick
+        PASS [   1.548s] (199/349) secmp-testkit::harness m6_props::prop_at_most_once_per_period
+        PASS [   0.276s] (200/349) secmp-testkit::harness m6_sched_io::balanced_rr_reserves_the_successor_of_an_unwritten_send
+        PASS [   0.218s] (201/349) secmp-testkit::harness m6_sched_io::content_seq_counts_up
+        PASS [   0.143s] (202/349) secmp-testkit::harness m6_sched_io::frame_written_for_a_closed_link_is_not_counted
+        PASS [   0.154s] (203/349) secmp-testkit::harness m6_sched_io::frame_written_on_an_empty_ledger_is_counted
+        PASS [   0.368s] (204/349) secmp-testkit::harness m6_sched_io::every_delivered_cell_is_acknowledged
+        PASS [   2.029s] (205/349) secmp-testkit::harness m6_outbox::outbox_fragments_large_message
+        PASS [   0.637s] (206/349) secmp-testkit::harness m6_sched_bal::mode_change_tears_down_all_links
+        PASS [   4.303s] (207/349) secmp-testkit::harness m6_activity::activity_comparator_detects_a_resized_frame
+        PASS [   0.381s] (208/349) secmp-testkit::harness m6_sched_io::link_period_is_the_queues_or_the_modes_slot
+        PASS [   0.375s] (209/349) secmp-testkit::harness m6_sched_io::persist_before_ack_order
+        PASS [   0.790s] (210/349) secmp-testkit::harness m6_sched_bal::lowbw_rate_bound_and_slot
+        PASS [   0.143s] (211/349) secmp-testkit::harness m6_sched_io::remove_queue_refuses_unknown_and_ends_the_relay_link_with_its_last_queue
+        PASS [   0.390s] (212/349) secmp-testkit::harness m6_sched_io::receive_commit_failure_does_not_advance_ack
+        PASS [   0.145s] (213/349) secmp-testkit::harness m6_sched_io::s_late_driver_wake_beyond_jitter_is_overrun
+        PASS [   0.148s] (214/349) secmp-testkit::harness m6_sched_io::s_late_driver_wake_within_jitter_writes_once
+        PASS [   0.144s] (215/349) secmp-testkit::harness m6_sched_io::s_overrun_prepare_late_by_one_ms_writes_nothing
+        PASS [   0.149s] (216/349) secmp-testkit::harness m6_sched_io::s_poll_due_performs_no_crypto_and_no_persist
+        PASS [   0.369s] (217/349) secmp-testkit::harness m6_sched_io::refetch_dedup_by_cell_id
+        PASS [   0.550s] (218/349) secmp-testkit::harness m6_sched_io::persist_before_send_order
+        PASS [   2.133s] (219/349) secmp-testkit::harness m6_props::prop_no_message_key_reuse_across_crashes_at_the_write
+        PASS [   0.147s] (220/349) secmp-testkit::harness m6_sched_io::send_response_handling
+        PASS [   0.269s] (221/349) secmp-testkit::harness m6_sched_io::s_prepare_completing_after_tick_is_overrun_even_within_jitter
+        PASS [   0.222s] (222/349) secmp-testkit::harness m6_sched_io::send_failed_requeues_the_message
+        PASS [   0.389s] (223/349) secmp-testkit::harness m6_sched_io::s_due_writes_handed_off_before_any_prepare
+        PASS [   4.692s] (224/349) secmp-testkit::harness m6_activity::activity_comparator_detects_a_different_schedule
+        PASS [   0.218s] (225/349) secmp-testkit::harness m6_sched_io::sender_noqueue_discards_cell_id_map
+        PASS [   0.007s] (226/349) secmp-testkit::harness m6_sched_life::relay_idle_and_age_bounds_defaults
+        PASS [   0.145s] (227/349) secmp-testkit::harness m6_sched_io::work_pass_does_not_prepare_a_prepared_send_twice
+        PASS [   0.012s] (228/349) secmp-testkit::harness m6_sched_life::scheduler_reads_no_ui_state
+        PASS [   0.007s] (229/349) secmp-testkit::harness m6_sim::oracle_accepts_reconnects_within_the_bound
+        PASS [   0.007s] (230/349) secmp-testkit::harness m6_sim::oracle_excuses_a_teardown_in_the_last_bound_window
+        PASS [   4.733s] (231/349) secmp-testkit::harness m6_activity::activity_comparator_detects_an_extra_control_link
+        PASS [   0.007s] (232/349) secmp-testkit::harness m6_sim::oracle_rejects_a_crossed_reconnect_that_breaks_the_pooled_bound
+        PASS [   0.007s] (233/349) secmp-testkit::harness m6_sim::oracle_rejects_a_teardown_without_reconnect
+        PASS [   0.007s] (234/349) secmp-testkit::harness m6_sim::oracle_window_edge_is_pinned_on_both_sides
+        PASS [   0.782s] (235/349) secmp-testkit::harness m6_sched_io::real_and_dummy_share_one_path
+        PASS [   0.067s] (236/349) secmp-testkit::harness m6_spki::relay_and_client_spki_walks_agree
+        PASS [   0.327s] (237/349) secmp-testkit::harness m6_sched_io::unwritten_bound_is_not_reached_with_completions
+        PASS [   4.843s] (238/349) secmp-testkit::harness m6_activity::activity_comparator_detects_a_dropped_dummy
+        PASS [   0.077s] (239/349) secmp-testkit::harness m6_tor::tor_never_falls_back_to_direct
+        PASS [   0.007s] (240/349) secmp-testkit::harness m6_two_clients::relay_config_parses_with_a_windows_style_dir
+        PASS [   0.315s] (241/349) secmp-testkit::harness m6_sched_life::in_flight_bound_two
+        PASS [   0.255s] (242/349) secmp-testkit::harness m6_sched_life::prepare_overrun_tears_down
+        PASS [   0.074s] (243/349) secmp-testkit::harness m6_two_clients::two_clients_main_fits_a_small_stack
+        PASS [   0.007s] (244/349) secmp-testkit::harness m6_two_clients::two_clients_trace_rejects_partial_unit
+        PASS [   0.007s] (245/349) secmp-testkit::harness m6_two_clients::two_clients_trace_residual_on_drop_fails
+        PASS [   4.927s] (246/349) secmp-testkit::harness m6_driver::driver_slow_work_does_not_delay_other_links
+        PASS [   0.008s] (247/349) secmp-testkit::harness m6_two_clients::two_clients_trace_unit_lengths_are_observed_not_assumed
+        PASS [   0.272s] (248/349) secmp-testkit::harness m6_tor::transport_selection_follows_user_choice_only
+        PASS [   2.425s] (249/349) secmp-testkit::harness m6_sched::strict_send_link_one_send_per_period
+        PASS [   0.285s] (250/349) secmp-testkit::harness m6_two_clients::two_clients_cli_contract
+        PASS [   4.375s] (251/349) secmp-testkit::harness m6_driver_io::driver_rr_reservation_does_not_depend_on_worker_timing
+        PASS [   1.234s] (252/349) secmp-testkit::harness m6_sched_io::recv_noqueue_recreates_after_delay
+        PASS [   0.219s] (253/349) secmp-testkit::harness scenarios::harness_clients_create_pool_queues
+        PASS [   0.296s] (254/349) secmp-testkit::harness scenarios::harness_memory_budget_refuses_new_queue_at_limit
+        PASS [   3.040s] (255/349) secmp-testkit::harness m6_reconnect::reconnect_jitter_after_failure
+        PASS [   2.182s] (256/349) secmp-testkit::harness m6_sched_bal::link_phase_uniform_and_independent
+        PASS [   1.039s] (257/349) secmp-testkit::harness m6_sched_life::fetch_ack_uses_committed_state
+        PASS [   0.717s] (258/349) secmp-testkit::harness m6_two_clients::two_clients_scripted_invitation_handshake
+        PASS [   0.645s] (259/349) secmp-testkit::harness scenarios::harness_all_bytes_after_hs2_are_4352_byte_frames
+        PASS [   0.147s] (260/349) secmp-testkit::harness transport::fetch_multi_error_and_cells_same_queue_rejected
+        PASS [   0.202s] (261/349) secmp-testkit::harness scenarios::route_relay_queue_sid_is_derived
+        PASS [   0.880s] (262/349) secmp-testkit::harness m6_two_clients::two_clients_trace_schema
+        PASS [   0.152s] (263/349) secmp-testkit::harness transport::transport_caps_are_opaque_and_roundtrip
+        PASS [   0.585s] (264/349) secmp-testkit::harness scenarios::harness_relay_restart_queues_recreated_conversation_continues
+        PASS [   0.377s] (265/349) secmp-testkit::harness scenarios::harness_sweeper_expires_by_bucket
+        PASS [   0.364s] (266/349) secmp-testkit::harness scenarios::harness_undecryptable_cell_is_acknowledged
+        PASS [   0.828s] (267/349) secmp-testkit::harness scenarios::harness_eviction_reports_ids_newest_128_decrypt
+        PASS [   0.149s] (268/349) secmp-testkit::harness transport::transport_cmd_seq_starts_at_1_strictly_increasing
+        PASS [   0.087s] (269/349) secmp-testkit::harness transport::transport_delete_queue
+        PASS [   0.146s] (270/349) secmp-testkit::harness transport::transport_create_queue_idempotent
+        PASS [   0.006s] (271/349) secmp-transport caps::tests::caps_have_no_partial_eq
+        PASS [   0.085s] (272/349) secmp-testkit::harness transport::transport_fetch_maps_auth_and_single_error_frames
+        PASS [   0.004s] (273/349) secmp-transport caps::tests::m6_mut_cap_len_is_version_id_seed
+        PASS [   0.005s] (274/349) secmp-transport caps::tests::m6_mut_queue_ref_debug_names_no_id
+        PASS [   0.004s] (275/349) secmp-transport channel::tests::fetch_batch_has_cells_before_dummies_in_ascending_order
+        PASS [   0.005s] (276/349) secmp-transport channel::tests::fetch_error_frame_is_only_the_first
+        PASS [   0.004s] (277/349) secmp-transport channel::tests::fetch_multi_judges_the_order_and_the_ids
+        PASS [   0.004s] (278/349) secmp-transport error::tests::every_relay_code_has_its_outcome
+        PASS [   0.005s] (279/349) secmp-transport channel::tests::m6_mut_fits_allows_only_listed_codes
+        PASS [   0.004s] (280/349) secmp-transport ops::tests::check_fetch_judges_errors_and_ascending_cells
+        PASS [   0.006s] (281/349) secmp-transport ops::tests::check_fetch_multi_judges_the_order_and_the_ids
+        PASS [   0.005s] (282/349) secmp-transport ops::tests::fetch_judges_a_first_frame_err
+        PASS [   0.005s] (283/349) secmp-transport ops::tests::link_get_refuses_the_impossible_present_and_consumed
+        PASS [   0.004s] (284/349) secmp-transport ops::tests::m6_mut_unit_is_only_the_unit_answer
+        PASS [   0.008s] (285/349) secmp-transport ops::tests::m6_mut_fetch_multi_len_is_one_to_thirty_two
+        PASS [   0.007s] (286/349) secmp-transport ops::tests::queue_new_needs_both_derived_ids
+        PASS [   0.005s] (287/349) secmp-transport session::m6_mut::m6_mut_read_exact_retries_only_interrupted_reads
+        PASS [   0.153s] (288/349) secmp-testkit::harness transport::transport_fetch_multi_maps_queue_refs
+        PASS [   0.005s] (289/349) secmp-transport tls::tests::direct_tcp_socket_has_keepalive_and_no_delay
+        PASS [   0.006s] (290/349) secmp-transport tls::tests::m6_mut_hybrid_only_needs_every_condition
+        PASS [   0.005s] (291/349) secmp-transport tls::tests::pin_needs_one_certificate_and_a_parseable_spki
+        PASS [   0.006s] (292/349) secmp-transport tls::tests::the_configuration_is_tls13_with_one_hybrid_group
+        PASS [   0.005s] (293/349) secmp-transport tls::tests::tlv_is_total_on_short_and_odd_input
+        PASS [   0.181s] (294/349) secmp-testkit::harness transport::transport_fetch_returns_real_cells_only
+        PASS [   0.005s] (295/349) secmp-transport tor::tests::a_failed_bootstrap_stays_failed
+        PASS [   0.006s] (296/349) secmp-transport tor::tests::base32_follows_rfc4648
+        PASS [   0.021s] (297/349) secmp-transport tls::tests::tlv_length_forms_at_their_bounds
+        PASS [   0.005s] (298/349) secmp-transport tor::tests::onion_reencode_canonical_inputs_round_trip
+        PASS [   0.006s] (299/349) secmp-transport tor::tests::onion_reencode_rejects_noncanonical_text
+        PASS [   0.166s] (300/349) secmp-testkit::harness transport::transport_put_and_get_link_data
+        PASS [   0.006s] (301/349) secmp-transport tor::tests::percent_rounds_down_and_clamps
+        PASS [   0.007s] (302/349) secmp-transport::tls relay::relay_direct_tls_config
+        PASS [   0.148s] (303/349) secmp-testkit::harness transport::transport_token_per_command
+        PASS [   1.443s] (304/349) secmp-testkit::harness m6_sched_life::tick_writes_prebuilt_bytes_only
+        PASS [   0.147s] (305/349) secmp-transport session::m6_mut::m6_mut_blocking_exchange_then_prepared_exchange_keep_write_order
+        PASS [   0.142s] (306/349) secmp-transport session::m6_mut::m6_mut_send_on_a_closed_session_writes_nothing
+        PASS [   0.223s] (307/349) secmp-testkit::harness transport::transport_send_outcome_mapping
+        PASS [   0.141s] (308/349) secmp-transport::tls relay::relay_tls_refuses_a_client_without_alpn
+        PASS [   0.171s] (309/349) secmp-transport::tls relay::relay_direct_tls_serves_link
+        PASS [   0.171s] (310/349) secmp-transport::tls relay::relay_tls_refuses_classical_client
+        PASS [   1.621s] (311/349) secmp-testkit::harness m6_sched_life::next_frame_prepared_before_tick
+        PASS [   0.111s] (312/349) secmp-transport::tls tls_client_offers_exactly_x25519mlkem768
+        PASS [   0.139s] (313/349) secmp-transport::tls tls_certificate_verify_still_checked
+        PASS [   0.142s] (314/349) secmp-transport::tls tls_client_is_tls13_only
+        PASS [   0.230s] (315/349) secmp-transport::tls tls_alpn_secmp1_required
+        PASS [   0.028s] (316/349) secmp-transport::tor onion_address_from_relayref
+        PASS [   0.007s] (317/349) secmp-transport::tor onion_connect_uses_port_443
+        PASS [   0.081s] (318/349) secmp-transport::tls tls_provider_is_explicit
+        PASS [   0.005s] (319/349) secmp-transport::tor tor_bootstrap_events_mapped
+        PASS [   0.008s] (320/349) secmp-transport::tor tor_config_uses_profile_state_dir
+        PASS [   0.006s] (321/349) secmp-transport::tor tor_connect_failure_is_tor_unavailable
+        PASS [   0.006s] (322/349) secmp-transport::tor tor_isolation_token_per_link
+        PASS [   0.007s] (323/349) secmp-transport::tor tor_no_link_before_bootstrap
+        PASS [   0.189s] (324/349) secmp-transport::tls tls_handshake_with_pinned_relay_succeeds
+        PASS [   3.725s] (325/349) secmp-testkit::harness m6_sched_bal::balanced_fetch_multi_lists_all_recv_queues
+        PASS [   4.053s] (326/349) secmp-testkit::harness m6_props::prop_no_message_key_reuse_across_crashes
+        PASS [   0.259s] (327/349) secmp-transport::tls tls_no_resumption_no_early_data
+        PASS [   1.046s] (328/349) secmp-testkit::harness scenarios::harness_transport_runs_over_in_process_streams
+        PASS [   0.314s] (329/349) secmp-transport::tls tls_no_classical_fallback
+        PASS [   0.382s] (330/349) secmp-transport::tls tls_spki_pin_mismatch_rejects
+        PASS [   0.463s] (331/349) secmp-transport::tls tls_link_bytes_equal_other_transports
+        PASS [   0.793s] (332/349) secmp-testkit::harness transport::transport_rejects_bad_response_shape
+        PASS [   1.448s] (333/349) secmp-testkit::harness scenarios::harness_replay_is_deterministic
+        PASS [   0.519s] (334/349) secmp-transport::tls tls_pin_is_the_only_trust_anchor
+        PASS [   7.493s] (335/349) secmp-testkit::harness m6_activity::timing_draws_unmoved_by_one_hour_of_activity
+        PASS [   4.967s] (336/349) secmp-testkit::harness m6_sched::strict_counts_for_every_period
+        PASS [   3.069s] (337/349) secmp-testkit::harness m6_sched_io::unwritten_bound_teardown_is_activity_independent
+        PASS [   2.990s] (338/349) secmp-testkit::harness m6_tokio::tokio_driver_smoke_strict_one_hour
+        PASS [   5.240s] (339/349) secmp-testkit::harness m6_sched_bal::balanced_one_link_per_relay
+        PASS [   2.263s] (340/349) secmp-transport::tls tls_certificate_over_size_bound_rejects
+        PASS [   3.934s] (341/349) secmp-testkit::harness m6_sched_io::unwritten_ledger_is_bounded_without_completions
+        PASS [   5.892s] (342/349) secmp-testkit::harness m6_sched::strict_one_link_per_queue
+        PASS [   7.475s] (343/349) secmp-testkit::harness m6_mut::fetch_multi_error_is_attributed_to_its_own_queue
+        PASS [   4.599s] (344/349) secmp-testkit::harness m6_tokio_ai::ai07_fault_paired_tokio
+        PASS [   4.309s] (345/349) secmp-testkit::harness scenarios::harness_exchange_1000_cells_each_way
+        PASS [  10.206s] (346/349) secmp-testkit::harness m6_activity::control_ops_are_the_only_extra_units
+        PASS [   6.794s] (347/349) secmp-testkit::harness m6_sched_life::link_lifetime_uniform_6h_24h
+        PASS [   7.792s] (348/349) secmp-testkit::harness m6_sim_faults::sim_loss_breaks_links_eventual_delivery
+        PASS [   8.098s] (349/349) secmp-testkit::harness m6_sched_life::lifetime_end_reconnects_fresh
+────────────
+     Summary [  12.773s] 349 tests run: 349 passed, 33 skipped

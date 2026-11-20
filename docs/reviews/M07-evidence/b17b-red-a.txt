@@ -1,0 +1,96 @@
+head 64650f63fc515e3b72e088ecd253351c42562314
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index cb2032d..91c8be0 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -209,7 +209,7 @@ fn plannable(controls: &BTreeMap<u64, ControlEntry>, id: u64) -> bool {
+     let chained = |e: &ControlEntry| is_key_change(&e.row) && e.durable;
+     controls
+         .get(&id)
+-        .is_some_and(|e| !chained(e) || !controls.range(..id).any(|(_, o)| chained(o)))
++        .is_some_and(|e| !chained(e) || chained(e))
+ }
+ 
+ /// How long a succession may stay pending towards one contact before [`SessionEvent::SuccessionPending`] is raised
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.20s
+────────────
+ Nextest run ID 98987246-7680-455e-8c58-000a5cfae926 with nextest profile: default
+    Starting 8 tests across 1 binary (246 tests skipped)
+        PASS [   1.908s] (1/8) secmp-client-core api::tests::restart_in_the_window_keeps_the_chain
+        PASS [   1.973s] (2/8) secmp-client-core api::tests::second_rotation_waits_behind_the_live_key_change
+        FAIL [   2.029s] (3/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+  stdout ───
+
+    running 1 test
+    test sessions::tests::later_key_change_waits_for_the_head ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::later_key_change_waits_for_the_head
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 2.02s
+
+  stderr ───
+
+    thread '<unnamed>' (3906619) panicked at crates/secmp-client-core/src/sessions/tests.rs:3457:9:
+    assertion `left == right` failed: Q244: KC2 waits while KC1 is in its window
+      left: (1, false)
+     right: (0, false)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        FAIL [   2.033s] (4/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+  stdout ───
+
+    running 1 test
+    test sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 2.03s
+
+  stderr ───
+
+    thread '<unnamed>' (3906622) panicked at crates/secmp-client-core/src/sessions/tests.rs:3505:9:
+    assertion `left == right` failed: Q244: only the head is planned again
+      left: (2, false)
+     right: (1, false)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.176s] (5/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+        FAIL [   2.187s] (6/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+  stdout ───
+
+    running 1 test
+    test sessions::tests::chain_order_survives_restarts ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::chain_order_survives_restarts
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 2.18s
+
+  stderr ───
+
+    thread '<unnamed>' (3906626) panicked at crates/secmp-client-core/src/sessions/tests.rs:3540:9:
+    assertion `left == right` failed: KC1 first, then dummies
+      left: (2, false)
+     right: (1, false)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.848s] (7/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+        PASS [   3.729s] (8/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+────────────
+     Summary [   3.730s] 8 tests run: 5 passed, 3 failed, 246 skipped
+        FAIL [   2.029s] (3/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+        FAIL [   2.033s] (4/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+        FAIL [   2.187s] (6/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+error: test run failed

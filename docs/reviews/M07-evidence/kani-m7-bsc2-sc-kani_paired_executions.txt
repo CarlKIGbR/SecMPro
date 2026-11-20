@@ -1,0 +1,20 @@
+tree = 2ae2270 + the B-SC2 §2 change of this commit
+# cargo kani --package secmp-client-core --harness kani_proofs::kani_paired_executions --exact, alone (2026-10-31, nproc 32), via
+# docs/reviews/M07-evidence/kani-one-bsc.py.txt (the A-3b wrapper with the package as an argument); peak =
+# getrusage(RUSAGE_CHILDREN).ru_maxrss of the wrapper process, limit KANI_CBMC_RSS_LIMIT_KIB 14160156, 90 % = 12744140.
+  Checking harness kani_proofs::kani_paired_executions...
+  Check 233: kani_proofs::kani_paired_executions.cover.1
+  - Status: SATISFIED
+  Check 234: kani_proofs::kani_paired_executions.cover.2
+  - Status: SATISFIED
+  Check 235: kani_proofs::kani_paired_executions.cover.3
+  - Status: SATISFIED
+  Check 236: kani_proofs::kani_paired_executions.cover.4
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 1245 failed (12 unreachable)
+  ** 4 of 4 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 232.67654s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 235 s; peak 7415612 KiB = 52.4 % of 14160156 KiB

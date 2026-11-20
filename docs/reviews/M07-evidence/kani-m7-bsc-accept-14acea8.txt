@@ -1,0 +1,42 @@
+# M7 B-SC Q147 (iii): the responder harnesses re-measured alone (wrapper target/bsc-scripts/kani-one.py = docs/reviews/M07-evidence/kani-one-a3b.py.txt with the package as an argument), one process each, on the tree committed as 14acea8 (the measured proto files are byte-identical to it); KANI_CBMC_RSS_LIMIT_KIB = 14160156, 90 % = 12744140 KiB
+
+  Checking harness kani_proofs::kani_accept_opk_delete_only_on_success...
+  Check 73: kani_proofs::kani_accept_opk_delete_only_on_success.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 1138 failed (1 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 423.9056s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 426 s; peak 12415056 KiB = 87.7 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_hx_grouping...
+  SUMMARY:
+  ** 0 of 1043 failed (3 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 340.19568s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 343 s; peak 5969172 KiB = 42.2 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_commit_accept_atomic_record_names_opk1...
+  Check 215: kani_proofs::kani_commit_accept_atomic_record_names_opk1.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 1684 failed (9 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 105.114685s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 109 s; peak 5923904 KiB = 41.8 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2...
+  Check 193: kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 1685 failed (17 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 229.21732s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 233 s; peak 6394584 KiB = 45.2 % of 14160156 KiB

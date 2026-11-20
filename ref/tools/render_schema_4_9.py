@@ -11,7 +11,7 @@ import pathlib
 from secmp_ref import tr, tr_cases
 from secmp_ref.tr_cases import KEYCHANGE_STREAM, MESSAGES, NEGATIVES, PHASES, ROUTE_STREAM
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "SCHEMA-4.9-tr.md"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.9-tr.md"
 
 
 def _fields(layout):

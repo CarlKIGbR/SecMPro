@@ -21,9 +21,11 @@
 //! - (vi) the work never runs on the I/O path: [`Scheduler::work`] sees a non-blocking cell source (`Deferred`). A cell
 //!   the core asks for is prepared by the serial [`Worker`], off the loop; until it is ready the facade answers "not
 //!   ready" and the core prepares the link again at its next pass (the tick finds no frame only if the worker is later
-//!   than the tick: an overrun). A received cell is decided and committed by the worker; until it is committed the
-//!   facade answers "not committed", so the core does not acknowledge it (spec §10.1, CLAUDE.md §1.7: persist before
-//!   ack) and the cell is fetched again — the next `FETCH` finds it committed. The notifications (`relayed`, `evicted`,
+//!   than the tick: an overrun). Every present cell of a response goes to the worker at once (OQ-20, OPEN-M7-08 A); the
+//!   facade answers [`Delivered::Pending`] until the worker has committed the decision, and the driver reports each
+//!   commit of the current generation with [`Scheduler::delivery_committed`], so the core acknowledges the highest
+//!   committed prefix of what it fetched and nothing else (spec §10.1, CLAUDE.md §1.7: persist before ack); the next
+//!   `FETCH` carries it. The notifications (`relayed`, `evicted`,
 //!   `send_failed`, `discard`, `queue_lost`) are queued to the worker in order. No preparation or receive cost of one
 //!   link can delay a due write of another.
 //! - (ii) after `work` the driver reports [`Scheduler::prepared_until`] with the time it read from the same clock right
@@ -59,10 +61,12 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::clock::Clock;
+use crate::scheduler::core::pure::flush_bound;
 use crate::scheduler::core::{SchedError, Scheduler};
 use crate::scheduler::types::{
-    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
-    PreparedCell, QueueId, RelayId, SendFailure, SourceError, Transport,
+    CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
+    LogicalLinkId, OpId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    Transport,
 };
 
 // ---- what the driver is generic over ---------------------------------------------------------------------------------
@@ -212,19 +216,103 @@ pub enum ControlEffect {
     },
 }
 
-/// Runs a control operation on its own one-shot link (spec §10.6 (2)); the host owns the key material.
+/// Runs a control operation on its own one-shot link (spec §10.6 (2)) in three steps (Q300; EXT3-1 Repro B): the host's
+/// material before the link opens, the command on the link, the host's commit after the link is closed.
 pub trait ControlRunner: Send + Sync + 'static {
-    /// Run `kind` on `transport` (a fresh link to `relay`).
+    /// What the command needs, from the host before the link opens.
+    type Prepared: Send + 'static;
+    /// What the relay answered, committed by the host after the link is closed.
+    type Answer: Send + 'static;
+    /// The material of `kind`; `Ok(None)`: nothing to do — the operation is done and no link opens (Q298, Q300; HB-55).
     ///
     /// # Errors
-    /// The transport's error; the driver reports the operation failed.
-    fn run<S: ProviderStream>(
+    /// The host's failure: no link was opened; the driver retries after the back-off (CO-06).
+    fn prepare(
         &self,
         op: OpId,
         kind: ControlKind,
         relay: RelayId,
+    ) -> impl Future<Output = Result<Option<Self::Prepared>, TransportError>> + Send;
+    /// The command of `prepared` on `transport` (a fresh link), with no wait for the host before it (spec §10.1).
+    ///
+    /// # Errors
+    /// The transport's error: a relay's `ERR` ([`relay_answered`]) or a failure of the link.
+    fn run<S: ProviderStream>(
+        &self,
+        prepared: Self::Prepared,
         transport: &mut AsyncRelayQueueTransport<S>,
+    ) -> impl Future<Output = Result<Self::Answer, TransportError>> + Send;
+    /// Commit `answer` to the host after the link is closed; the operation is done only once this returns (CLAUDE.md §1.7).
+    ///
+    /// # Errors
+    /// The host's failure; the relay executed the command, so the driver queues the operation again as delayed.
+    fn commit(
+        &self,
+        answer: Self::Answer,
     ) -> impl Future<Output = Result<ControlEffect, TransportError>> + Send;
+    /// The link was up but no answer of the relay was committed — a relay `ERR` of any code, an unfitting or garbled answer,
+    /// the link closed, or the timeout (Q300 phase rule, M7-S4d): the relay may have read the command. `true`: the operation
+    /// ends here (a consuming `LINK_GET` fails the accept, as for an answered consume); `false`: it is queued again as a fresh
+    /// delayed one (spec §10.6 (2)).
+    fn unanswered(&self, kind: ControlKind) -> impl Future<Output = bool> + Send;
+}
+
+/// The outcome of a `LINK_PUT` for its control operation (spec §9.4, §9.7 (1); Q299, review finding F1-1): `ERR_EXISTS` means
+/// the relay holds this `ld_id`'s link data or its consumption marker — the identical put's goal is reached, or the link data
+/// was consumed, which the owner-status chain reports (Q297) — so the operation is done and never retried. Every other outcome
+/// is returned unchanged (a failure is retried as before, HB-61).
+///
+/// # Errors
+/// The transport's error, unless it is [`TransportError::Exists`].
+pub fn link_put_outcome(answer: Result<(), TransportError>) -> Result<(), TransportError> {
+    match answer {
+        Err(TransportError::Exists) => Ok(()),
+        other => other,
+    }
+}
+
+/// How a control operation ended, for the scheduler (Q300, EXT3-4).
+pub enum ControlResult {
+    /// Done, also with nothing to do and no link opened; the effect goes to the scheduler.
+    Done(ControlEffect),
+    /// The attempt ended before the link was up (the host's prepare step, a local check of the material, the connect, the
+    /// handshake, the timeout before the handshake is done): no command was sent; retried after the back-off (CO-06).
+    LinkFailed {
+        /// The link closed before `RELAYINFO` (LR-03).
+        closed_before: bool,
+    },
+    /// The link was up and no answer was committed, whatever ended it (Q300 phase rule, M7-S4d), or the answer could not be
+    /// committed: a related operation ran, so it is queued again as a fresh delayed one (spec §10.6 (2)).
+    Answered,
+}
+
+/// Whether `e` is the relay's `ERR` answer to a command — the link stays usable (spec §9.3) — not a failure of the link or
+/// a local one (Q300, EXT3-4).
+#[must_use]
+pub const fn relay_answered(e: TransportError) -> bool {
+    matches!(
+        e,
+        TransportError::Token
+            | TransportError::Full
+            | TransportError::NoQueue
+            | TransportError::Auth
+            | TransportError::Exists
+            | TransportError::Malformed
+            | TransportError::Rate
+    )
+}
+
+/// The outcome of a consuming `LINK_GET` for the accept (Q300, EXT3-4): a relay's `ERR` ends the accept — `Ok(None)`, as for
+/// link data that is gone; never retried — every other outcome is returned unchanged.
+///
+/// # Errors
+/// The transport's error, unless the relay answered it ([`relay_answered`]).
+pub fn consume_outcome<T>(answer: Result<T, TransportError>) -> Result<Option<T>, TransportError> {
+    match answer {
+        Ok(got) => Ok(Some(got)),
+        Err(e) if relay_answered(e) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 // ---- the cell-source worker ------------------------------------------------------------------------------------------
@@ -242,6 +330,8 @@ pub enum Job {
     Deliver {
         /// The recipient queue.
         queue: QueueId,
+        /// The generation of the queue the cell was fetched in (the core's, OPEN-M7-B-3).
+        generation: u64,
         /// Its id.
         cell_id: u64,
         /// The cell.
@@ -299,6 +389,8 @@ pub enum JobDone {
     Delivered {
         /// The queue.
         queue: QueueId,
+        /// The generation the delivery was asked in.
+        generation: u64,
         /// The cell.
         cell_id: u64,
         /// The decision was committed.
@@ -318,12 +410,17 @@ impl Job {
             },
             Self::Deliver {
                 queue,
+                generation,
                 cell_id,
                 cell,
             } => JobDone::Delivered {
                 queue,
+                generation,
                 cell_id,
-                committed: source.deliver(queue, cell_id, &cell).is_ok(),
+                committed: matches!(
+                    source.deliver(queue, generation, cell_id, &cell),
+                    Ok(Delivered::Committed)
+                ),
             },
             Self::Relayed {
                 queue,
@@ -360,8 +457,14 @@ impl Job {
                 queue: *queue,
                 cell: Err(SourceError),
             },
-            Self::Deliver { queue, cell_id, .. } => JobDone::Delivered {
+            Self::Deliver {
+                queue,
+                generation,
+                cell_id,
+                ..
+            } => JobDone::Delivered {
                 queue: *queue,
+                generation: *generation,
                 cell_id: *cell_id,
                 committed: false,
             },
@@ -416,65 +519,67 @@ impl<S: CellSource + Send + 'static> Worker for BlockingWorker<S> {
 ///
 /// What it knows of received cells belongs to one *generation* of a receive queue: when the scheduler re-creates a
 /// queue (after `NoQueue`, spec §9.1, its `QUEUE_NEW` control operation), the relay numbers the new queue's cells from 1
-/// again, so the committed high-water mark of the old queue is dropped and a delivery the worker finishes for the old
-/// generation commits nothing (WEISUNG M6-B-5 EXTB-2: persist before ack, CLAUDE.md §1.7).
+/// again, so the committed ids of the old queue are dropped and a delivery the worker finishes for the old generation
+/// commits nothing (WEISUNG M6-B-5 EXTB-2: persist before ack, CLAUDE.md §1.7).
+///
+/// The committed ids are a set, not a high-water mark (OQ-20): with every cell of a response in the worker at once, a
+/// failed commit of one cell followed by a successful commit of a later one must not make the first look committed.
 #[derive(Default)]
 struct Deferred {
     ready: BTreeMap<QueueId, PreparedCell>,
     preparing: BTreeSet<QueueId>,
-    /// The current generation of each receive queue (0 until its first re-creation).
-    generation: BTreeMap<QueueId, u64>,
-    /// The highest cell id committed in the current generation.
-    committed: BTreeMap<QueueId, u64>,
-    /// The deliveries handed to the worker and not finished, with the generation each was asked in, oldest first (the
-    /// worker runs its jobs in order).
-    delivering: BTreeMap<(QueueId, u64), VecDeque<u64>>,
+    /// The cell ids committed in the newest generation seen of each queue, the newest [`COMMITTED_KEPT`] of each.
+    committed: BTreeMap<QueueId, (u64, BTreeSet<u64>)>,
+    /// The deliveries handed to the worker and not finished: (queue, generation, cell id).
+    delivering: BTreeSet<(QueueId, u64, u64)>,
     jobs: Vec<Job>,
 }
 
+/// The committed ids the facade keeps per queue (the newest): the core asks again only for cells above its
+/// acknowledgement, at most `pure::RECEIVED_MAX` of them; an id dropped here is only delivered again (a duplicate
+/// decision), never taken for committed.
+const COMMITTED_KEPT: usize = 256;
+
 impl Deferred {
-    fn generation_of(&self, queue: QueueId) -> u64 {
-        self.generation.get(&queue).copied().unwrap_or(0)
-    }
-
-    /// `queue` is re-created on the relay: a new generation begins.
-    fn recreated(&mut self, queue: QueueId) {
-        let next = self.generation_of(queue).saturating_add(1);
-        self.generation.insert(queue, next);
-        self.committed.remove(&queue);
-    }
-
-    fn on_done(&mut self, done: JobDone) {
+    /// A job finished. `Some((queue, generation, cell_id))`: a delivery is committed now — the driver reports it to the core
+    /// ([`Scheduler::delivery_committed`]), which ignores one of an older generation than the queue's (OPEN-M7-B-3).
+    fn on_done(&mut self, done: JobDone) -> Option<(QueueId, u64, u64)> {
         match done {
             JobDone::Prepared { queue, cell } => {
                 self.preparing.remove(&queue);
                 if let Ok(Some(cell)) = cell {
                     self.ready.insert(queue, cell);
                 }
+                None
             }
             JobDone::Delivered {
                 queue,
+                generation,
                 cell_id,
                 committed,
             } => {
-                let current = self.generation_of(queue);
-                let asked = match self.delivering.get_mut(&(queue, cell_id)) {
-                    Some(gens) => {
-                        let first = gens.pop_front();
-                        if gens.is_empty() {
-                            self.delivering.remove(&(queue, cell_id));
-                        }
-                        first
-                    }
-                    None => None,
-                };
-                // a completion of an older generation commits nothing in the current one
-                if committed && asked == Some(current) {
-                    let entry = self.committed.entry(queue).or_insert(0);
-                    *entry = (*entry).max(cell_id);
+                // a completion that was never asked commits nothing
+                if !self.delivering.remove(&(queue, generation, cell_id)) || !committed {
+                    return None;
                 }
+                let entry = self
+                    .committed
+                    .entry(queue)
+                    .or_insert_with(|| (generation, BTreeSet::new()));
+                // the ids of an older generation are void once a newer one commits
+                if generation > entry.0 {
+                    *entry = (generation, BTreeSet::new());
+                }
+                if generation == entry.0 {
+                    entry.1.insert(cell_id);
+                    // one id joined: at most one leaves, the oldest
+                    if entry.1.len() > COMMITTED_KEPT {
+                        entry.1.pop_first();
+                    }
+                }
+                Some((queue, generation, cell_id))
             }
-            JobDone::Noted => {}
+            JobDone::Noted => None,
         }
     }
 }
@@ -518,29 +623,31 @@ impl CellSource for Deferred {
         self.jobs.push(Job::QueueLost { queue });
     }
 
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
-        if self.committed.get(&queue).is_some_and(|c| *c >= cell_id) {
-            return Ok(());
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        generation: u64,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
+        if self
+            .committed
+            .get(&queue)
+            .is_some_and(|(g, ids)| *g == generation && ids.contains(&cell_id))
+        {
+            return Ok(Delivered::Committed);
         }
-        let current = self.generation_of(queue);
-        let pending = self
-            .delivering
-            .get(&(queue, cell_id))
-            .is_some_and(|gens| gens.contains(&current));
-        if !pending {
+        if self.delivering.insert((queue, generation, cell_id)) {
             let copy = Cell::from_bytes(cell.as_bytes()).map_err(|_| SourceError)?;
-            self.delivering
-                .entry((queue, cell_id))
-                .or_default()
-                .push_back(current);
             self.jobs.push(Job::Deliver {
                 queue,
+                generation,
                 cell_id,
                 cell: copy,
             });
         }
-        // not committed yet: no acknowledgement, the cell comes again (persist before ack)
-        Err(SourceError)
+        // not committed yet: no acknowledgement until the driver reports the commit (persist before ack)
+        Ok(Delivered::Pending)
     }
 }
 
@@ -549,8 +656,8 @@ impl CellSource for Deferred {
 /// What a connection was opened for (the run log).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
-    /// A scheduled link.
-    Link(LinkId),
+    /// A scheduled link: the connection and the logical link it serves (stable across reconnects, FIN5b-1).
+    Link(LinkId, LogicalLinkId),
     /// A control operation's one-shot link.
     Control(OpId),
 }
@@ -595,7 +702,7 @@ enum Event<S> {
     Frame(LinkId, Vec<u8>),
     Closed(LinkId),
     Connected(LinkId, Conn<S>),
-    Control(OpId, Result<ControlEffect, bool>),
+    Control(OpId, ControlResult),
     Job(JobDone),
     /// A writer task finished a write: link, length, time, written and flushed.
     Written(LinkId, usize, u64, bool),
@@ -606,6 +713,8 @@ struct LinkIo {
     tasks: [JoinHandle<()>; 2],
     /// Writes handed to the writer task and not yet reported.
     pending: u32,
+    /// The ids of those writes' frames, oldest first (the writer reports its writes in order).
+    frames: VecDeque<FrameId>,
     /// When the oldest of them was handed out.
     oldest: Option<u64>,
 }
@@ -668,18 +777,16 @@ pub struct Driver<P: Providers, D, R, H, W, C> {
 }
 
 /// How long a pass waits, after handing out the writes of `poll_due`, for them to be flushed before it goes on to the work
-/// (obligation (i)). Well under the `FETCH` lead (1000 ms), so a slow stream never makes a preparation late; a write of
-/// the pass that is not flushed by then stays pending on its link, and the other links go on.
-pub const FLUSH_WAIT_MS: u64 = 250;
+/// (obligation (i)); defined with the bound K-C5 proves (`pure::flush_bound`).
+pub use crate::scheduler::core::pure::FLUSH_WAIT_MS;
 
 /// A link whose write has been pending this long is closed (as is one whose next tick comes while a write is still
 /// pending): the shortest period of `PERIODS`, so no link ever writes a tick late (EXTB-3).
 pub const WRITE_STALL_MS: u64 = 10_000;
 
-/// How long a connection attempt (stream and SecMP-LINK handshake) may take before it counts as failed: a provider that
-/// never answers must not leave a link in `Connecting`, which has no deadline in the core (obligation (iii)). Two
-/// minutes: a Tor circuit to an onion service plus the handshake.
-pub const CONNECT_TIMEOUT_MS: u64 = 120_000;
+/// The connection-attempt limit; defined in [`crate::scheduler::params`] so the pure control module can use it under Kani,
+/// where this module is compiled out (M7-S9d).
+pub use crate::scheduler::params::CONNECT_TIMEOUT_MS;
 
 impl<P, D, R, H, W, C> Driver<P, D, R, H, W, C>
 where
@@ -774,7 +881,8 @@ where
             let failed = job.failed();
             let sent = self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok());
             if !sent {
-                self.deferred.on_done(failed);
+                // a job that cannot run commits nothing
+                let _ = self.deferred.on_done(failed);
             }
         }
     }
@@ -849,10 +957,7 @@ where
     /// bound is what keeps a hanging writer of one link from delaying another link's tick that falls inside the wait
     /// (EXT3B-2): on expiry the pass goes on, the stalled write stays pending under [`WRITE_STALL_MS`].
     async fn flush_wait(&mut self, sched: &mut Scheduler, now: u64) -> Result<(), SchedError> {
-        let mut until = now.saturating_add(FLUSH_WAIT_MS);
-        if let Some(next) = sched.next_deadline() {
-            until = until.min(next.saturating_sub(sched.params().driver_jitter_ms));
-        }
+        let until = flush_bound(now, sched.next_deadline(), sched.params().driver_jitter_ms);
         while self
             .links
             .values()
@@ -898,9 +1003,12 @@ where
             if io.pending == 0 {
                 io.oldest = None;
             }
-            // the whole frame is on the stream: a `SEND` commits its round-robin position now (FIN-2)
-            sched.frame_written(link);
-            // every write is reported once, in order (the trusted-caller contract of `frame_written`)
+            // the whole frame is on the stream: a `SEND` commits its round-robin position now (FIN-2); every write is
+            // reported once, in order, by its frame id (FINAL3 (e))
+            if let Some(frame) = io.frames.pop_front() {
+                let reported = sched.frame_written(link, frame);
+                debug_assert_eq!(reported, Ok(()));
+            }
             debug_assert_eq!(sched.unmatched_written(), 0);
             Ok(())
         } else {
@@ -972,7 +1080,7 @@ where
                         let outs = sched.link_up(link, now, chan)?;
                         if outs
                             .iter()
-                            .any(|o| matches!(o, Output::Event(LinkEvent::Up(l)) if *l == link))
+                            .any(|o| matches!(o, Output::Event(LinkEvent::Up(l, _)) if *l == link))
                         {
                             self.start_io(link, stream);
                         } else if let Some(log) = &mut self.log {
@@ -986,10 +1094,11 @@ where
             }
             Event::Control(op, result) => {
                 match result {
-                    Ok(effect) => {
+                    ControlResult::Done(effect) => {
                         match effect {
                             ControlEffect::None => {}
                             ControlEffect::PoolQueueReady(queue, cap) => {
+                                // EXT3b-3 (Q304): without randomness the scheduler keeps the spare and registers it at a later pass; another refusal (more than 32 entries) leaves it pending (HB-30)
                                 let _ = sched.pool_queue_ready(now, queue, cap);
                             }
                             ControlEffect::OwnerStatus {
@@ -1005,12 +1114,19 @@ where
                         }
                         sched.control_done(op);
                     }
-                    Err(closed_before) => sched.control_failed(now, op, closed_before)?,
+                    ControlResult::LinkFailed { closed_before } => {
+                        sched.control_failed(now, op, closed_before)?;
+                    }
+                    // Q300 phase rule (M7-S4d): the link was up and no answer was committed — a fresh delayed operation, also when it first ran at once (spec §10.6 (2))
+                    ControlResult::Answered => sched.control_answered(now, op)?,
                 }
                 Vec::new()
             }
             Event::Job(done) => {
-                self.deferred.on_done(done);
+                // a commit of the current generation moves the core's acknowledgement (OQ-20)
+                if let Some((queue, generation, cell_id)) = self.deferred.on_done(done) {
+                    sched.delivery_committed(queue, generation, cell_id);
+                }
                 Vec::new()
             }
             Event::Written(link, len, at, ok) => {
@@ -1038,12 +1154,15 @@ where
                 }
                 Output::Connect {
                     link,
+                    logical,
                     key,
                     relay,
                     transport,
                     ..
-                } => self.connect(now, link, key, relay, transport),
-                Output::Write { link, bytes, .. } => {
+                } => self.connect(now, (link, logical), key, relay, transport),
+                Output::Write {
+                    link, bytes, frame, ..
+                } => {
                     let stalled = self
                         .links
                         .get(&link)
@@ -1058,6 +1177,7 @@ where
                         && io.writer.send(bytes).is_ok()
                     {
                         io.pending = io.pending.saturating_add(1);
+                        io.frames.push_back(frame);
                         io.oldest.get_or_insert(now);
                     }
                 }
@@ -1076,10 +1196,6 @@ where
                     kind,
                     transport,
                 } => {
-                    // a re-creation (or a new pool queue): what the facade knew of the queue's cells is void (EXTB-2)
-                    if let ControlKind::QueueNew(queue) = kind {
-                        self.deferred.recreated(queue);
-                    }
                     self.control(now, op, key, relay, kind, transport);
                 }
             }
@@ -1120,6 +1236,7 @@ where
                 writer: tx,
                 tasks: [reader, writer],
                 pending: 0,
+                frames: VecDeque::new(),
                 oldest: None,
             },
         ) {
@@ -1130,14 +1247,15 @@ where
     fn connect(
         &mut self,
         now: u64,
-        link: LinkId,
+        (link, logical): (LinkId, LogicalLinkId),
         key: IsolationKey,
         relay: RelayId,
         transport: Transport,
     ) {
         let isolation = Isolation(key.0);
         if let Some(log) = &mut self.log {
-            log.connects.push((now, Purpose::Link(link), isolation));
+            log.connects
+                .push((now, Purpose::Link(link, logical), isolation));
         }
         let resolve = Resolve {
             link,
@@ -1209,34 +1327,69 @@ where
         let limit = self.connect_timeout;
         self.controls.retain(|t| !t.is_finished());
         self.controls.push(tokio::spawn(async move {
-            let attempt = async {
-                let relay_ref = directory.relay(relay).ok_or(false)?;
-                let stream = providers
-                    .connect(transport, relay_ref, isolation)
-                    .await
-                    .map_err(|_| false)?;
-                let access = directory.access_key(relay);
-                let unix = clock.unix_secs();
-                let session = match AsyncSession::connect_outcome(
-                    stream,
-                    relay_ref.relay_fp,
-                    access,
-                    unix,
-                    &mut entropy,
-                )
-                .await
-                {
-                    AsyncConnectOutcome::Up(session) => *session,
-                    AsyncConnectOutcome::ClosedBeforeRelayInfo => return Err(true),
-                    AsyncConnectOutcome::Failed(_) => return Err(false),
-                };
-                let mut t = AsyncRelayQueueTransport::new(session);
-                runner.run(op, kind, relay, &mut t).await.map_err(|_| false)
+            let result = match runner.prepare(op, kind, relay).await {
+                // Q300 (EXT3-1 Repro B, HB-55): the host's material before any link opens; nothing to do opens no link
+                Ok(None) => ControlResult::Done(ControlEffect::None),
+                Err(_) => ControlResult::LinkFailed {
+                    closed_before: false,
+                },
+                Ok(Some(prepared)) => {
+                    // Q300 phase rule (M7-S4d): set once the handshake is done — from then on the relay may have read the command
+                    let mut up = false;
+                    let attempt = async {
+                        let relay_ref = directory.relay(relay).ok_or(false)?;
+                        let stream = providers
+                            .connect(transport, relay_ref, isolation)
+                            .await
+                            .map_err(|_| false)?;
+                        let access = directory.access_key(relay);
+                        let unix = clock.unix_secs();
+                        let session = match AsyncSession::connect_outcome(
+                            stream,
+                            relay_ref.relay_fp,
+                            access,
+                            unix,
+                            &mut entropy,
+                        )
+                        .await
+                        {
+                            AsyncConnectOutcome::Up(session) => *session,
+                            AsyncConnectOutcome::ClosedBeforeRelayInfo => return Err(true),
+                            AsyncConnectOutcome::Failed(_) => return Err(false),
+                        };
+                        let mut t = AsyncRelayQueueTransport::new(session);
+                        up = true;
+                        let answer = runner.run(prepared, &mut t).await;
+                        // the one-shot link closes here, before the host commits the answer (Q300; spec §10.1)
+                        drop(t);
+                        Ok(answer)
+                    };
+                    // the link's life under the connect timeout: a hanging relay fails it, never stalls it
+                    let outcome = tokio::time::timeout(limit, attempt).await;
+                    match outcome {
+                        Ok(Ok(Ok(answer))) => match runner.commit(answer).await {
+                            Ok(effect) => ControlResult::Done(effect),
+                            Err(_) => ControlResult::Answered,
+                        },
+                        Ok(Err(closed_before)) => ControlResult::LinkFailed { closed_before },
+                        // the timeout before the link was up: no command was written
+                        Err(_) if !up => ControlResult::LinkFailed {
+                            closed_before: false,
+                        },
+                        // Q300 phase rule (M7-S4d, XREVIEW-M7-S4 S4-1): once the link is up the relay may have read the command;
+                        // whatever ended the attempt — a relay `ERR` of any code, an unfitting or garbled answer, the link
+                        // closed, the timeout — it is a related operation (spec §10.6 (2)), never a link failure, so a hostile
+                        // relay cannot choose the fast retry
+                        Ok(Ok(Err(_))) | Err(_) => {
+                            if runner.unanswered(kind).await {
+                                ControlResult::Done(ControlEffect::None)
+                            } else {
+                                ControlResult::Answered
+                            }
+                        }
+                    }
+                }
             };
-            // the whole one-shot operation under the connect timeout: a hanging relay fails it, never stalls it
-            let result = tokio::time::timeout(limit, attempt)
-                .await
-                .unwrap_or(Err(false));
             let _ = events.send(Event::Control(op, result));
         }));
     }
@@ -1335,6 +1488,65 @@ mod tests {
         Cell::from_bytes(&[0x5a; secmp_proto::sizes::CELL_LEN])
     }
 
+    /// Q299 (F1-1; spec §9.4): `ERR_EXISTS` is done, every other outcome unchanged.
+    #[test]
+    fn link_put_exists_is_done() {
+        assert_eq!(link_put_outcome(Ok(())), Ok(()));
+        assert_eq!(link_put_outcome(Err(TransportError::Exists)), Ok(()));
+        for e in [
+            TransportError::Token,
+            TransportError::Full,
+            TransportError::NoQueue,
+            TransportError::Auth,
+            TransportError::Malformed,
+            TransportError::Rate,
+            TransportError::Rejected,
+            TransportError::Closed,
+            TransportError::NewLinkRequired,
+            TransportError::Unavailable,
+            TransportError::OutOfOrder,
+            TransportError::Invalid,
+            TransportError::NoDirectEndpoint,
+            TransportError::TorNotReady,
+            TransportError::TorUnavailable,
+        ] {
+            assert_eq!(link_put_outcome(Err(e)), Err(e), "{e:?}");
+        }
+    }
+
+    /// Q300 (spec §9.3): the seven relay `ERR` answers are answered and end an accept; the nine link-level and local errors
+    /// are neither, and a successful answer is returned. New API, not red-first.
+    #[test]
+    fn control_errors_are_classified() {
+        for e in [
+            TransportError::Token,
+            TransportError::Full,
+            TransportError::NoQueue,
+            TransportError::Auth,
+            TransportError::Exists,
+            TransportError::Malformed,
+            TransportError::Rate,
+        ] {
+            assert!(relay_answered(e), "{e:?}");
+            assert_eq!(consume_outcome::<u8>(Err(e)), Ok(None), "{e:?}");
+        }
+        for e in [
+            TransportError::Rejected,
+            TransportError::Closed,
+            TransportError::NewLinkRequired,
+            TransportError::Unavailable,
+            TransportError::OutOfOrder,
+            TransportError::Invalid,
+            TransportError::NoDirectEndpoint,
+            TransportError::TorNotReady,
+            TransportError::TorUnavailable,
+        ] {
+            assert!(!relay_answered(e), "{e:?}");
+            assert_eq!(consume_outcome::<u8>(Err(e)), Err(e), "{e:?}");
+        }
+        assert_eq!(consume_outcome::<u8>(Ok(5)), Ok(Some(5)));
+    }
+
     /// Mutants #160 (`Deferred::{relayed, evicted, send_failed, discard, queue_lost}` → `()`): each notification of the core
     /// is queued to the worker, in order, with what the core said.
     #[test]
@@ -1391,6 +1603,7 @@ mod tests {
                 writer: tx,
                 tasks,
                 pending: 0,
+                frames: VecDeque::new(),
                 oldest: None,
             };
             tokio::task::yield_now().await;
@@ -1402,46 +1615,109 @@ mod tests {
         });
     }
 
-    /// EXTB-2: a delivery asked in an older generation of a queue and finished after its re-creation commits nothing;
-    /// the same cell id in the new generation needs its own delivery.
+    /// EXTB-2, OPEN-M7-B-3: the generation travels with the delivery. A delivery asked in generation 0 and finished after the
+    /// queue was re-created is reported as `(queue, 0, cell)` — the core, not the facade, ignores it
+    /// (`late_commit_of_old_generation_ignored`); the same cell id in generation 1 needs its own delivery, and the commit of
+    /// generation 0 does not make it look committed.
     #[test]
     fn late_delivery_of_an_old_generation_commits_nothing() -> Result<(), secmp_proto::Error> {
         let q = QueueId(3);
+        let pending = Ok(Delivered::Pending);
         let mut d = Deferred::default();
-        assert!(d.deliver(q, 1, &cell()?).is_err());
+        assert_eq!(d.deliver(q, 0, 1, &cell()?), pending);
         assert_eq!(d.jobs.len(), 1);
-        d.recreated(q);
-        // the old generation's job finishes now
-        d.on_done(JobDone::Delivered {
-            queue: q,
-            cell_id: 1,
-            committed: true,
-        });
-        assert!(!d.committed.contains_key(&q));
-        // the new generation's cell 1 is delivered on its own
-        assert!(d.deliver(q, 1, &cell()?).is_err());
+        // generation 1 asks for the same cell id: its own delivery
+        assert_eq!(d.deliver(q, 1, 1, &cell()?), pending);
         assert_eq!(d.jobs.len(), 2);
-        assert!(
-            d.deliver(q, 1, &cell()?).is_err(),
+        assert_eq!(
+            d.deliver(q, 1, 1, &cell()?),
+            pending,
             "pending: not asked twice"
         );
         assert_eq!(d.jobs.len(), 2);
-        d.on_done(JobDone::Delivered {
+        // the old generation's job finishes: reported with its generation, for the core to ignore
+        let late = d.on_done(JobDone::Delivered {
             queue: q,
+            generation: 0,
             cell_id: 1,
             committed: true,
         });
-        assert_eq!(d.deliver(q, 1, &cell()?), Ok(()));
-        // a committed high-water mark of the old generation is dropped by the re-creation
-        d.recreated(q);
-        assert!(d.deliver(q, 1, &cell()?).is_err());
-        // a completion that was never asked commits nothing
-        d.on_done(JobDone::Delivered {
+        assert_eq!(late, Some((q, 0, 1)));
+        assert_eq!(
+            d.deliver(q, 1, 1, &cell()?),
+            pending,
+            "generation 0's commit does not commit generation 1's cell"
+        );
+        let done = d.on_done(JobDone::Delivered {
             queue: q,
+            generation: 1,
+            cell_id: 1,
+            committed: true,
+        });
+        assert_eq!(done, Some((q, 1, 1)), "the commit is reported to the core");
+        assert_eq!(d.deliver(q, 1, 1, &cell()?), Ok(Delivered::Committed));
+        // the committed ids of the old generation are void once the new one commits
+        assert_eq!(d.deliver(q, 0, 1, &cell()?), pending);
+        // a completion that was never asked commits nothing
+        let never = d.on_done(JobDone::Delivered {
+            queue: q,
+            generation: 1,
             cell_id: 9,
             committed: true,
         });
-        assert!(!d.committed.contains_key(&q));
+        assert_eq!(never, None);
+        Ok(())
+    }
+
+    /// OQ-20: the facade keeps the committed ids as a set — a failed commit of cell 1 followed by a successful commit of
+    /// cell 2 leaves cell 1 not committed (a high-water mark would answer "committed" for it); a failed delivery is asked
+    /// again; the set keeps the newest [`COMMITTED_KEPT`] ids.
+    #[test]
+    fn committed_ids_are_a_set() -> Result<(), secmp_proto::Error> {
+        let q = QueueId(5);
+        let mut d = Deferred::default();
+        for id in [1, 2] {
+            assert_eq!(d.deliver(q, 0, id, &cell()?), Ok(Delivered::Pending));
+        }
+        let failed = d.on_done(JobDone::Delivered {
+            queue: q,
+            generation: 0,
+            cell_id: 1,
+            committed: false,
+        });
+        assert_eq!(failed, None, "a failed commit is not reported");
+        let ok = d.on_done(JobDone::Delivered {
+            queue: q,
+            generation: 0,
+            cell_id: 2,
+            committed: true,
+        });
+        assert_eq!(ok, Some((q, 0, 2)));
+        assert_eq!(d.deliver(q, 0, 2, &cell()?), Ok(Delivered::Committed));
+        assert_eq!(d.jobs.len(), 2);
+        assert_eq!(
+            d.deliver(q, 0, 1, &cell()?),
+            Ok(Delivered::Pending),
+            "cell 1 is not committed"
+        );
+        assert_eq!(d.jobs.len(), 3, "the failed delivery is asked again");
+        for id in 10..(10 + 300) {
+            let _ = d.deliver(q, 0, id, &cell()?);
+            let _ = d.on_done(JobDone::Delivered {
+                queue: q,
+                generation: 0,
+                cell_id: id,
+                committed: true,
+            });
+        }
+        let kept = d.committed.get(&q).map_or(0, |(_, ids)| ids.len());
+        assert_eq!(kept, COMMITTED_KEPT);
+        assert_eq!(d.deliver(q, 0, 309, &cell()?), Ok(Delivered::Committed));
+        assert_eq!(
+            d.deliver(q, 0, 2, &cell()?),
+            Ok(Delivered::Pending),
+            "the oldest is dropped"
+        );
         Ok(())
     }
 }

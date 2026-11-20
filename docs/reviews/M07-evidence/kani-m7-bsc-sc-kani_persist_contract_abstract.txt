@@ -1,0 +1,19 @@
+tree = 1f5b604 + SC-08 of this commit
+# cargo kani --package secmp-client-core --harness kani_proofs::kani_persist_contract_abstract --exact, alone (2026-10-30, nproc 32), via
+# target/bsc-scripts/kani-one.py (= docs/reviews/M07-evidence/kani-one-a3b.py.txt with the package as an argument);
+# peak = getrusage(RUSAGE_CHILDREN).ru_maxrss of the wrapper process, limit KANI_CBMC_RSS_LIMIT_KIB 14160156,
+# 90 % = 12744140.
+  Checking harness kani_proofs::kani_persist_contract_abstract...
+  Check 62: kani_proofs::kani_persist_contract_abstract.cover.1
+  - Status: SATISFIED
+  Check 71: kani_proofs::kani_persist_contract_abstract.cover.2
+  - Status: SATISFIED
+  Check 73: kani_proofs::kani_persist_contract_abstract.cover.3
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 883 failed (4 unreachable)
+  ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 456.63815s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 458 s; peak 11986380 KiB = 84.6 % of 14160156 KiB

@@ -1,6 +1,6 @@
 # SecMPro
 
-> **Pre-release — do not use.** SecMPro is under active development (milestone M1 of 12). Nothing here has been audited, the protocol and the code change without notice, and there are no releases. Do not use it for anything that matters.
+> **Pre-release — do not use.** SecMPro is under active development; the current milestone is recorded in [docs/07-milestones.md](docs/07-milestones.md). Nothing here has been audited, the protocol and the code change without notice, and there are no releases. Do not use it for anything that matters.
 
 A zero-trust, post-quantum, metadata-free desktop messenger (Linux + Windows) with its own protocol, **SecMP/1**, written in Rust.
 

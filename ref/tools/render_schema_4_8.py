@@ -12,7 +12,7 @@ import sys
 from secmp_ref import encodings as enc
 from secmp_ref import encodings_cases as ec
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "SCHEMA-4.8-encodings.md"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.8-encodings.md"
 
 STREAM_ORDER = [
     ("Record/HELLO", "— (no stream input)"),

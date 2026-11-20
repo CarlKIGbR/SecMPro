@@ -1,0 +1,8 @@
+head c94767fe22e6fd85b451ffa04c0437081cca9c45
+cargo mutants --list --json --features kat --package secmp-store --file crates/secmp-store/src/backup.rs --in-diff target/m7-b16-mutants.diff > target/b4g-list.json 2> target/b4g-list.err
+python3 -I target/fable/material/M7-B-4g/check-list-names.py target/b4g-list.json target/m7-b16-mutants/mutants.out/outcomes.json > target/b4g-list-names.txt
+cargo mutants --list --json --features kat --package secmp-store > target/b4g-list-store.json 2> target/b4g-list-store.err
+python3 -I target/fable/material/M7-B-4g/check-list-names.py target/b4g-list-store.json >> target/b4g-list-names.txt
+listed 2, tested 2, total_mutants 2
+names equal
+listed 969

@@ -1,0 +1,52 @@
+head 64650f63fc515e3b72e088ecd253351c42562314
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index cb2032d..22d87c6 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -591,7 +591,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+     pub fn successions_pending(&self) -> usize {
+         self.controls
+             .values()
+-            .filter(|e| is_key_change(&e.row))
++            .filter(|_| true)
+             .count()
+     }
+ 
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.06s
+────────────
+ Nextest run ID 9dbb2e92-c1f7-4d6e-8937-5600605c17fd with nextest profile: default
+    Starting 8 tests across 1 binary (246 tests skipped)
+        FAIL [   1.827s] (1/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+  stdout ───
+
+    running 1 test
+    test sessions::tests::succession_pending_is_raised_once_at_its_time ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::succession_pending_is_raised_once_at_its_time
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 253 filtered out; finished in 1.82s
+
+  stderr ───
+
+    thread '<unnamed>' (3910911) panicked at crates/secmp-client-core/src/sessions/tests.rs:3613:9:
+    assertion `left == right` failed: a Control is no succession
+      left: 1
+     right: 0
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   1.861s] (2/8) secmp-client-core api::tests::restart_in_the_window_keeps_the_chain
+        PASS [   1.916s] (3/8) secmp-client-core api::tests::second_rotation_waits_behind_the_live_key_change
+        PASS [   2.002s] (4/8) secmp-client-core sessions::tests::switch_and_loss_leave_the_waiting_link_unplanned
+        PASS [   2.111s] (5/8) secmp-client-core sessions::tests::later_key_change_waits_for_the_head
+        PASS [   2.149s] (6/8) secmp-client-core hub::tests::two_routes_in_one_pump_keep_the_mark_on_the_sent_queue
+        PASS [   2.448s] (7/8) secmp-client-core sessions::tests::chain_order_survives_restarts
+        PASS [   2.824s] (8/8) secmp-client-core api::tests::rotation_is_not_held_back_by_a_pending_contact
+────────────
+     Summary [   2.824s] 8 tests run: 7 passed, 1 failed, 246 skipped
+        FAIL [   1.827s] (1/8) secmp-client-core sessions::tests::succession_pending_is_raised_once_at_its_time
+error: test run failed

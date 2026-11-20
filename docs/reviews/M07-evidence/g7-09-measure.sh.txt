@@ -1,0 +1,13 @@
+#!/bin/sh
+# G7-09 measurement: the per-mutant harness suite of the second mutants run (unmutated), 32 cores.
+set -e
+cd /work/SecMPro
+S=$(python3 -I target/m7logs/skips.py)
+cargo nextest run --locked -p secmp-client-core -p secmp-transport -p secmp-testkit --features secmp-testkit/harness --no-run >/dev/null 2>&1
+start=$(date +%s.%N)
+cargo nextest run --locked -p secmp-client-core -p secmp-transport -p secmp-testkit --features secmp-testkit/harness \
+  --max-fail=1:immediate --profile mutants-harness -- $S > target/m7logs/g709-suite.txt 2>&1 || echo "nextest exit $?"
+end=$(date +%s.%N)
+echo "wall_seconds=$(echo "$end - $start" | bc)"
+grep -E "Summary" target/m7logs/g709-suite.txt
+nproc

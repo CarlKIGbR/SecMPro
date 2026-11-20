@@ -2081,6 +2081,7 @@ fn kind(d: &Delivery) -> &'static str {
         Delivery::Control(_) => "Control",
         Delivery::KeyChange(_) => "KeyChange",
         Delivery::KeyChangeRefused => "KeyChangeRefused",
+        Delivery::KeyChangeUnchanged => "KeyChangeUnchanged",
         Delivery::Partial => "Partial",
         Delivery::Malformed => "Malformed",
         Delivery::Frozen => "Frozen",
@@ -2424,6 +2425,97 @@ fn content_verified_key_change() -> Result<()> {
         assert_eq!(trust, Trust::Verified);
         assert!(trust.may_send_real());
     }
+    Ok(())
+}
+
+/// ADR-058: the branches of an authenticated repeat. A `KeyChange` old → new, verified under the current `IK_sig`, is
+/// the change (a); the same `KeyChange` at a receiver whose current identity is the new one and whose previous `IK_sig`
+/// is the old one is unchanged, the trust untouched (b); with another previous key (c) or none (d) it freezes; a
+/// `KeyChange` signed by the previous key naming a third identity freezes (e).
+#[test]
+fn content_key_change_authenticated_repeat_branches() -> Result<()> {
+    let (old_sk, old_iks) = identity(1)?;
+    let (_, new_iks) = identity(2)?;
+    let (_, other_iks) = identity(3)?;
+    let (old, new, other) = (peer(1)?, peer(2)?, peer(3)?);
+    let kc = key_change(&old_sk, Label::TrKeychange, &new_iks, &new_iks)?;
+    let contents = fragments(1, &kc, 1669)?;
+    assert_eq!(contents.len(), 4);
+    let pts = plaintexts(&contents)?;
+    let kc2 = key_change(&old_sk, Label::TrKeychange, &other_iks, &other_iks)?;
+    let pts2 = plaintexts(&fragments(2, &kc2, 1669)?)?;
+    // the kind of the last delivery and the trust, from `Verified`, through a fresh inbox
+    let run = |pts: &[Plaintext],
+               peer: &HybridVerifyingKey,
+               current: Option<&IksPublic>,
+               previous: Option<&HybridVerifyingKey>|
+     -> (&'static str, Trust) {
+        let mut inbox = Inbox::new();
+        let mut trust = Trust::Verified;
+        let mut last = "none";
+        for pt in pts {
+            last = kind(&inbox.receive_known(pt, peer, current, previous, &mut trust));
+        }
+        (last, trust)
+    };
+    assert_eq!(
+        run(&pts, &old, Some(&old_iks), None),
+        ("KeyChange", Trust::KeyChanged),
+        "(a)"
+    );
+    let (last, trust) = run(&pts, &new, Some(&new_iks), Some(&old));
+    assert_eq!(last, "KeyChangeUnchanged", "(b)");
+    assert_eq!(trust, Trust::Verified, "(b) trust untouched");
+    assert_eq!(
+        run(&pts, &new, Some(&new_iks), Some(&other)),
+        ("KeyChangeRefused", Trust::Frozen),
+        "(c)"
+    );
+    assert_eq!(
+        run(&pts, &new, Some(&new_iks), None),
+        ("KeyChangeRefused", Trust::Frozen),
+        "(d)"
+    );
+    let (last, trust) = run(&pts2, &new, Some(&new_iks), Some(&old));
+    assert_eq!(last, "KeyChangeRefused", "(e)");
+    assert_eq!(trust, Trust::Frozen, "(e)");
+    Ok(())
+}
+
+/// Q147 (iv): the product's `key_change_body` (§7.6 `docs/03:503`, §7.7) is `new IKSPublic ‖ HybridSign(old IK_sig,
+/// "SecMP-TR/1 keychange", fingerprint(new))`: it verifies with the old key as the oracle's (`key_change`) does, and is
+/// delivered as the new identity; a body signed by another key does not verify.
+#[test]
+fn key_change_body_is_signed_by_the_old_key() -> Result<()> {
+    let (old_sk, old_iks) = identity(1)?;
+    let peer = content::ik_sig(&old_iks)?;
+    let (other_sk, _) = identity(3)?;
+    let (_, new_iks) = identity(2)?;
+    let body = content::key_change_body(&old_sk, &new_iks)?;
+    assert_eq!(body.iks, new_iks);
+    assert!(content::key_change_verifies(&body, &peer).is_ok());
+    // the oracle's body verifies the same way
+    let FragmentPayload::KeyChange(oracle) = FragmentPayload::decode(&key_change(
+        &old_sk,
+        Label::TrKeychange,
+        &new_iks,
+        &new_iks,
+    )?)?
+    else {
+        return Err(Error::Rejected);
+    };
+    assert_eq!(oracle.iks, body.iks);
+    assert!(content::key_change_verifies(&oracle, &peer).is_ok());
+    // signed by another key: refused
+    let forged = content::key_change_body(&other_sk, &new_iks)?;
+    assert!(content::key_change_verifies(&forged, &peer).is_err());
+    // the product body, fragmented, is delivered as the new identity
+    let payload = FragmentPayload::KeyChange(body).encode()?;
+    let pts = plaintexts(&fragments(1, &payload, 1669)?)?;
+    let mut trust = Trust::Verified;
+    let ds = receive_all(&mut Inbox::new(), &pts, &[0, 1, 2, 3], &peer, &mut trust)?;
+    assert_eq!(kinds(&ds), ["Partial", "Partial", "Partial", "KeyChange"]);
+    assert_eq!(trust, Trust::KeyChanged);
     Ok(())
 }
 

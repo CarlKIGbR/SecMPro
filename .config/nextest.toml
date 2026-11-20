@@ -3,3 +3,12 @@
 [[profile.default.overrides]]
 filter = 'test(cpu_per_slot_measured)'
 threads-required = "num-test-threads"
+
+# TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the profile of the second mutants run (`--profile mutants-harness`,
+# `gates::mutants_harness_args`). Its one override starts the killers of clock and period mutants before every other test by
+# priority, whatever their module is called (`gates::mutants_killer_profile`, test `mutant_killers_run_first_by_filter`).
+[profile.mutants-harness]
+
+[[profile.mutants-harness.overrides]]
+filter = 'test(/^m0_early::/)'
+priority = 100

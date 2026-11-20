@@ -1,0 +1,5 @@
+head 919da9ece24fd8f42967acb7ec7514f8dc9e97f5
+Found 2 mutants to test
+caught   crates/secmp-client-core/src/scheduler/core/mod.rs:860:30: replace match guard now >= up.die_at with false in World::step_due in 116s build + 0s test
+caught   crates/secmp-client-core/src/scheduler/core/mod.rs:1907:33: replace > with >= in Scheduler::next_deadline in 4s build + 0s test
+2 mutants tested in 10m: 2 caught

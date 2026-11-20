@@ -1,0 +1,281 @@
+head 8f4bcbdecee5e7926749aac0ccc1e5f156f40682
+
+## step 1 EXTB2-2 SE-22 sessions::tests::extb2_reset_with_argument_is_ignored (unfixed tree: test + helper only)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(extb2_reset_with_argument_is_ignored)'
+    thread '<unnamed>' (2163977) panicked at crates/secmp-client-core/src/sessions/tests.rs:543:9:
+    assertion `left == right` failed: a reset with an argument
+      left: Err(Reset)
+     right: Ok(())
+
+## step 2 EXTB2-3 (head 5e7094a + tests, field `app_rules`, switch and `app_payload_ok` added; no Api check, no receive filter)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(extb2_api_rejects) | test(extb2_receive_drops) | test(adr054_receive_rules)'
+### SE-23 sessions::tests::extb2_api_rejects_undefined_kinds_and_invalid_text
+    thread '<unnamed>' (2189109) panicked at crates/secmp-client-core/src/sessions/tests.rs:599:9:
+    ADR-054(1,3): Api accepted invalid cases with kinds [1, 1, 1, 4, 5, 6]
+### SE-24 sessions::tests::extb2_receive_drops_undefined_kinds_and_invalid_text
+    thread '<unnamed>' (2189108) panicked at crates/secmp-client-core/src/sessions/tests.rs:654:9:
+    ADR-054(1,3): receiver delivered invalid cases with kinds [1, 1, 1, 4, 5, 6]
+### SE-36 sessions::actor::tests::adr054_receive_rules_on_without_the_switch
+    thread 'sessions::actor::tests::adr054_receive_rules_on_without_the_switch' (2189105) panicked at crates/secmp-client-core/src/sessions/actor.rs:2090:9:
+    assertion `left == right` failed
+      left: [[50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50], [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51]]
+     right: [[51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51]]
+### SE-36 mutation: body of `raw_app_payloads_kat` emptied (fixed tree otherwise; reverted, `git diff` of the hunk empty)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(adr054_receive_rules)'
+    thread 'sessions::actor::tests::adr054_receive_rules_on_without_the_switch' (2190730) panicked at crates/secmp-client-core/src/sessions/actor.rs:2100:9:
+    assertion `left == right` failed: the test kit's switch
+      left: []
+     right: [[52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52]]
+
+## step 3 ADR-058
+### SE-33 sessions::tests::duplicate_key_change_is_dropped_not_frozen (head 7ac3307 + the step-3 tests only; no fix)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(duplicate_key_change_is_dropped) | test(forged_duplicate) | test(older_key_change_after) | test(old_key_cannot_announce)'
+    thread '<unnamed>' (2216009) panicked at crates/secmp-client-core/src/sessions/tests.rs:1876:9:
+    assertion `left == right` failed: a repeat is not frozen
+      left: Frozen
+     right: KeyChanged
+(SE-42, SE-44, SE-45 are green on the unfixed tree — the unfixed tree freezes every failing KeyChange; their reds are the
+named mutations of the fix, below.)
+### proto tr::tests::content_key_change_authenticated_repeat_branches — mutation (1): the fallback arm deleted (reverted)
+cmd: cargo nextest run -p secmp-proto --features kat -E 'test(content_key_change_authenticated_repeat_branches)'
+    thread 'tr::tests::content_key_change_authenticated_repeat_branches' (2219189) panicked at crates/secmp-proto/src/tr/tests.rs:2467:5:
+    assertion `left == right` failed: (b)
+      left: "KeyChangeRefused"
+     right: "KeyChangeUnchanged"
+### proto tr::tests::content_key_change_authenticated_repeat_branches — mutation (2): `current == Some(&kc.iks) &&` deleted (reverted)
+    thread 'tr::tests::content_key_change_authenticated_repeat_branches' (2220770) panicked at crates/secmp-proto/src/tr/tests.rs:2480:5:
+    assertion `left == right` failed: (e)
+      left: "KeyChangeUnchanged"
+     right: "KeyChangeRefused"
+### store sessions::tests::previous_identity_round_trip — mutation: `put_previous_identity` body `Ok(())` (new items; reverted)
+cmd: cargo nextest run -p secmp-store --features kat -E 'test(previous_identity_round_trip)'
+    thread 'sessions::tests::previous_identity_round_trip' (2222081) panicked at crates/secmp-store/src/sessions.rs:458:9:
+    assertion `left == right` failed
+      left: None
+     right: Some([105, 107, 115, 45, 97])
+### SE-42 sessions::tests::forged_duplicate_key_change_freezes — mutation `previous.is_some_and(|p| key_change_verifies(&kc, p).is_ok())` → `previous.is_some()` (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(forged_duplicate)'
+    thread '<unnamed>' (2224816) panicked at crates/secmp-client-core/src/sessions/tests.rs:1916:9:
+    assertion `left == right` failed
+      left: KeyChanged
+     right: Frozen
+### SE-43 sessions::tests::key_change_naming_current_identity_without_previous_freezes — mutation → `previous.map_or(true, |p| key_change_verifies(&kc, p).is_ok())` (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(key_change_naming_current)'
+    thread '<unnamed>' (2225938) panicked at crates/secmp-client-core/src/sessions/tests.rs:1941:9:
+    assertion `left == right` failed
+      left: Unverified
+     right: Frozen
+### SE-45 sessions::tests::old_key_cannot_announce_another_identity — mutation `current == Some(&kc.iks) &&` deleted (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(old_key_cannot_announce)'
+    thread '<unnamed>' (2227069) panicked at crates/secmp-client-core/src/sessions/tests.rs:2003:9:
+    assertion `left == right` failed
+      left: KeyChanged
+     right: Frozen
+### SE-44 sessions::tests::older_key_change_after_a_newer_one_freezes — the named two-line mutation: actor.rs `self.prev_peer = Some(core::mem::replace(&mut self.peer, peer));` → `self.prev_peer.get_or_insert(core::mem::replace(&mut self.peer, peer));` and content.rs `current == Some(&kc.iks) &&` deleted (both reverted; `git diff` of both hunks empty)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(older_key_change_after)'
+    thread '<unnamed>' (2228199) panicked at crates/secmp-client-core/src/sessions/tests.rs:1980:9:
+    assertion `left == right` failed
+      left: KeyChanged
+     right: Frozen
+
+## step 4 Q222 (1)–(3) (head a24ca32 + the step-4 tests and the helpers `evicted_direct`/`failed_direct`; no fix)
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(extb2_key_change_survives) | test(extb2_failed_control) | test(evicted_route_update_is_resent) | test(control_row_deleted_only) | test(superseded_control_attempt) | test(control_written_without_ok_send) | test(superseded_route_update_is_not) | test(late_eviction_rewrites)'
+### SE-25 sessions::tests::extb2_key_change_survives_last_seal_before_write_restart
+    thread '<unnamed>' (2267604) panicked at crates/secmp-client-core/src/sessions/tests.rs:2093:9:
+    assertion `left == right` failed: the row outlives the seal of the last cell (Q222 2)
+      left: 0
+     right: 1
+### SE-26 sessions::actor::tests::extb2_failed_control_send_remains_retryable
+    thread 'sessions::actor::tests::extb2_failed_control_send_remains_retryable' (2267595) panicked at crates/secmp-client-core/src/sessions/actor.rs:2193:9:
+    a failed SEND lost the reset notification
+### SE-27 sessions::tests::evicted_route_update_is_resent
+    thread '<unnamed>' (2267605) panicked at crates/secmp-client-core/src/sessions/tests.rs:2131:9:
+    assertion `left == right` failed: the evicted content keeps its row
+      left: 0
+     right: 1
+### SE-29 sessions::tests::control_row_deleted_only_after_last_ok_send
+    thread '<unnamed>' (2267602) panicked at crates/secmp-client-core/src/sessions/tests.rs:2162:13:
+    assertion `left == right` failed: after the seal of cell 3
+      left: 0
+     right: 1
+### SE-30 sessions::tests::superseded_control_attempt_outcomes_are_ignored
+    thread '<unnamed>' (2267607) panicked at crates/secmp-client-core/src/sessions/tests.rs:2193:17:
+    assertion `left == right` failed: after the last seal
+      left: 0
+     right: 1
+### SE-31 sessions::tests::control_written_without_ok_send_is_resent_after_restart
+    thread '<unnamed>' (2267603) panicked at crates/secmp-client-core/src/sessions/tests.rs:2241:9:
+    assertion `left == right` failed: read again after the restart
+      left: 0
+     right: 1
+### SE-41 sessions::tests::late_eviction_rewrites_the_control_row
+    thread '<unnamed>' (2267606) panicked at crates/secmp-client-core/src/sessions/tests.rs:2303:9:
+    assertion `left == right` failed: written again
+      left: 0
+     right: 1
+(SE-37 superseded_route_update_is_not_resent is green on this tree, as dictated: R1's row goes in its seal commit there;
+its red is the mutation below.)
+### step-4 mutation reds (fixed tree; each one-site mutation applied, run, reverted; `git diff` of the hunk empty after)
+## SE-30 (a) `on_relayed` without the attempt comparison (`&& e.attempt == r.attempt` deleted); cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(superseded_control_attempt)'
+    thread '<unnamed>' (2270980) panicked at crates/secmp-client-core/src/sessions/tests.rs:2202:17:
+    assertion `left == right` failed: after the last seal
+      left: 0
+     right: 1
+## SE-30 (b) `replan_control` without the attempt check (`if entry.attempt != r.attempt { return; }` deleted); same cmd
+    thread '<unnamed>' (2271544) panicked at crates/secmp-client-core/src/sessions/tests.rs:2208:9:
+    nothing planned again
+## SE-37 the supersession branch of `replan_control` deleted (the older `Routes` entry is planned again); cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(superseded_route_update_is_not)'
+    thread '<unnamed>' (2272108) panicked at crates/secmp-client-core/src/sessions/tests.rs:2279:9:
+    assertion `left == right` failed: the newer RouteUpdate only
+      left: 2
+     right: 1
+## SE-39 `MemPersist::control_requeued` body → `Ok(None)`; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(mem_persist_forwards)'
+    thread 'scheduler::outbox::tests::mem_persist_forwards_control_rows_to_its_mirror' (2272671) panicked at crates/secmp-client-core/src/scheduler/outbox.rs:586:9:
+    assertion `left == right` failed
+      left: Ok(None)
+     right: Ok(Some(7))
+## SE-40 "`Err` also sets `ord = None`" in `settle_controls`; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(settle_retries)'
+    thread 'sessions::actor::tests::settle_retries_a_failed_row_delete' (2273234) panicked at crates/secmp-client-core/src/sessions/actor.rs:2477:9:
+    assertion `left == right` failed: failed once, tried again
+      left: [4]
+     right: [4, 4]
+
+## B-4f2
+### F2 (Q224) unfixed tree = e161e4d (F1) + the F2 tests and helpers (pair, Script, routes, sids, resets, live_controls_test); no fix
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(superseded_route_row_delete) | test(superseded_routes_row_is_not) | test(two_route_rows_read_back)'
+#### SE-46 sessions::actor::tests::superseded_route_row_delete_is_retried
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2433680) panicked at crates/secmp-client-core/src/sessions/actor.rs:2638:9:
+    assertion `left == right` failed: Q224: the older row goes when the newer is added
+      left: []
+     right: [("relayed", 4)]
+#### SE-47 sessions::actor::tests::superseded_routes_row_is_not_rewritten
+    thread 'sessions::actor::tests::superseded_routes_row_is_not_rewritten' (2433683) panicked at crates/secmp-client-core/src/sessions/actor.rs:2674:9:
+    assertion `left == right` failed: Q224: a retired entry's row is never written again
+      left: 2
+     right: 1
+#### SE-48 sessions::tests::two_route_rows_read_back_send_only_the_newer
+    thread '<unnamed>' (2433682) panicked at crates/secmp-client-core/src/sessions/tests.rs:2092:9:
+    assertion `left == right` failed: Q224: the older RouteUpdate row goes at open
+      left: 2
+     right: 1
+### F2 mutation reds (fixed tree; applied, run, reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E '<filter>'
+#### SE-37 superseded_route_update_is_not_resent — `retire_routes()` call in `add_control` deleted (material §1.6: `:2279:9`; the line moved by SE-48 inserted above it)
+    thread '<unnamed>' (2436200) panicked at crates/secmp-client-core/src/sessions/tests.rs:2319:9:
+    assertion `left == right` failed: the newer RouteUpdate only
+      left: 2
+     right: 1
+#### SE-46 — `entry.retired ||` deleted in `replan_control`
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2436763) panicked at crates/secmp-client-core/src/sessions/actor.rs:2663:9:
+    assertion `left == right` failed: only the newer RouteUpdate
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]]
+#### SE-46 — settle (ii) `(e.done || e.retired)` → `(e.done)`
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2437333) panicked at crates/secmp-client-core/src/sessions/actor.rs:2652:9:
+    assertion `left == right` failed: a failed delete is retried at the next settle
+      left: [("relayed", 4)]
+     right: [("relayed", 4), ("relayed", 4)]
+#### SE-46 — retain `if e.retired { e.ord.is_some() }` → `if e.retired { true }`
+    thread 'sessions::actor::tests::superseded_route_row_delete_is_retried' (2437896) panicked at crates/secmp-client-core/src/sessions/actor.rs:2658:9:
+    assertion `left == right` failed: deleted: not tried again
+      left: 4
+     right: 2
+#### SE-47 — `self.controls.remove(&id)` in `retire_routes` deleted
+    thread 'sessions::actor::tests::superseded_routes_row_is_not_rewritten' (2438459) panicked at crates/secmp-client-core/src/sessions/actor.rs:2679:9:
+    assertion `left == right` failed: Q224: a retired entry's row is never written again
+      left: 2
+     right: 1
+### F3 (Q225) unfixed tree = 634648d (F2) + the F3 tests and the `resets` helper; no fix
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(control_cell_waits) | test(durability_without_rows)'
+#### SE-49 sessions::actor::tests::control_cell_waits_for_its_row
+    thread 'sessions::actor::tests::control_cell_waits_for_its_row' (2464943) panicked at crates/secmp-client-core/src/sessions/actor.rs:2669:9:
+    assertion `left == right` failed: Q225: a control cell waits for its durable row
+      left: 1
+     right: 0
+(SE-50 durability_without_rows_holds_nothing: PASS on this tree, as the material says.)
+#### SE-49 on the fixed tree, mutation `row_missing` → `false` (reverted)
+    thread 'sessions::actor::tests::control_cell_waits_for_its_row' (2467787) panicked at crates/secmp-client-core/src/sessions/actor.rs:2694:9:
+    assertion `left == right` failed: Q225: a control cell waits for its durable row
+      left: 1
+     right: 0
+#### SE-50 named two-line mutation: both `Ok(None) => … durable = false` arms (`replan_control`, `settle_controls` (i)) → `Ok(None) => {}` (reverted)
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(durability_without_rows)'
+    thread 'sessions::actor::tests::durability_without_rows_holds_nothing' (2466663) panicked at crates/secmp-client-core/src/sessions/actor.rs:2733:9:
+    assertion `left == right` failed: Q225: a durability that keeps no rows holds nothing
+      left: 0
+     right: 1
+(one-site mutation of the `replan_control` arm only: PASS — settle (i) repeats the rule at the next prepare, as the material says.)
+### F4 (F-03) — both tests green on the tree; reds by the named mutations of `open_conversation` (reverted)
+#### SE-51 sessions::tests::undecodable_previous_identity_freezes_a_repeat — `.and_then(|row| IksPublic::decode(&row).ok())` → `.map(|row| IksPublic::decode(&row)).transpose()?`
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(undecodable_previous_identity)'
+    (the open fails; the runner's line:)
+    Error: "unavailable"
+#### SE-52 sessions::tests::previous_identity_read_error_fails_open — `.previous_identity(contact.0)?` → `.previous_identity(contact.0).ok().flatten()`
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(previous_identity_read_error)'
+    thread '<unnamed>' (2493892) panicked at crates/secmp-client-core/src/sessions/tests.rs:2071:9:
+    ADR-058: a previous identity that does not open fails the open
+
+## step 5 (B-4f + B-4f2 §4.4) unfixed tree = 717b4b0 (F4) + the step-5 tests and `lost_direct`; no on_lost/switch/hub hunk
+cmd: cargo nextest run -p secmp-client-core --features kat --no-fail-fast -E 'test(queue_lost_replans) | test(switch_replans_unsettled) | test(replanning_control_seals) | test(repeated_route_update_registers)'
+### SE-28 sessions::tests::queue_lost_replans_unsealed_and_sealed_control_content (re-dictated, Q223)
+    thread '<unnamed>' (2518797) panicked at crates/secmp-client-core/src/sessions/tests.rs:2205:9:
+    assertion `left == right` failed: Q222 (3), §10.6 (5): A re-written, C kept, B superseded
+      left: [Some(1)]
+     right: [Some(1), Some(2)]
+### SE-35 sessions::actor::tests::switch_replans_unsettled_control_content
+    thread 'sessions::actor::tests::switch_replans_unsettled_control_content' (2518795) panicked at crates/secmp-client-core/src/sessions/actor.rs:2764:9:
+    Q-5: unsettled control content is planned again for the new queue
+### SE-38 hub::tests::repeated_route_update_registers_one_send_queue
+    thread '<unnamed>' (2518800) panicked at crates/secmp-client-core/src/hub.rs:1363:13:
+    assertion `left == right` failed: AddSend per register_route
+      left: [1, 1, 1]
+     right: [1, 0, 1]
+(SE-32 replanning_control_seals_nothing_outside_a_slot: PASS on this tree; its red is the mutation below.)
+### step-5 mutation reds (fixed tree; reverted)
+#### SE-35 — `switch_send_queue` filter `!e.done` → `e.done`; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(switch_replans_unsettled)'
+    thread 'sessions::actor::tests::switch_replans_unsettled_control_content' (2520657) panicked at crates/secmp-client-core/src/sessions/actor.rs:2794:9:
+    Q-5: unsettled control content is planned again for the new queue
+#### SE-32 — `let _ = self.seal(&dummy());` as the last line of `replan_control`; cmd: … -E 'test(replanning_control_seals)'
+    thread 'sessions::actor::tests::replanning_control_seals_nothing_outside_a_slot' (2521220) panicked at crates/secmp-client-core/src/sessions/actor.rs:2835:9:
+    assertion `left == right` failed: after on_failed
+      left: 2
+     right: 1
+#### SE-28 — `retire_routes()` call in `add_control` deleted (with the on_lost hunk); cmd: … -E 'test(queue_lost_replans)'
+    thread '<unnamed>' (2521783) panicked at crates/secmp-client-core/src/sessions/tests.rs:2205:9:
+    assertion `left == right` failed: Q222 (3), §10.6 (5): A re-written, C kept, B superseded
+      left: [Some(1), Some(1), Some(2)]
+     right: [Some(1), Some(2)]
+
+## step 6 KC guard — SE-34 api::tests::second_rotation_refused_while_key_change_in_flight
+### unfixed tree = 307b033 + the test; cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(second_rotation_refused)'
+    thread '<unnamed>' (2546960) panicked at crates/secmp-client-core/src/api.rs:1837:13:
+    assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
+      left: None
+     right: Some(Unavailable)
+    (`left: None` = the second `RotateIdentity` was `Ok(IdentityRotated(..))`)
+### F-05 mutation (a): `key_change_in_flight` body → `false` (reverted)
+    thread '<unnamed>' (2548742) panicked at crates/secmp-client-core/src/api.rs:1846:13:
+    assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
+      left: None
+     right: Some(Unavailable)
+### F-05 mutation (b): `Some(&3)` → `Some(&1)` in `key_change_in_flight` (reverted)
+    thread '<unnamed>' (2549312) panicked at crates/secmp-client-core/src/api.rs:1846:13:
+    assertion `left == right` failed: OPEN-M7-B-12: no second succession while a KeyChange is in flight
+      left: None
+     right: Some(Unavailable)
+
+## step 7 fix-ups
+### VD-2 harness::m7_restart::queue_deleted_failure_reaches_hub_errors (prefix assert) — mutation `driver.rs` `"queue_deleted: {err}"` → `"step: {err}"` (reverted)
+cmd: cargo nextest run -p secmp-testkit --features harness -E 'test(queue_deleted_failure_reaches_hub_errors)'
+    thread 'm7_restart::queue_deleted_failure_reaches_hub_errors' (2575187) panicked at crates/secmp-testkit/tests/harness/m7_restart.rs:309:5:
+    the refused write of queue_deleted is reported
+### L1 testscan::no_plain_seed_returns (one-line trait impl fixture) against the scanner unchanged since START (8f4bcbd…dd345f3 did not touch testscan.rs)
+cmd: cargo nextest run -p xtask -E 'test(no_plain_seed_returns)'
+    thread 'testscan::no_plain_seed_returns' (2575595) panicked at xtask/src/testscan.rs:1321:5:
+    a one-line trait impl opens no block (L1)
+    (the message is the assert's; the hit it found is the `fn seed(&self) -> [u8; 32]` of the inherent `impl E`)
+
+## step 10 (B-4f2) xtask docs::adr_018_status — the two new needles; red: line 109 of docs/08-decisions.md (holds both needles) deleted in the working tree, restored after (`git diff docs/08-decisions.md` empty)
+cmd: cargo nextest run -p xtask -E 'test(/^docs::/)'
+    thread 'docs::adr_018_status' (2600342) panicked at xtask/src/docs.rs:299:5:
+    assertion failed: adr018.contains("**ADR-018 Amendment 1 — acceptance after M6. Status: Accepted (Owner, 2026-11-09")

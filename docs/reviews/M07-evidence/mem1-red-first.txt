@@ -1,0 +1,19 @@
+head 88caecbac1b4c06b988dfce6033958b6e7231ed4
+kernel 7.0.0-34-generic
+start: test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+R0:
+sed -i 's/            Backend::MemfdSecret => &\["sh", "dd", "dc"\],/            Backend::MemfdSecret => \&["sh", "dd", "dc", "zz"],/' crates/secmp-sys-mem/src/secret_page/unix.rs
+cargo test --locked -p secmp-sys-mem --lib -- guard_pages_and_locking_as_seen_by_the_os
+panicked at crates/secmp-sys-mem/src/secret_page/unix.rs:252:13:
+MemfdSecret: VmFlags " rd wr sh mr mw ms lo dc dd sd " lacks zz
+R1:
+sed -i 's/            os::assert_protected(data, p.backend());/            os::assert_protected(data, Backend::MemfdSecret);/' crates/secmp-sys-mem/src/secret_page.rs
+cargo test --locked -p secmp-sys-mem --lib -- guard_pages_and_locking_as_seen_by_the_os
+panicked at crates/secmp-sys-mem/src/secret_page/unix.rs:237:13:
+MemfdSecret: /proc/self/mem read of the data page gave Ok(32) (the kernel must refuse it)
+R2:
+sed -i 's/        let ret = unsafe { libc::syscall(libc::SYS_memfd_secret, libc::O_CLOEXEC) };/        let ret = unsafe { libc::syscall(libc::SYS_memfd_create, c"secretmem".as_ptr(), libc::MFD_CLOEXEC) };/' crates/secmp-sys-mem/src/secret_page/unix.rs
+cargo test --locked -p secmp-sys-mem --lib -- guard_pages_and_locking_as_seen_by_the_os
+panicked at crates/secmp-sys-mem/src/secret_page/unix.rs:237:13:
+MemfdSecret: /proc/self/mem read of the data page gave Ok(32) (the kernel must refuse it)
+restored: 416d6586 e6c3809f

@@ -1,0 +1,38 @@
+tree = b7d7ee6 (K7-03b); before: _k4 96.3 % alone (A-3e), 94.0 % in ci-full
+# cargo kani --package secmp-proto -Z stubbing --harness kani_proofs::<name> --exact, each alone (2026-10-30, nproc 32), via
+# target/bsc-scripts/kani-one.py (= docs/reviews/M07-evidence/kani-one-a3b.py.txt with the package as an argument,
+# committed as docs/reviews/M07-evidence/kani-one-bsc.py.txt); peak = getrusage(RUSAGE_CHILDREN).ru_maxrss of the
+# wrapper process (one process per harness), limit KANI_CBMC_RSS_LIMIT_KIB 14160156, 90 % = 12744140.
+
+| harness | tree | VERIFICATION | covers | verification time (s) | wall (s) | peak KiB | % of limit |
+|---|---|---|---|---|---|---|---|
+| `tr_header_selection_k0_2` | b7d7ee6 | SUCCESSFUL | none | 9.63355 | 12 | 815752 | 5.8 |
+| `tr_header_selection_k3` | b7d7ee6 | SUCCESSFUL | none | 10.494786 | 13 | 820552 | 5.8 |
+| `tr_header_selection_k4` | b7d7ee6 | SUCCESSFUL | none | 13.247134 | 16 | 1053884 | 7.4 |
+
+## raw (the wrapper's kept lines)
+
+  Checking harness kani_proofs::tr_header_selection_k0_2...
+  SUMMARY:
+  ** 0 of 1097 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.63355s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 12 s; peak 815752 KiB = 5.8 % of 14160156 KiB
+
+  Checking harness kani_proofs::tr_header_selection_k3...
+  SUMMARY:
+  ** 0 of 1097 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 10.494786s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 13 s; peak 820552 KiB = 5.8 % of 14160156 KiB
+
+  Checking harness kani_proofs::tr_header_selection_k4...
+  SUMMARY:
+  ** 0 of 1097 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.247134s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 16 s; peak 1053884 KiB = 7.4 % of 14160156 KiB
+

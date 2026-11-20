@@ -158,7 +158,7 @@ fn tor_isolation_token_per_link() {
     let backend = Recording::default();
     let provider = ready_provider(backend.clone());
     runtime().block_on(async {
-        let relay = relay_ref(0x42);
+        let relay = relay_ref(0x09);
         for i in 0..5 {
             provider.connect(&relay, Isolation(i)).await.unwrap();
         }
@@ -182,7 +182,7 @@ fn tor_no_link_before_bootstrap() {
     let state = Arc::new(TorState::new());
     let provider = TorProvider::with_backend(backend.clone(), Arc::clone(&state));
     runtime().block_on(async {
-        let relay = relay_ref(0x43);
+        let relay = relay_ref(0x0a);
         assert_eq!(
             provider.connect(&relay, Isolation(0)).await.err(),
             Some(Error::TorNotReady)
@@ -355,7 +355,7 @@ fn onion_connect_uses_port_443() {
     let backend = Recording::default();
     let provider = ready_provider(backend.clone());
     runtime().block_on(async {
-        for pk in [0x42, 0x43, 0x44] {
+        for pk in [0x09, 0x0a, 0x0b] {
             provider
                 .connect(&relay_ref(pk), Isolation(u64::from(pk)))
                 .await
@@ -364,7 +364,7 @@ fn onion_connect_uses_port_443() {
     });
     let calls = backend.calls.lock().unwrap();
     assert_eq!(calls.len(), 3);
-    for ((host, port, _), pk) in calls.iter().zip([0x42_u8, 0x43, 0x44]) {
+    for ((host, port, _), pk) in calls.iter().zip([0x09_u8, 0x0a, 0x0b]) {
         assert_eq!(*port, 443);
         assert_eq!(*host, format!("{}.onion", base32(&onion_bytes([pk; 32]))));
     }
@@ -380,7 +380,7 @@ fn tor_connect_failure_is_tor_unavailable() {
     let provider = ready_provider(backend.clone());
     runtime().block_on(async {
         assert_eq!(
-            provider.connect(&relay_ref(0x45), Isolation(0)).await.err(),
+            provider.connect(&relay_ref(0x0c), Isolation(0)).await.err(),
             Some(Error::TorUnavailable)
         );
     });

@@ -16,6 +16,7 @@ mod hx_gen;
 mod accept;
 mod accept_ok;
 mod build;
+mod classified;
 mod envelope;
 mod fixture;
 mod flow;

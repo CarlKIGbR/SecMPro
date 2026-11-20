@@ -92,6 +92,22 @@ pub struct Accepted {
     pub profile: Profile,
 }
 
+/// The cells a [`Responder::accept_classified`] call spent (review RT-1, `docs/03` §6.5): the indices into its `cells`,
+/// ascending, of every chunk that belonged to a complete group processed in the call — accepted or rejected. The
+/// caller retains none of them; the cells of partial groups, the duplicates a group ignored and the cells that did not
+/// open are not spent. Empty after [`Error::Unavailable`]: nothing was committed and the same cells are retried
+/// (delta review VD2-7).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Spent(Vec<usize>);
+
+impl Spent {
+    /// The spent indices, ascending, each once.
+    #[must_use]
+    pub fn indices(&self) -> &[usize] {
+        &self.0
+    }
+}
+
 /// The responder (the inviter).
 pub struct Responder;
 
@@ -324,23 +340,51 @@ impl Responder {
         own_keys: &ResponderKeys<'_>,
         entropy: &mut impl Entropy,
     ) -> Result<Accepted> {
+        Self::accept_classified(cells, record, store, own_keys, entropy).0
+    }
+
+    /// [`Responder::accept`], and the cells the call spent ([`Spent`], review RT-1): the caller drops the spent cells
+    /// and retains the others (at most the newest 24, module documentation). The result is `accept`'s, unchanged;
+    /// after [`Error::Unavailable`] nothing is spent (delta review VD2-7).
+    pub fn accept_classified(
+        cells: &[Cell],
+        record: &InvitationRecord,
+        store: &mut impl PrekeyStore,
+        own_keys: &ResponderKeys<'_>,
+        entropy: &mut impl Entropy,
+    ) -> (Result<Accepted>, Spent) {
         #[cfg(feature = "kat")]
         ACCEPT_SITE_KAT.set(Some("no complete group"));
-        let k_inv = derive_k_inv(&record.ld_id, &record.link_key)?;
+        let k_inv = match derive_k_inv(&record.ld_id, &record.link_key) {
+            Ok(k_inv) => k_inv,
+            Err(e) => return (Err(e), Spent::default()),
+        };
         let ad_cell = [Label::HxInitcell.as_bytes(), record.ld_id.as_slice()].concat();
         // trial-open every cell with K_inv; anything that does not open or parse is ignored (garbage may come from
-        // the relay or an invitation thief; it is never fatal)
-        let opened = cells.iter().filter_map(|cell| {
+        // the relay or an invitation thief; it is never fatal). Each chunk carries the index of its cell.
+        let opened = cells.iter().enumerate().filter_map(|(at, cell)| {
             let p = open_cell(&k_inv, &ad_cell, cell)?;
-            Some((p.init_id, usize::from(p.i), p.chunk))
+            Some((p.init_id, usize::from(p.i), (at, p.chunk)))
         });
-        drive(
+        let mut spent = Vec::new();
+        let result = drive(
             opened,
             store,
             record.opk_id,
             &record.ld_id,
-            |group, store| process(group, record, store, own_keys, entropy),
-        )
+            |group, store| {
+                // RT-1: every chunk of a complete group that is processed is spent, whatever the outcome
+                spent.extend(group.chunks.iter().flatten().map(|(at, _)| *at));
+                process(group, record, store, own_keys, entropy)
+            },
+        );
+        if matches!(result, Err(Error::Unavailable)) {
+            // VD2-7: nothing was committed; the group is retried
+            spent.clear();
+        }
+        spent.sort_unstable();
+        spent.dedup();
+        (result, Spent(spent))
     }
 }
 
@@ -354,7 +398,7 @@ fn open_cell(k_inv: &SecretBytes<32>, ad: &[u8], cell: &Cell) -> Option<Handshak
 
 /// §6.6 steps 1–3 on a complete group; no side effect.
 fn process(
-    group: &Group<Id, Box<[u8; HANDSHAKE_CHUNK_LEN]>>,
+    group: &Group<Id, (usize, Box<[u8; HANDSHAKE_CHUNK_LEN]>)>,
     record: &InvitationRecord,
     store: &impl PrekeyStore,
     own_keys: &ResponderKeys<'_>,
@@ -365,7 +409,7 @@ fn process(
         HANDSHAKE_CHUNK_LEN.saturating_mul(usize::from(HANDSHAKE_CHUNKS)),
     ));
     for chunk in &group.chunks {
-        padded.extend_from_slice(chunk.as_deref().ok_or(Error::Rejected)?);
+        padded.extend_from_slice(chunk.as_ref().ok_or(Error::Rejected)?.1.as_slice());
     }
 
     // step 1: parse Outer (padding, version, low-order EK_I); `spk_id`/`opk_id` are this invitation's; the SPK is

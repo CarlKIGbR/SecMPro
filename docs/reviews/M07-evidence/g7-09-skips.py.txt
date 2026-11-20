@@ -1,0 +1,10 @@
+import re, sys
+d = open('xtask/src/expect.rs').read()
+out = []
+for const in ('MUTANT_SKIP_TESTS', 'MUTANT_HARNESS_SKIP_TESTS'):
+    i = d.index('pub(crate) const %s: &[(&str, &str)] = &[' % const)
+    j = d.index('\n];', i)
+    block = d[i:j]
+    for m in re.finditer(r'\(\s*"([A-Za-z0-9_]+)",', block):
+        out.append(m.group(1))
+sys.stdout.write(' '.join('--skip %s' % n for n in out))

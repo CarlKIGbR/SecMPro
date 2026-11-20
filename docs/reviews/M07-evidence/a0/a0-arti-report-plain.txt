@@ -1,0 +1,8 @@
+round fresh: 3 files
+  tor/cache/dir.lock 0 B head 
+  tor/cache/dir.sqlite3 65536 B head 53514c69746520666f726d6174203300
+  tor/state/state/state.lock 0 B head 
+round existing: 3 files
+  tor/cache/dir.lock 0 B head 
+  tor/cache/dir.sqlite3 65536 B head 53514c69746520666f726d6174203300
+  tor/state/state/state.lock 0 B head 

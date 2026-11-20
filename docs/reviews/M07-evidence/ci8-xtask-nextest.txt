@@ -1,0 +1,333 @@
+   Compiling xtask v0.0.0 (/work/SecMPro/xtask)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.65s
+────────────
+ Nextest run ID 860d36fe-fd2f-4fdf-90cd-61a2423d5c75 with nextest profile: default
+    Starting 326 tests across 1 binary
+        PASS [   0.005s] (  1/326) xtask::bin/xtask ci::tests::step_ids_are_unique
+        PASS [   0.006s] (  2/326) xtask::bin/xtask ci::tests::option_parsing
+        PASS [   0.006s] (  3/326) xtask::bin/xtask ci::tests::ci_full_accepts_the_proverif_link_delegation
+        PASS [   0.006s] (  4/326) xtask::bin/xtask ci::tests::fast_checks_fuzz_targets
+        PASS [   0.006s] (  5/326) xtask::bin/xtask ci::tests::miri_full_has_one_step_per_package
+        PASS [   0.007s] (  6/326) xtask::bin/xtask cooldown::tests::lockfile_parsing
+        PASS [   0.007s] (  7/326) xtask::bin/xtask cooldown::tests::exception_allows_young_pinned_version_until_date
+        PASS [   0.019s] (  8/326) xtask::bin/xtask cooldown::tests::retry_stops_after_three_transient_failures
+        PASS [   0.019s] (  9/326) xtask::bin/xtask cooldown::tests::exception_does_not_cover_other_versions
+        PASS [   0.020s] ( 10/326) xtask::bin/xtask cooldown::tests::expired_exception_is_a_finding
+        PASS [   0.008s] ( 11/326) xtask::bin/xtask cooldown::tests::transient_failure_is_retried_then_succeeds
+        PASS [   0.008s] ( 12/326) xtask::bin/xtask cooldown::tests::non_transient_failure_is_not_retried
+        PASS [   0.021s] ( 13/326) xtask::bin/xtask cooldown::tests::response_split_and_pubtime
+        PASS [   0.009s] ( 14/326) xtask::bin/xtask cooldown::tests::transient_curl_statuses
+        PASS [   0.009s] ( 15/326) xtask::bin/xtask ctreport::tests::histogram_bin_count_is_pinned_in_both_places
+        PASS [   0.022s] ( 16/326) xtask::bin/xtask cooldown::tests::cooldown_covers_m6_lock
+        PASS [   0.024s] ( 17/326) xtask::bin/xtask ctreport::tests::refuses_a_duplicated_target
+        PASS [   0.021s] ( 18/326) xtask::bin/xtask ctreport::tests::ct_check_reads_reports_against_a_chosen_target_set
+        PASS [   0.024s] ( 19/326) xtask::bin/xtask ctreport::tests::a_consistent_report_passes_and_is_printed
+        PASS [   0.030s] ( 20/326) xtask::bin/xtask ctreport::tests::refuses_a_fail_run_without_a_failing_target
+        PASS [   0.024s] ( 21/326) xtask::bin/xtask cooldown::tests::seven_day_boundary
+        PASS [   0.025s] ( 22/326) xtask::bin/xtask cooldown::tests::index_paths
+        PASS [   0.037s] ( 23/326) xtask::bin/xtask ctreport::tests::control_fail_runs
+        PASS [   0.032s] ( 24/326) xtask::bin/xtask ctreport::tests::refuses_another_target_as_the_positive_control
+        PASS [   0.054s] ( 25/326) xtask::bin/xtask cooldown::tests::cooldown_covers_m7_lock
+        PASS [   0.050s] ( 26/326) xtask::bin/xtask ctreport::tests::a_missing_class_median_is_refused
+        PASS [   0.048s] ( 27/326) xtask::bin/xtask ctreport::tests::refuses_an_effective_quantum_below_one_tick
+        PASS [   0.055s] ( 28/326) xtask::bin/xtask ctreport::tests::refuses_another_target_set
+        PASS [   0.057s] ( 29/326) xtask::bin/xtask ctreport::tests::refuses_an_aa_control_above_its_threshold
+        PASS [   0.077s] ( 30/326) xtask::bin/xtask ctreport::tests::refuses_a_missing_or_undetected_positive_control
+        PASS [   0.068s] ( 31/326) xtask::bin/xtask ctreport::tests::refuses_a_sensitivity_control_not_bound_to_tag_compare
+        PASS [   0.005s] ( 32/326) xtask::bin/xtask docs::adr_018_status
+        PASS [   0.004s] ( 33/326) xtask::bin/xtask docs::docs_read_normalises_crlf
+        PASS [   0.006s] ( 34/326) xtask::bin/xtask docs::bootstrap_cost_measured
+        PASS [   0.061s] ( 35/326) xtask::bin/xtask ctreport::tests::sensitivity_control_fails_when_class_one_is_slower
+        PASS [   0.078s] ( 36/326) xtask::bin/xtask ctreport::tests::refuses_a_sub_floor_shift_next_to_a_relevant_crop
+        PASS [   0.061s] ( 37/326) xtask::bin/xtask ctreport::tests::sensitivity_control_fails_when_the_leak_is_not_reproduced
+        PASS [   0.006s] ( 38/326) xtask::bin/xtask docs::m6_traffic_report_sections
+        PASS [   0.006s] ( 39/326) xtask::bin/xtask docs::recommendation_names_every_parameter
+        PASS [   0.006s] ( 40/326) xtask::bin/xtask docs::relay_ops_documents_direct_tls_files
+        PASS [   0.090s] ( 41/326) xtask::bin/xtask ctreport::tests::ct_check_rederives_the_sensitivity_control_from_both_measurements
+        PASS [   0.005s] ( 42/326) xtask::bin/xtask docs::run_module_doc_states_the_flush_bound
+        PASS [   0.005s] ( 43/326) xtask::bin/xtask expect::cooldown_exceptions_empty
+        PASS [   0.005s] ( 44/326) xtask::bin/xtask expect::ct_targets_m7
+        PASS [   0.005s] ( 45/326) xtask::bin/xtask expect::normal_dependency_allow_m7
+        PASS [   0.102s] ( 46/326) xtask::bin/xtask ctreport::tests::informative_targets_per_target_set
+        PASS [   0.005s] ( 47/326) xtask::bin/xtask expect::tests::audit_ignores_unchanged
+        PASS [   0.005s] ( 48/326) xtask::bin/xtask expect::tests::coverage_store_90
+        PASS [   0.005s] ( 49/326) xtask::bin/xtask expect::tests::crlf_needles_normalised
+        PASS [   0.005s] ( 50/326) xtask::bin/xtask expect::tests::fuzz_and_kani_lists_core
+        PASS [   0.075s] ( 51/326) xtask::bin/xtask ctreport::tests::sensitivity_control_fails_when_no_crop_reaches_the_floor
+        PASS [   0.005s] ( 52/326) xtask::bin/xtask expect::tests::sqlcipher_min_matches_store
+        PASS [   0.091s] ( 53/326) xtask::bin/xtask ctreport::tests::refuses_short_sample_counts_and_a_scaled_run
+        PASS [   0.005s] ( 54/326) xtask::bin/xtask expect::tests::fuzz_targets_store
+        PASS [   0.005s] ( 55/326) xtask::bin/xtask fuzzseed::tests::link_seeds_follow_the_target_layouts
+        PASS [   0.005s] ( 56/326) xtask::bin/xtask fuzzseed::tests::encodings_structures_map_to_selectors
+        PASS [   0.007s] ( 57/326) xtask::bin/xtask expect::tests::mutants_scope_includes_store
+        PASS [   0.006s] ( 58/326) xtask::bin/xtask fuzzseed::tests::seeds_follow_the_target_layouts
+        PASS [   0.005s] ( 59/326) xtask::bin/xtask gates::tests::a_failed_precheck_fails_the_gate
+        PASS [   0.006s] ( 60/326) xtask::bin/xtask fuzzseed::tests::the_rules_name_listed_targets_and_frozen_suites
+        PASS [   0.006s] ( 61/326) xtask::bin/xtask gates::tests::accepted_mutant_matches_line_and_description
+        PASS [   0.005s] ( 62/326) xtask::bin/xtask gates::tests::accepted_rows_with_escaped_pipes_match_the_survivors
+        PASS [   0.007s] ( 63/326) xtask::bin/xtask gates::tests::accepted_mutant_requires_matching_line
+        PASS [   0.005s] ( 64/326) xtask::bin/xtask gates::tests::coverage_ignores_test_files
+        PASS [   0.005s] ( 65/326) xtask::bin/xtask gates::tests::coverage_grouping
+        PASS [   0.011s] ( 66/326) xtask::bin/xtask gates::tests::apt_installs_carry_timeout_and_retries
+        PASS [   0.005s] ( 67/326) xtask::bin/xtask gates::tests::coverage_strict_includes_client_core
+        PASS [   0.089s] ( 68/326) xtask::bin/xtask ctreport::tests::sensitivity_control_passes_when_decide_catches_the_leak_at_a_crop
+        PASS [   0.010s] ( 69/326) xtask::bin/xtask gates::tests::ci_verdict_only_in_the_required_workflow
+        PASS [   0.005s] ( 70/326) xtask::bin/xtask gates::tests::coverage_transport_80_with_tor_glue
+        PASS [   0.005s] ( 71/326) xtask::bin/xtask gates::tests::ct_bench_executable_is_read_from_cargo_messages
+        PASS [   0.113s] ( 72/326) xtask::bin/xtask ctreport::tests::refuses_a_verdict_the_crops_do_not_give
+        PASS [   0.005s] ( 73/326) xtask::bin/xtask gates::tests::ct_targets_unchanged_in_m6
+        PASS [   0.006s] ( 74/326) xtask::bin/xtask gates::tests::delegations_map_to_pinned_jobs
+        PASS [   0.026s] ( 75/326) xtask::bin/xtask gates::tests::ci_verdict_needs_every_pinned_job
+        PASS [   0.091s] ( 76/326) xtask::bin/xtask ctreport::tests::the_committed_amendment_1_reports_pass
+        PASS [   0.017s] ( 77/326) xtask::bin/xtask gates::tests::ct_sites_need_a_passed_precheck
+        PASS [   0.027s] ( 78/326) xtask::bin/xtask gates::tests::ci_verdict_runs_always
+        PASS [   0.021s] ( 79/326) xtask::bin/xtask gates::tests::ct_sites_go_on_the_verdict_row
+        PASS [   0.005s] ( 80/326) xtask::bin/xtask gates::tests::flow_style_and_quoted_uses_are_findings
+        PASS [   0.113s] ( 81/326) xtask::bin/xtask ctreport::tests::sensitivity_rounding_edges
+        PASS [   0.005s] ( 82/326) xtask::bin/xtask gates::tests::fuzz_command_line
+        PASS [   0.004s] ( 83/326) xtask::bin/xtask gates::tests::fuzz_executor_depth
+        PASS [   0.005s] ( 84/326) xtask::bin/xtask gates::tests::fuzz_max_len_covers_every_target
+        PASS [   0.006s] ( 85/326) xtask::bin/xtask gates::tests::id_token_on_win_suite_is_a_finding
+        PASS [   0.159s] ( 86/326) xtask::bin/xtask ctreport::tests::failing_and_unknown_verdicts_fail_the_gate
+        PASS [   0.153s] ( 87/326) xtask::bin/xtask ctreport::tests::informative_targets_are_pinned_printed_and_never_fail
+        PASS [   0.138s] ( 88/326) xtask::bin/xtask ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound
+        PASS [   0.012s] ( 89/326) xtask::bin/xtask gates::tests::fuzz_corpus_exists_for_every_target
+        PASS [   0.005s] ( 90/326) xtask::bin/xtask gates::tests::kani_and_fuzz_lists_m6
+        PASS [   0.006s] ( 91/326) xtask::bin/xtask gates::tests::job_permissions_exception_is_exact
+        PASS [   0.005s] ( 92/326) xtask::bin/xtask gates::tests::kani_refuses_fifteen_harnesses
+        PASS [   0.022s] ( 93/326) xtask::bin/xtask gates::tests::every_artefact_name_is_unique_per_attempt
+        PASS [   0.008s] ( 94/326) xtask::bin/xtask gates::tests::kani_gate_fails_on_an_unsatisfiable_cover
+        PASS [   0.006s] ( 95/326) xtask::bin/xtask gates::tests::kat_portable_rerun_includes_the_hx_suite
+        PASS [   0.028s] ( 96/326) xtask::bin/xtask gates::tests::every_real_workflow_passes_the_gates
+        PASS [   0.011s] ( 97/326) xtask::bin/xtask gates::tests::large_file_gate_accepts_allowlisted
+        PASS [   0.130s] ( 98/326) xtask::bin/xtask ctreport::tests::the_aa_prime_control_fails_the_run_as_control_fail
+        PASS [   0.019s] ( 99/326) xtask::bin/xtask gates::tests::known_sites_equal_the_product_site_tags
+        PASS [   0.014s] (100/326) xtask::bin/xtask gates::tests::large_file_gate_flags_a_planted_file
+        PASS [   0.045s] (101/326) xtask::bin/xtask gates::tests::dispatch_full_runs_the_linux_full_line
+        PASS [   0.057s] (102/326) xtask::bin/xtask gates::tests::ct_target_sites_bind_each_target_to_its_site
+        PASS [   0.180s] (103/326) xtask::bin/xtask ctreport::tests::reads_the_batch_sizes_of_a_requantised_record
+        PASS [   0.006s] (104/326) xtask::bin/xtask gates::tests::merge_mutants_runs_unites_outcomes_and_survivors
+        PASS [   0.007s] (105/326) xtask::bin/xtask gates::tests::miri_runs_each_package_with_its_own_filters
+        PASS [   0.008s] (106/326) xtask::bin/xtask gates::tests::miri_full_workflow_has_one_job_per_package
+        PASS [   0.133s] (107/326) xtask::bin/xtask ctreport::tests::the_hx_same_content_control_fails_the_run_as_control_fail
+        PASS [   0.020s] (108/326) xtask::bin/xtask gates::tests::large_file_gate_rejects_allowlisted_over_hard_cap
+        PASS [   0.006s] (109/326) xtask::bin/xtask gates::tests::mutant_killers_run_first_by_filter
+        PASS [   0.170s] (110/326) xtask::bin/xtask ctreport::tests::sensitivity_control
+        PASS [   0.030s] (111/326) xtask::bin/xtask gates::tests::large_file_gate_is_clean_on_this_tree
+        PASS [   0.005s] (112/326) xtask::bin/xtask gates::tests::mutants_command_line_builds_with_features_kat
+        PASS [   0.134s] (113/326) xtask::bin/xtask ctreport::tests::the_positive_control_is_checked_whatever_its_label
+        PASS [   0.128s] (114/326) xtask::bin/xtask ctreport::tests::the_same_content_control_fails_the_run_as_control_fail
+        PASS [   0.010s] (115/326) xtask::bin/xtask gates::tests::mutant_shard_matrix_matches_the_shard_count
+        PASS [   0.006s] (116/326) xtask::bin/xtask gates::tests::mutants_floor_refuses_unattributable_outcomes
+        PASS [   0.016s] (117/326) xtask::bin/xtask gates::tests::mutant_harness_suite_under_30s
+        PASS [   0.004s] (118/326) xtask::bin/xtask gates::tests::mutants_inventory_lists_both_runs
+        PASS [   0.029s] (119/326) xtask::bin/xtask gates::tests::large_file_gate_sees_a_non_ascii_path
+        PASS [   0.007s] (120/326) xtask::bin/xtask gates::tests::mutants_merge_needs_one_inventory_in_every_shard
+        PASS [   0.008s] (121/326) xtask::bin/xtask gates::tests::mutants_merge_needs_every_shard_with_a_pass_verdict
+        PASS [   0.007s] (122/326) xtask::bin/xtask gates::tests::mutants_merge_refuses_an_incomplete_or_substituted_union
+        PASS [   0.006s] (123/326) xtask::bin/xtask gates::tests::mutants_merge_refuses_overlapping_shards
+        PASS [   0.005s] (124/326) xtask::bin/xtask gates::tests::mutants_refuses_a_missing_survivor_listing
+        PASS [   0.006s] (125/326) xtask::bin/xtask gates::tests::mutants_report_has_unviable_breakdown
+        PASS [   0.021s] (126/326) xtask::bin/xtask gates::tests::mutants_floor_fails_a_package_without_a_caught_mutant
+        PASS [   0.006s] (127/326) xtask::bin/xtask gates::tests::mutants_run_weekly_not_on_pull_requests
+        PASS [   0.019s] (128/326) xtask::bin/xtask gates::tests::mutants_merge_fails_when_the_caught_share_is_below_half
+        PASS [   0.005s] (129/326) xtask::bin/xtask gates::tests::mutants_scope_files_and_docs_follow_amendment_4
+        PASS [   0.015s] (130/326) xtask::bin/xtask gates::tests::mutants_merge_refuses_an_empty_shard
+        PASS [   0.023s] (131/326) xtask::bin/xtask gates::tests::mutants_merge_needs_all_24_shards
+        PASS [   0.004s] (132/326) xtask::bin/xtask gates::tests::mutation_survivors_must_be_documented
+        PASS [   0.006s] (133/326) xtask::bin/xtask gates::tests::mutants_scope_includes_relay
+        PASS [   0.005s] (134/326) xtask::bin/xtask gates::tests::nextest_has_a_non_kat_run
+        PASS [   0.006s] (135/326) xtask::bin/xtask gates::tests::mutants_stay_dispatchable
+        PASS [   0.033s] (136/326) xtask::bin/xtask gates::tests::mutant_shard_mismatches_are_findings
+        PASS [   0.217s] (137/326) xtask::bin/xtask ctreport::tests::ct_targets_list_names_m5_targets
+        PASS [   0.010s] (138/326) xtask::bin/xtask gates::tests::mutants_scope_includes_client_core_and_transport
+        PASS [   0.010s] (139/326) xtask::bin/xtask gates::tests::mutants_skip_list_names_existing_tests
+        PASS [   0.004s] (140/326) xtask::bin/xtask gates::tests::nightly_budget_per_target
+        PASS [   0.005s] (141/326) xtask::bin/xtask gates::tests::oidc_constants_are_exact
+        PASS [   0.005s] (142/326) xtask::bin/xtask gates::tests::oidc_jobs_may_hold_the_exact_set
+        PASS [   0.005s] (143/326) xtask::bin/xtask gates::tests::oidc_workflow_nasm_by_probe
+        PASS [   0.005s] (144/326) xtask::bin/xtask gates::tests::policy_refuses_flow_style_jobs_line
+        PASS [   0.077s] (145/326) xtask::bin/xtask gates::tests::kani_cover_count_is_pinned
+        PASS [   0.005s] (146/326) xtask::bin/xtask gates::tests::proverif_gate_rejects_missing_hx_line
+        PASS [   0.005s] (147/326) xtask::bin/xtask gates::tests::proverif_gate_rejects_reordered_result_lines
+        PASS [   0.004s] (148/326) xtask::bin/xtask gates::tests::proverif_inj_false_accepts_even_remark
+        PASS [   0.006s] (149/326) xtask::bin/xtask gates::tests::proverif_inj_false_requires_even_remark
+        PASS [   0.008s] (150/326) xtask::bin/xtask gates::tests::proverif_link_matches_claims
+        PASS [   0.005s] (151/326) xtask::bin/xtask gates::tests::proverif_models_unchanged_in_m6
+        PASS [   0.007s] (152/326) xtask::bin/xtask gates::tests::proverif_table_covers_every_claims_row
+        PASS [   0.006s] (153/326) xtask::bin/xtask gates::tests::proverif_table_follows_the_claims
+        PASS [   0.005s] (154/326) xtask::bin/xtask gates::tests::proverif_tr_gate_matches_by_query_text
+        PASS [   0.006s] (155/326) xtask::bin/xtask gates::tests::proverif_tr_t14_second_receive
+        PASS [   0.004s] (156/326) xtask::bin/xtask gates::tests::proverif_verdicts
+        PASS [   0.020s] (157/326) xtask::bin/xtask gates::tests::optional_jobs_are_not_required
+        PASS [   0.006s] (158/326) xtask::bin/xtask gates::tests::quoted_step_names_pass
+        PASS [   0.005s] (159/326) xtask::bin/xtask gates::tests::relay_trace_allow_equals_the_event_names
+        PASS [   0.018s] (160/326) xtask::bin/xtask gates::tests::proverif_link_table_covers_every_claims_row
+        PASS [   0.010s] (161/326) xtask::bin/xtask gates::tests::proverif_verdicts_against_the_claims_table
+        PASS [   0.008s] (162/326) xtask::bin/xtask gates::tests::required_checks_only_in_the_pull_request_workflow
+        PASS [   0.005s] (163/326) xtask::bin/xtask gates::tests::required_jobs_include_ci_verdict
+        PASS [   0.005s] (164/326) xtask::bin/xtask gates::tests::rr_write_time_guard_is_not_skipped_by_the_mutation_run
+        PASS [   0.004s] (165/326) xtask::bin/xtask gates::tests::set_comparison
+        PASS [   0.005s] (166/326) xtask::bin/xtask gates::tests::systemd_levels
+        PASS [   0.050s] (167/326) xtask::bin/xtask gates::tests::mutants_merge_reports_every_shard_and_package_before_it_fails
+        PASS [   0.006s] (168/326) xtask::bin/xtask gates::tests::testkit_manifest_and_workflow_texts
+        PASS [   0.057s] (169/326) xtask::bin/xtask gates::tests::mutants_merge_passes_the_crypto_tally_of_run_37127247911
+        PASS [   0.005s] (170/326) xtask::bin/xtask gates::tests::third_job_with_permissions_is_a_finding
+        PASS [   0.006s] (171/326) xtask::bin/xtask gates::tests::tr_perf_report_and_verdict
+        PASS [   0.006s] (172/326) xtask::bin/xtask gates::tests::unquoted_step_name_with_colon_space_is_a_finding
+        PASS [   0.010s] (173/326) xtask::bin/xtask gates::tests::the_nightly_workflow
+        PASS [   0.014s] (174/326) xtask::bin/xtask gates::tests::the_ct_reader_accepts_site_and_precheck
+        PASS [   0.024s] (175/326) xtask::bin/xtask gates::tests::required_jobs_keep_their_pinned_conditions
+        PASS [   0.008s] (176/326) xtask::bin/xtask gates::tests::vm_down_deallocates_only_what_vm_up_started
+        PASS [   0.004s] (177/326) xtask::bin/xtask gates::tests::win_ondemand_artefact_names_end_with_attempt
+        PASS [   0.006s] (178/326) xtask::bin/xtask gates::tests::vm_up_reports_was_running_and_starts_only_when_stopped
+        PASS [   0.273s] (179/326) xtask::bin/xtask ctreport::tests::parameters_and_malformed_reports
+        PASS [   0.226s] (180/326) xtask::bin/xtask ctreport::tests::the_effect_floor_is_tight_on_both_sides
+        PASS [   0.010s] (181/326) xtask::bin/xtask gates::tests::win_ondemand_actions_pinned_and_no_secrets
+        PASS [   0.006s] (182/326) xtask::bin/xtask gates::tests::win_ondemand_concurrency_and_budgets
+        PASS [   0.007s] (183/326) xtask::bin/xtask gates::tests::win_ondemand_cmd_steps_have_no_bare_optional_probe
+        PASS [   0.006s] (184/326) xtask::bin/xtask gates::tests::win_ondemand_is_dispatch_only
+        PASS [   0.005s] (185/326) xtask::bin/xtask gates::tests::win_ondemand_suite_input_is_the_enum
+        PASS [   0.006s] (186/326) xtask::bin/xtask gates::tests::win_suite_runs_on_the_secmpro_runner
+        PASS [   0.005s] (187/326) xtask::bin/xtask gates::tests::workflow_hygiene
+        PASS [   0.040s] (188/326) xtask::bin/xtask gates::tests::required_job_bypasses_are_findings
+        PASS [   0.006s] (189/326) xtask::bin/xtask gates::tests::workflow_fixture_files
+        PASS [   0.008s] (190/326) xtask::bin/xtask gates::tests::windows_builds_nasm_from_source
+        PASS [   0.010s] (191/326) xtask::bin/xtask gates::tests::win_suite_lines_per_suite
+        PASS [   0.007s] (192/326) xtask::bin/xtask gates::tests::workflow_level_id_token_is_a_finding_everywhere
+        PASS [   0.014s] (193/326) xtask::bin/xtask gates::tests::win_ondemand_jobs_and_permissions
+        PASS [   0.005s] (194/326) xtask::bin/xtask meta::tests::closure_is_transitive_and_external_only
+        PASS [   0.004s] (195/326) xtask::bin/xtask meta::tests::parses_members_targets_features
+        PASS [   0.006s] (196/326) xtask::bin/xtask meta::tests::rejects_garbage
+        PASS [   0.218s] (197/326) xtask::bin/xtask ctreport::tests::the_t_threshold_is_tight_on_both_sides
+        PASS [   0.005s] (198/326) xtask::bin/xtask policy::tests::adr038_exemption_is_path_exact
+        PASS [   0.006s] (199/326) xtask::bin/xtask policy::tests::audit_ignores_match_deny_toml
+        PASS [   0.298s] (200/326) xtask::bin/xtask ctreport::tests::ct_report_carries_host_identity_and_histograms
+        PASS [   0.005s] (201/326) xtask::bin/xtask policy::tests::file_top_is_tracked
+        PASS [   0.006s] (202/326) xtask::bin/xtask policy::tests::exemption_names
+        PASS [   0.005s] (203/326) xtask::bin/xtask policy::tests::fixture_build_scripts
+        PASS [   0.006s] (204/326) xtask::bin/xtask policy::tests::fixture_missing_or_wrong_spdx
+        PASS [   0.007s] (205/326) xtask::bin/xtask policy::tests::fixture_adr038_unsafe_exemption
+        PASS [   0.005s] (206/326) xtask::bin/xtask policy::tests::fixture_vet_exemptions
+        PASS [   0.006s] (207/326) xtask::bin/xtask policy::tests::fixture_unsanctioned_lint_allowances
+        PASS [   0.020s] (208/326) xtask::bin/xtask gates::tests::workflow_permissions_shell_and_prover_override_are_findings
+        PASS [   0.006s] (209/326) xtask::bin/xtask policy::tests::forbid_header_detection
+        PASS [   0.005s] (210/326) xtask::bin/xtask policy::tests::forbid_rule_rejects_weaker_or_missing_headers
+        PASS [   0.004s] (211/326) xtask::bin/xtask policy::tests::fuzz_lock_checksums_and_presence_are_enforced
+        PASS [   0.005s] (212/326) xtask::bin/xtask policy::tests::licenses_cover_m6_closure
+        PASS [   0.180s] (213/326) xtask::bin/xtask gates::tests::deleting_or_neutering_a_pinned_job_is_a_finding
+        PASS [   0.004s] (214/326) xtask::bin/xtask policy::tests::manifest_lints_table
+        PASS [   0.009s] (215/326) xtask::bin/xtask policy::tests::harness_job_is_pinned
+        PASS [   0.016s] (216/326) xtask::bin/xtask policy::tests::fuzz_graph_is_workspace_graph_plus_allowlist
+        PASS [   0.004s] (217/326) xtask::bin/xtask policy::tests::relaxations_are_found
+        PASS [   0.013s] (218/326) xtask::bin/xtask policy::tests::fuzz_lock_matches_workspace_lock
+        PASS [   0.005s] (219/326) xtask::bin/xtask policy::tests::repo_files_are_read_with_lf_line_endings
+        PASS [   0.004s] (220/326) xtask::bin/xtask policy::tests::rules_follow_expect_lists
+        PASS [   0.004s] (221/326) xtask::bin/xtask policy::tests::survivor_rows_have_four_cells
+        PASS [   0.198s] (222/326) xtask::bin/xtask gates::tests::ct_gate_rejects_unknown_site
+        PASS [   0.006s] (223/326) xtask::bin/xtask policy::tests::sys_rule_requires_allow_at_the_library_root_only
+        PASS [   0.005s] (224/326) xtask::bin/xtask policy::tests::ui_rule_requires_deny_and_no_unsafe_token_or_relaxation
+        PASS [   0.005s] (225/326) xtask::bin/xtask policy::tests::unsafe_token_boundaries
+        PASS [   0.071s] (226/326) xtask::bin/xtask gates::tests::tests_and_ci_do_not_start_tor
+        PASS [   0.004s] (227/326) xtask::bin/xtask policy::tests::vet_closure_exemption_for_closure_version_is_a_finding
+        PASS [   0.004s] (228/326) xtask::bin/xtask policy::tests::vet_closure_exemption_literal_string_version_is_parsed
+        PASS [   0.010s] (229/326) xtask::bin/xtask policy::tests::vet_closure_byte_order_mark_is_rejected
+        PASS [   0.004s] (230/326) xtask::bin/xtask policy::tests::vet_closure_exemption_with_trailing_comment_is_parsed
+        PASS [   0.004s] (231/326) xtask::bin/xtask policy::tests::vet_closure_exemption_without_version_is_a_finding
+        PASS [   0.004s] (232/326) xtask::bin/xtask policy::tests::vet_closure_header_quoted_key_is_found
+        PASS [   0.004s] (233/326) xtask::bin/xtask policy::tests::vet_closure_header_with_comment_is_found
+        PASS [   0.004s] (234/326) xtask::bin/xtask policy::tests::vet_closure_header_with_spaces_is_found
+        PASS [   0.005s] (235/326) xtask::bin/xtask policy::tests::vet_closure_header_with_quoted_table_key_is_rejected
+        PASS [   0.016s] (236/326) xtask::bin/xtask policy::tests::vet_closure_escaped_assignment_keys_are_rejected
+        PASS [   0.018s] (237/326) xtask::bin/xtask policy::tests::vet_closure_dotted_and_inline_exemptions_are_rejected
+        PASS [   0.004s] (238/326) xtask::bin/xtask policy::tests::vet_closure_other_version_of_closure_name_is_allowed
+        PASS [   0.004s] (239/326) xtask::bin/xtask policy::tests::vet_closure_unparsable_version_line_is_a_finding
+        PASS [   0.004s] (240/326) xtask::bin/xtask policy::tests::xwin_dev_dependency_scan_sees_target_tables
+        PASS [   0.007s] (241/326) xtask::bin/xtask policy::tests::vet_records_for_m6_closure
+        PASS [   0.004s] (242/326) xtask::bin/xtask policy::tests::xwin_full_roots_have_no_excluded_dev_dependency
+        PASS [   0.004s] (243/326) xtask::bin/xtask sbom::tests::embedded_count_above_lock_fails
+        PASS [   0.004s] (244/326) xtask::bin/xtask sbom::tests::toml_escaping
+        PASS [   0.004s] (245/326) xtask::bin/xtask sbom::tests::unaudited_binary_fails
+        PASS [   0.005s] (246/326) xtask::bin/xtask sbom::tests::embedded_count_within_lock_passes
+        PASS [   0.004s] (247/326) xtask::bin/xtask sha256::tests::crlf_reads_as_lf
+        PASS [   0.004s] (248/326) xtask::bin/xtask summary::tests::cells_are_escaped_and_rows_follow_the_detail
+        PASS [   0.005s] (249/326) xtask::bin/xtask summary::tests::the_proverif_table_comes_from_the_results_file
+        PASS [   0.005s] (250/326) xtask::bin/xtask tests::mutants_shard_option_comes_off_the_command_line
+        PASS [   0.012s] (251/326) xtask::bin/xtask summary::tests::the_ct_table_comes_from_a_recorded_report
+        PASS [   0.004s] (252/326) xtask::bin/xtask tests::proverif_options_come_off_the_command_line
+        PASS [   0.007s] (253/326) xtask::bin/xtask testscan::api_exposes_no_secrets_or_store
+        PASS [   0.004s] (254/326) xtask::bin/xtask testscan::kat_mod_declaration_matches_crlf
+        PASS [   0.291s] (255/326) xtask::bin/xtask docs::m06_report_acceptance_rows_are_named
+        PASS [   0.015s] (256/326) xtask::bin/xtask testscan::no_derive_debug_on_secret_carriers
+        PASS [   0.099s] (257/326) xtask::bin/xtask policy::tests::job_budgets_are_pinned
+        PASS [   0.011s] (258/326) xtask::bin/xtask testscan::no_identifiers_reach_transport_types
+        PASS [   0.028s] (259/326) xtask::bin/xtask testscan::kc5_calls_extracted
+        PASS [   0.006s] (260/326) xtask::bin/xtask testscan::scan::tests::ct_guard_sites_use_ct_eq
+        PASS [   0.004s] (261/326) xtask::bin/xtask testscan::scan::tests::nextest_does_not_run_the_harness_binary_twice
+        PASS [   0.069s] (262/326) xtask::bin/xtask sha256::tests::fips_180_examples
+        PASS [   0.040s] (263/326) xtask::bin/xtask testscan::no_plain_seed_returns
+        PASS [   0.007s] (264/326) xtask::bin/xtask testscan::scan::tests::the_seed_scan_flags_each_rule
+        PASS [   0.005s] (265/326) xtask::bin/xtask testscan::scan::tests::the_seed_scanner_reads_items_and_calls
+        PASS [   0.008s] (266/326) xtask::bin/xtask testscan::scan::tests::windows_skip_applies_to_nextest_and_kat
+        PASS [   0.023s] (267/326) xtask::bin/xtask testscan::scan::tests::windows_skip_tests_exist_and_have_runtimes
+        PASS [   0.260s] (268/326) xtask::bin/xtask gates::tests::proverif_link_model_hashes_are_pinned
+        PASS [   0.088s] (269/326) xtask::bin/xtask testscan::scan::tests::doctest_compile_fail_blocks_name_an_error_code
+        PASS [   0.018s] (270/326) xtask::bin/xtask testscan::scheduler_sees_only_traits
+        PASS [   0.005s] (271/326) xtask::bin/xtask time::tests::epoch_and_known_dates
+        PASS [   0.004s] (272/326) xtask::bin/xtask time::tests::http_date_matches_rfc3339
+        PASS [   0.004s] (273/326) xtask::bin/xtask time::tests::malformed_inputs_are_rejected
+        PASS [   0.297s] (274/326) xtask::bin/xtask gates::tests::policy_reads_crlf_workflows_like_lf
+        PASS [   0.005s] (275/326) xtask::bin/xtask tools::tests::install_list_parsing
+        PASS [   0.033s] (276/326) xtask::bin/xtask testscan::session_actor_owns_ratchet
+        PASS [   0.004s] (277/326) xtask::bin/xtask tools::tests::unknown_set_is_rejected
+        PASS [   0.005s] (278/326) xtask::bin/xtask trace::tests::disabled_without_env
+        PASS [   0.004s] (279/326) xtask::bin/xtask trace::tests::line_formats_all_fields
+        PASS [   0.005s] (280/326) xtask::bin/xtask trace::tests::line_tolerates_missing_input
+        PASS [   0.005s] (281/326) xtask::bin/xtask vectors::tests::hex_validator
+        PASS [   0.005s] (282/326) xtask::bin/xtask vectors::tests::hex_validator_accepts_the_store_column
+        PASS [   0.005s] (283/326) xtask::bin/xtask vectors::tests::pending_reference_files_must_name_their_suite_and_have_cases
+        PASS [   0.005s] (284/326) xtask::bin/xtask vectors::tests::positive_view_keeps_the_header_and_the_positive_rows
+        PASS [   0.005s] (285/326) xtask::bin/xtask vectors::tests::step_12a_refuses_a_frozen_file_that_is_not_a_verbatim_copy
+        PASS [   0.005s] (286/326) xtask::bin/xtask vectors::tests::structural_comparison_ignores_generator_only
+        PASS [   0.007s] (287/326) xtask::bin/xtask vectors::tests::vectors_step_12a_covers_the_store_suite
+        PASS [   0.005s] (288/326) xtask::bin/xtask verdict::ci_verdict_fails_on_a_missing_job
+        PASS [   0.005s] (289/326) xtask::bin/xtask verdict::ci_verdict_fails_on_skipped_cancelled_or_failed
+        PASS [   0.005s] (290/326) xtask::bin/xtask verdict::ci_verdict_passes_when_every_gate_succeeded
+        PASS [   0.004s] (291/326) xtask::bin/xtask wintest::tests::ansi_is_stripped
+        PASS [   0.004s] (292/326) xtask::bin/xtask wintest::tests::backend_is_required
+        PASS [   0.005s] (293/326) xtask::bin/xtask wintest::tests::job_lookup
+        PASS [   0.466s] (294/326) xtask::bin/xtask fuzzseed::tests::the_frozen_vectors_seed_every_target
+        PASS [   0.004s] (295/326) xtask::bin/xtask wintest::tests::run_list_argv_follows_the_source
+        PASS [   0.004s] (296/326) xtask::bin/xtask wintest::tests::run_listing
+        PASS [   0.004s] (297/326) xtask::bin/xtask wintest::tests::selfhosted_decision
+        PASS [   0.004s] (298/326) xtask::bin/xtask wintest::tests::selfhosted_dispatch_argv
+        PASS [   0.004s] (299/326) xtask::bin/xtask wintest::tests::selfhosted_print_path_never_fails
+        PASS [   0.004s] (300/326) xtask::bin/xtask wintest::tests::selfhosted_rejects_unknown_suite_and_modes
+        PASS [   0.214s] (301/326) xtask::bin/xtask testscan::scan::tests::no_ignore_without_adr
+        PASS [   0.188s] (302/326) xtask::bin/xtask vectors::tests::the_committed_vector_files_match_the_expected_sets
+        PASS [   0.334s] (303/326) xtask::bin/xtask testscan::scan::tests::pr_ci_runs_props_with_ci_run_seed
+        PASS [   0.222s] (304/326) xtask::bin/xtask vectors::tests::vectors_step_12a_covers_twelve_suites
+        PASS [   0.645s] (305/326) xtask::bin/xtask gates::tests::proverif_model_hashes_are_pinned
+        PASS [   1.540s] (306/326) xtask::bin/xtask gates::tests::miri_feature_gated_targets_are_listed
+        PASS [   1.654s] (307/326) xtask::bin/xtask gates::tests::licenses_cover_m7_closure
+        PASS [   1.812s] (308/326) xtask::bin/xtask gates::tests::kani_rss_guard
+        PASS [   1.759s] (309/326) xtask::bin/xtask meta::tests::kani_unstable_features_come_from_the_package_metadata
+        PASS [   1.946s] (310/326) xtask::bin/xtask policy::tests::deny_duplicate_skips_are_justified
+        PASS [   2.041s] (311/326) xtask::bin/xtask policy::tests::arti_feature_set_is_pinned
+        PASS [   2.209s] (312/326) xtask::bin/xtask gates::tests::kani_rss_guard_requires_a_peak_per_checked_harness
+        PASS [   2.117s] (313/326) xtask::bin/xtask policy::tests::normal_dependencies_match_adr_allowlist
+        PASS [   2.209s] (314/326) xtask::bin/xtask gates::tests::proverif_gate_timeout_is_a_fail
+        PASS [   2.410s] (315/326) xtask::bin/xtask gates::tests::kani_rss_guard_fails_closed_without_ps_sample
+        PASS [   2.295s] (316/326) xtask::bin/xtask policy::tests::two_clients_not_shipped
+        PASS [   2.443s] (317/326) xtask::bin/xtask policy::tests::xwin_scope_excludes_sqlcipher_crates
+        PASS [   2.652s] (318/326) xtask::bin/xtask testscan::kat_argon2_params_only_with_kat
+        PASS [   2.543s] (319/326) xtask::bin/xtask testscan::transport_has_no_core_or_store_dep
+        PASS [   3.223s] (320/326) xtask::bin/xtask gates::tests::kani_build_has_no_store
+        PASS [   4.905s] (321/326) xtask::bin/xtask policy::tests::crypto_and_proto_stay_sans_io
+        PASS [   4.882s] (322/326) xtask::bin/xtask policy::tests::tokio_test_util_is_dev_only
+        PASS [   5.025s] (323/326) xtask::bin/xtask policy::tests::vet_closure_of_this_workspace_has_no_exemptions
+        PASS [   5.411s] (324/326) xtask::bin/xtask gates::tests::ct_gate_timeout_is_a_fail_naming_the_target
+        PASS [   5.943s] (325/326) xtask::bin/xtask ci::tests::a_failing_step_makes_execute_fail
+        PASS [   6.001s] (326/326) xtask::bin/xtask gates::tests::vet_records_for_m7_closure
+────────────
+     Summary [   6.268s] 326 tests run: 326 passed, 0 skipped

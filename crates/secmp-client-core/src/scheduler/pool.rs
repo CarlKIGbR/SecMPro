@@ -73,6 +73,82 @@ impl QueuePool {
         Some(r.relay)
     }
 
+    /// A spare that already exists on the relay (a stored one, adopted at an open): counted as created. Returns whether it
+    /// was added (a queue already counted, as a spare or a creation under way, is not).
+    pub fn adopt(&mut self, relay: RelayId, queue: QueueId) -> bool {
+        self.manage(relay);
+        if self
+            .relays
+            .iter()
+            .any(|r| r.spares.contains(&queue) || r.pending.contains(&queue))
+        {
+            return false;
+        }
+        match self.relays.iter_mut().find(|r| r.relay == relay) {
+            Some(r) => {
+                r.spares.push(queue);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Hand out the spare `queue` of `relay`, if it is one.
+    pub fn take_named(&mut self, relay: RelayId, queue: QueueId) -> Option<QueueId> {
+        let r = self.relays.iter_mut().find(|r| r.relay == relay)?;
+        let at = r.spares.iter().position(|q| *q == queue)?;
+        Some(r.spares.remove(at))
+    }
+
+    /// Put `queue` back as a spare of `relay` at position `at` (a named hand-out that was refused).
+    pub fn restore(&mut self, relay: RelayId, queue: QueueId, at: usize) {
+        if let Some(r) = self.relays.iter_mut().find(|r| r.relay == relay) {
+            let at = at.min(r.spares.len());
+            r.spares.insert(at, queue);
+        }
+    }
+
+    /// The position of the spare `queue` of `relay`.
+    #[must_use]
+    pub fn position(&self, relay: RelayId, queue: QueueId) -> Option<usize> {
+        self.relays
+            .iter()
+            .find(|r| r.relay == relay)?
+            .spares
+            .iter()
+            .position(|q| *q == queue)
+    }
+
+    /// The oldest spare of `relay`: the one [`QueuePool::take`] hands out (nothing changes; Q301).
+    #[must_use]
+    pub fn oldest(&self, relay: RelayId) -> Option<QueueId> {
+        self.relays
+            .iter()
+            .find(|r| r.relay == relay)?
+            .spares
+            .first()
+            .copied()
+    }
+
+    /// [`QueuePool::missing`] as it will be once the spare `queue` of `relay` is handed out; nothing changes (Q301: the refill
+    /// is drawn before the hand-out).
+    #[must_use]
+    pub fn missing_after_take(&self, relay: RelayId, queue: QueueId) -> Vec<(RelayId, usize)> {
+        self.relays
+            .iter()
+            .filter_map(|r| {
+                let taken = usize::from(r.relay == relay && r.spares.contains(&queue));
+                let need = self.target.saturating_sub(
+                    r.spares
+                        .len()
+                        .saturating_add(r.pending.len())
+                        .saturating_sub(taken),
+                );
+                (need > 0).then_some((r.relay, need))
+            })
+            .collect()
+    }
+
     /// Hand out the oldest spare of `relay`.
     pub fn take(&mut self, relay: RelayId) -> Option<QueueId> {
         let r = self.relays.iter_mut().find(|r| r.relay == relay)?;
@@ -83,11 +159,23 @@ impl QueuePool {
         }
     }
 
-    /// Put `queue` back as the oldest spare of `relay` (a hand-out that was refused).
-    pub fn untake(&mut self, relay: RelayId, queue: QueueId) {
-        if let Some(r) = self.relays.iter_mut().find(|r| r.relay == relay) {
-            r.spares.insert(0, queue);
+    /// Creations under way on `relay` (EXT3b-3: each will be an entry of its `FETCH_MULTI` link).
+    #[must_use]
+    pub fn pending_on(&self, relay: RelayId) -> usize {
+        self.relays
+            .iter()
+            .find(|r| r.relay == relay)
+            .map_or(0, |r| r.pending.len())
+    }
+
+    /// [`QueuePool::missing`] as it will be once `relay` is managed; nothing changes (Q301, EXT3b-5: the refill is drawn before the relay is managed). A relay not managed yet comes last, as [`QueuePool::manage`] adds it.
+    #[must_use]
+    pub fn missing_with(&self, relay: RelayId) -> Vec<(RelayId, usize)> {
+        let mut out = self.missing();
+        if self.target > 0 && !self.relays.iter().any(|r| r.relay == relay) {
+            out.push((relay, self.target));
         }
+        out
     }
 
     /// Spares on `relay`.

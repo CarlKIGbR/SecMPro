@@ -1,0 +1,18 @@
+head aac2242fd922a3817ffa052b8e52fe57599637be
+## C1-5 multi-line derive, old scanner
+thread 'testscan::no_derive_debug_on_secret_carriers' panicked at xtask/src/testscan.rs:1072:5:
+assertion failed: attributes_of(multi, "QueueEntry").is_some_and(|a| derives_debug(&a))
+## C1-5 cfg_attr(…, derive(Debug)), old scanner
+thread 'testscan::no_derive_debug_on_secret_carriers' panicked at xtask/src/testscan.rs:1073:5:
+assertion failed: attributes_of(gated, "Request").is_some_and(|a| derives_debug(&a))
+## C2-2 (old public_signatures/plain_seed_returns of aac2242, fixtures kept)
+RED async: expected 1 hit, got []        (pub async fn queue_material(&self) -> [u8; 32])
+RED unsafe: expected 1 hit, got []       (pub unsafe fn seed_raw(&self) -> [u8; 32])
+RED const unsafe: expected 1 hit, got [] (pub const unsafe fn seed_raw(&self) -> [u8; 32])
+RED trait method: expected 1 hit, got [] (impl SeedSource for Hub { fn send_seed(&self) -> [u8; 32] })
+two-file alias (pub type RawSeed in file A, pub fn material -> RawSeed in file B):
+thread 'testscan::no_plain_seed_returns' panicked at xtask/src/testscan.rs:1332:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+(the four RED lines were printed by a temporary eprintln in place of the loop's assert_eq, which stops at the first failure; the committed test asserts)

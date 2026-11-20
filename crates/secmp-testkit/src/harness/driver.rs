@@ -12,16 +12,16 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use secmp_client_core::scheduler::conversation::{
-    Conversation, Conversations, EntropySource, counters,
-};
+use secmp_client_core::clock::ManualClock;
+use secmp_client_core::hub::{Action, Hub};
 use secmp_client_core::scheduler::core::{SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, LinkKind, OpId, Output,
-    PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
+    LinkKind, OpId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
 };
+use secmp_client_core::sessions::actor::{Conversation, Conversations, EntropySource, counters};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
 use secmp_proto::Decode;
@@ -129,8 +129,9 @@ struct Conn {
 /// The key material the host holds for a queue the scheduler knows by id.
 #[derive(Default)]
 pub struct Material {
-    /// `(recv seed, send seed)` by queue.
-    pub queues: BTreeMap<u32, ([u8; 32], [u8; 32])>,
+    /// `(recv seed, send seed)` by queue; the sender seed is `None` where the store's entry has none (Q214: a `QUEUE_NEW`
+    /// for such a queue fails closed).
+    pub queues: BTreeMap<u32, ([u8; 32], Option<[u8; 32]>)>,
 }
 
 /// The link data the host holds for a `LinkPut` / `LinkGet` control operation.
@@ -147,6 +148,16 @@ pub struct LinkMaterial {
     pub expires_bucket: u32,
 }
 
+/// The `QUEUE_DEL` of `queue` ran (or the relay says it is gone): the hub of a store-backed client records it; its failure
+/// is a hub error, not dropped.
+fn hub_queue_deleted(client: &mut SimClient, queue: QueueId) {
+    if let Some(hub) = client.hub.as_mut()
+        && let Err(err) = hub.queue_deleted(queue)
+    {
+        client.hub_errors.push(format!("queue_deleted: {err}"));
+    }
+}
+
 /// What the driver does with a client's connections.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Options {
@@ -156,6 +167,15 @@ pub struct Options {
     pub refuse_connections: bool,
     /// What to keep of the scheduled connections.
     pub inspect: Inspect,
+    /// The relay drops a queue immediately before the client's `QUEUE_DEL` request for it is sent, so the request meets
+    /// `ERR_NOQUEUE` and no `FETCH` has seen the queue gone (B4b-8).
+    #[doc(hidden)]
+    pub relay_drops_before_queue_del: bool,
+    /// M7-S4 test hook (Q300): the relay answers the command of this control operation with this `ERR` — modelled: the
+    /// link is opened and handshaken, the command is not written, the transport's call returns the code (`QueueNew`,
+    /// `LinkPut`, `LinkGetOwner`, `LinkGetConsume`).
+    #[doc(hidden)]
+    pub answer_err: Option<(ControlKind, TransportError)>,
 }
 
 /// What the driver keeps of a scheduled connection.
@@ -181,6 +201,9 @@ pub struct Costs {
     pub prepare_dummy: u64,
     /// One received cell decided and committed.
     pub receive: u64,
+    /// The upper bound of the random latency added to every cell prepared and every cell decided — the store's commit
+    /// completing late (TEST-SPEC-M7 SE-19, Q160): `U[0, jitter]` virtual milliseconds, drawn on the worker, never on a tick.
+    pub jitter: u64,
 }
 
 /// What the gate in front of the conversations records or does (S-22, S-26, S-29).
@@ -192,14 +215,22 @@ pub struct GateState {
     pub work_ms: u64,
     /// Hold the preparation of cells back: `prepare_cell` is "not ready".
     pub block_prepare: bool,
+    /// The state of the latency generator (`SplitMix64`).
+    pub jitter_state: u64,
     /// Deliveries per `(queue, cell_id)`.
     pub delivered: BTreeMap<(u32, u64), u32>,
+    /// The cells prepared per queue: `(real, dummy)` (SE-02: the old queue carries dummies only after a route update).
+    pub prepared: BTreeMap<u32, (u64, u64)>,
     /// The order of preparations and writes with the counters at that moment.
     pub audit: Vec<Audit>,
     /// The highest `cell_id` an `OK_SEND` reported.
     pub relayed_max: u64,
     /// How many evicted ids `OK_SEND` reported.
     pub evicted_count: u64,
+    /// The largest `KDF_CK` fast-forward of one received cell, `SKIP_STEPS_KAT` after its decision (E2-05, F25).
+    pub ff_max: u32,
+    /// The sum of those fast-forwards.
+    pub ff_steps: u64,
 }
 
 /// One audited event (feature `kat`).
@@ -209,18 +240,176 @@ pub enum Audit {
     Prepared([u64; 3]),
     /// Frames were written: `seal_calls` at that moment.
     Wrote(u64),
+    /// A received cell was decided and its decision committed: `(queue, cell_id, seal_calls)` right after (TEST-SPEC-M7
+    /// PC-04: the acknowledgements of the frames sealed later may cover it, none sealed earlier).
+    Decided([u64; 3]),
+}
+
+/// A cell source the gate can sit in front of: the scheduler's [`CellSource`] and whether the conversation that sends on a
+/// queue has something real waiting (for the cost models).
+pub trait Source: CellSource {
+    /// Whether the next cell prepared for `queue` is a real one.
+    fn pending_real(&mut self, queue: QueueId) -> bool;
+}
+
+impl Source for Convs {
+    fn pending_real(&mut self, queue: QueueId) -> bool {
+        Conversations::pending_real(self, queue)
+    }
+}
+
+/// A store-backed client (`secmp_client_core::hub::Hub`) as the driver runs it: the cell source, and what the driver does
+/// for it besides — hands it the time, takes its actions for the scheduler, supplies the key material of its control
+/// operations and reports their results.
+pub trait StoreHub: Source {
+    /// The virtual time is `now_ms`; the hub works on what the sessions delivered and retires what is due.
+    ///
+    /// # Errors
+    /// The hub's failure to work on what the sessions delivered, as text (the tick runs all the same).
+    fn step(&mut self, now_ms: u64) -> Result<(), String>;
+    /// What the hub asks of the scheduler since the last call.
+    fn actions(&mut self) -> Vec<Action>;
+    /// The material of the `LINK_PUT` of link data `n`.
+    fn link_put(&mut self, n: u32) -> Option<LinkMaterial>;
+    /// Whether the `LINK_PUT` of link data `n` may leave now: the hub's gate (Q298, S2-1).
+    ///
+    /// # Errors
+    /// The hub's failure to read it, as text.
+    fn put_allowed(&self, n: u32) -> Result<bool, String>;
+    /// Whether the owner-status query of link data `n` may run now: the hub's gate (Q300).
+    ///
+    /// # Errors
+    /// The hub's failure to read it, as text.
+    fn owner_query_allowed(&self, n: u32) -> Result<bool, String>;
+    /// The relay answered the consuming `LINK_GET` of `n` with an `ERR` (Q300): the accept fails.
+    fn accept_failed(&mut self, n: u32);
+    /// The seeds `(recipient, sender)` of `queue`.
+    fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)>;
+    /// The seeds `(recipient, sender)` of a spare queue the scheduler's pool is about to create (the pool bridge of the hub,
+    /// D4′): made durable by the hub before they are returned. `None` for a hub without the bridge.
+    fn pool_material(&mut self, _queue: QueueId) -> Option<(SecretBytes<32>, SecretBytes<32>)> {
+        None
+    }
+    /// The consuming `LINK_GET` of `n` returned `blob`.
+    ///
+    /// # Errors
+    /// The hub's refusal of the accept, as text.
+    fn link_consumed(&mut self, n: u32, blob: Option<Vec<u8>>) -> Result<(), String>;
+    /// The `QUEUE_DEL` of `queue` ran.
+    ///
+    /// # Errors
+    /// The hub's failure to record it, as text.
+    fn queue_deleted(&mut self, queue: QueueId) -> Result<(), String>;
+    /// The owner-status `LINK_GET` of link data `n` answered `{present, consumed}` (Q297).
+    ///
+    /// # Errors
+    /// The hub's failure to record it, as text.
+    fn owner_status(&mut self, n: u32, present: bool, consumed: bool) -> Result<(), String>;
+    /// The hub as `Any`, for the tests to reach its own methods.
+    fn any(&mut self) -> &mut dyn std::any::Any;
+}
+
+impl<S: EntropySource> Source for Hub<ManualClock, S> {
+    fn pending_real(&mut self, queue: QueueId) -> bool {
+        Hub::pending_real(self, queue)
+    }
+}
+
+impl<S: EntropySource + 'static> StoreHub for Hub<ManualClock, S> {
+    fn step(&mut self, now_ms: u64) -> Result<(), String> {
+        self.core().clock().set_ms(now_ms);
+        let pumped = self.pump().map_err(|e| e.to_string());
+        self.tick(now_ms);
+        pumped
+    }
+
+    fn actions(&mut self) -> Vec<Action> {
+        self.take_actions()
+    }
+
+    fn link_put(&mut self, n: u32) -> Option<LinkMaterial> {
+        let args = self.link_put_args(n).ok()?;
+        Some(LinkMaterial {
+            ld_id: args.ld_id,
+            owner_seed: *args.owner_seed.expose_secret(),
+            blob: args.blob.to_vec(),
+            one_time: true,
+            expires_bucket: u32::try_from(args.expires / 3600).ok()?,
+        })
+    }
+
+    fn put_allowed(&self, n: u32) -> Result<bool, String> {
+        Hub::put_args(self, n)
+            .map(|args| args.is_some())
+            .map_err(|e| e.to_string())
+    }
+
+    fn owner_query_allowed(&self, n: u32) -> Result<bool, String> {
+        Hub::owner_query_args(self, n)
+            .map(|a| a.is_some())
+            .map_err(|e| e.to_string())
+    }
+
+    fn accept_failed(&mut self, n: u32) {
+        Hub::accept_failed(self, n);
+    }
+
+    fn queue_material(&self, queue: QueueId) -> Option<(SecretBytes<32>, Option<SecretBytes<32>>)> {
+        Hub::queue_material(self, queue)
+    }
+
+    fn pool_material(&mut self, queue: QueueId) -> Option<(SecretBytes<32>, SecretBytes<32>)> {
+        Hub::pool_material(self, queue)
+    }
+
+    fn link_consumed(&mut self, n: u32, blob: Option<Vec<u8>>) -> Result<(), String> {
+        Hub::link_consumed(self, n, blob.as_deref())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    fn queue_deleted(&mut self, queue: QueueId) -> Result<(), String> {
+        Hub::queue_deleted(self, queue).map_err(|e| e.to_string())
+    }
+
+    fn owner_status(&mut self, n: u32, present: bool, consumed: bool) -> Result<(), String> {
+        Hub::owner_status(
+            self,
+            n,
+            secmp_client_core::invitations::OwnerStatus { present, consumed },
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
 }
 
 /// The cell source the scheduler sees: the conversations behind a gate that can hold preparation back and audits the
 /// order of the work.
 pub struct Gate<'a> {
-    convs: &'a mut Convs,
+    convs: &'a mut dyn Source,
     state: &'a mut GateState,
 }
 
 impl<'a> Gate<'a> {
-    fn new(convs: &'a mut Convs, state: &'a mut GateState) -> Self {
+    fn new(convs: &'a mut dyn Source, state: &'a mut GateState) -> Self {
         Self { convs, state }
+    }
+
+    /// The latency of one commit: `U[0, jitter]` from the gate's own generator (nothing to do with the timing randomness).
+    fn latency(&mut self) -> u64 {
+        let max = self.state.costs.jitter;
+        if max == 0 {
+            return 0;
+        }
+        self.state.jitter_state = self.state.jitter_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.state.jitter_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        z.checked_rem(max.saturating_add(1)).unwrap_or(0)
     }
 }
 
@@ -236,12 +425,19 @@ impl CellSource for Gate<'_> {
         let real = self.convs.pending_real(queue);
         let out = self.convs.prepare_cell(queue, now);
         if matches!(out, Ok(Some(_))) {
+            let counts = self.state.prepared.entry(queue.0).or_insert((0, 0));
+            if real {
+                counts.0 = counts.0.saturating_add(1);
+            } else {
+                counts.1 = counts.1.saturating_add(1);
+            }
             let cost = if real {
                 self.state.costs.prepare_real
             } else {
                 self.state.costs.prepare_dummy
             };
-            self.state.work_ms = self.state.work_ms.saturating_add(cost);
+            let late = self.latency();
+            self.state.work_ms = self.state.work_ms.saturating_add(cost).saturating_add(late);
             self.state.audit.push(Audit::Prepared([
                 counters::tr_encrypt_calls(),
                 counters::persist_calls(),
@@ -273,11 +469,34 @@ impl CellSource for Gate<'_> {
         self.convs.queue_lost(queue);
     }
 
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
-        self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        generation: u64,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
+        let late = self.latency();
+        self.state.work_ms = self
+            .state
+            .work_ms
+            .saturating_add(self.state.costs.receive)
+            .saturating_add(late);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
-        self.convs.deliver(queue, cell_id, cell)
+        secmp_proto::tr::SKIP_STEPS_KAT.set(0);
+        let out = self.convs.deliver(queue, generation, cell_id, cell);
+        let steps = secmp_proto::tr::SKIP_STEPS_KAT.get();
+        self.state.ff_max = self.state.ff_max.max(steps);
+        self.state.ff_steps = self.state.ff_steps.saturating_add(u64::from(steps));
+        if out.is_ok() {
+            self.state.audit.push(Audit::Decided([
+                u64::from(queue.0),
+                cell_id,
+                secmp_transport::channel::counters::seal_calls(),
+            ]));
+        }
+        out
     }
 }
 
@@ -291,6 +510,10 @@ pub struct SimClient {
     pub sched: Scheduler,
     /// Its conversations (the cell source).
     pub convs: Convs,
+    /// A store-backed client instead of `convs` (the hub is the cell source then).
+    pub hub: Option<Box<dyn StoreHub>>,
+    /// What the hub refused in a control operation's result (the tests assert it is empty).
+    pub hub_errors: Vec<String>,
     /// Content randomness of the handshakes and queue keys.
     pub entropy: EntropyPool,
     /// Key material by queue id.
@@ -345,6 +568,7 @@ pub struct VirtualDriver {
     now: u64,
     swept_minute: u64,
     costs: Costs,
+    jitter_seed: u64,
     /// Whether a completed write is reported to the scheduler (`frame_written`); `false` models a driver that never
     /// does (C2-07: the ledger bound of item 11).
     report_written: bool,
@@ -367,6 +591,7 @@ impl VirtualDriver {
             now: 0,
             swept_minute: 0,
             costs: Costs::default(),
+            jitter_seed: 0,
             report_written: true,
         }
     }
@@ -385,6 +610,21 @@ impl VirtualDriver {
         for c in &mut self.clients {
             c.gate.costs = costs;
         }
+    }
+
+    /// Model a commit that completes late: every cell prepared or decided takes `U[0, max_ms]` virtual milliseconds more, from
+    /// a generator seeded with `seed` (every client, present and future).
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    pub fn commit_latency(&mut self, max_ms: u64, seed: u64) {
+        self.costs.jitter = max_ms;
+        let costs = self.costs;
+        for (n, c) in self.clients.iter_mut().enumerate() {
+            c.gate.costs = costs;
+            c.gate.jitter_state = seed.wrapping_add(u64::try_from(n).unwrap());
+        }
+        self.jitter_seed = seed;
     }
 
     /// Model the cost of deciding (decrypting and committing) one received cell: `per_cell` virtual milliseconds.
@@ -432,6 +672,8 @@ impl VirtualDriver {
         self.clients.push(SimClient {
             sched: Scheduler::new(params, mode, TimingRng::seeded(seed)),
             convs: Conversations::new(),
+            hub: None,
+            hub_errors: Vec::new(),
             entropy: EntropyPool::new("m6-client", index),
             material: Material::default(),
             events: Vec::new(),
@@ -441,6 +683,7 @@ impl VirtualDriver {
             opts: Options::default(),
             gate: GateState {
                 costs: self.costs,
+                jitter_state: self.jitter_seed.wrapping_add(u64::from(index)),
                 ..GateState::default()
             },
             after_write: None,
@@ -575,6 +818,11 @@ impl VirtualDriver {
     /// # Panics
     /// If the scheduler fails (no randomness: never in a virtual run) or the loop does not make progress.
     pub fn run_until(&mut self, t_end: u64) {
+        // what a hub asked for since the last run (an invitation issued, a request answered) is registered first
+        for i in 0..self.clients.len() {
+            let now = self.now;
+            self.hub_step(i, now);
+        }
         let mut guard = 0_u64;
         loop {
             guard = guard.saturating_add(1);
@@ -599,6 +847,7 @@ impl VirtualDriver {
     /// runs (cells decided, next frames prepared, control operations started).
     fn process(&mut self, t: u64) {
         for i in 0..self.clients.len() {
+            self.hub_step(i, t);
             self.deliver_due(i, t);
             let outs = self.clients.get_mut(i).unwrap().sched.poll_due(t).unwrap();
             // the frames due now leave at `t`: nothing the work costs comes before them
@@ -609,9 +858,13 @@ impl VirtualDriver {
                 // the work starts when the worker is free and ends after its modelled cost; the core is told
                 let start = t.max(c.worker_free);
                 c.gate.work_ms = 0;
+                let source: &mut dyn Source = match c.hub.as_mut() {
+                    Some(hub) => &mut **hub,
+                    None => &mut c.convs,
+                };
                 let outs = c
                     .sched
-                    .work(start, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .work(start, &mut Gate::new(source, &mut c.gate))
                     .unwrap();
                 let end = start.saturating_add(c.gate.work_ms);
                 c.sched.prepared_until(end);
@@ -620,7 +873,159 @@ impl VirtualDriver {
                 outs
             };
             self.apply(i, t, outs);
+            self.hub_step(i, t);
         }
+    }
+
+    /// A store-backed client at virtual time `t`: the hub works on what its sessions delivered, and what it asks of the
+    /// scheduler is done (a queue to fetch or send to, a queue to drop, a control operation). Nothing here adds a slot: the
+    /// scheduler decides when a new queue's link starts.
+    fn hub_step(&mut self, i: usize, t: u64) {
+        for _ in 0..8 {
+            let actions = {
+                let c = self.clients.get_mut(i).unwrap();
+                let Some(hub) = c.hub.as_mut() else { return };
+                if let Err(e) = hub.step(t) {
+                    c.hub_errors.push(format!("step: {e}"));
+                }
+                hub.actions()
+            };
+            if actions.is_empty() {
+                return;
+            }
+            for action in actions {
+                self.apply_action(i, t, action);
+            }
+        }
+    }
+
+    fn apply_action(&mut self, i: usize, t: u64, action: Action) {
+        let c = self.clients.get_mut(i).unwrap();
+        let result = match action {
+            Action::AddRecv {
+                queue,
+                relay,
+                seed,
+                period_ms,
+            } => c
+                .sched
+                .add_recv_queue_seed(t, queue, relay, &seed, period_ms),
+            Action::AddSend {
+                queue,
+                relay,
+                sid,
+                seed,
+                period_ms,
+            } => c
+                .sched
+                .add_send_queue_route(t, queue, relay, (sid, &seed), period_ms),
+            Action::Control(spec) => c
+                .sched
+                .schedule_control(t, spec.kind, spec.relay, spec.related, spec.when)
+                .map(|_| ()),
+            Action::TakeSpare { queue, period_ms } => {
+                let relay = c.relay;
+                let source: &mut dyn Source = match c.hub.as_mut() {
+                    Some(hub) => &mut **hub,
+                    None => &mut c.convs,
+                };
+                let taken = c.sched.take_pool_queue_id(
+                    t,
+                    relay,
+                    queue,
+                    period_ms,
+                    &mut Gate::new(source, &mut c.gate),
+                );
+                match taken {
+                    Ok((Some(_), outs)) => {
+                        self.apply(i, t, outs);
+                        Ok(())
+                    }
+                    Ok((None, _)) => {
+                        c.hub_errors
+                            .push(format!("TakeSpare {}: not a spare", queue.0));
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            Action::Remove { queue } => {
+                let source: &mut dyn Source = match c.hub.as_mut() {
+                    Some(hub) => &mut **hub,
+                    None => &mut c.convs,
+                };
+                let outs = c
+                    .sched
+                    .remove_queue(t, queue, &mut Gate::new(source, &mut c.gate));
+                match outs {
+                    Ok(outs) => {
+                        self.apply(i, t, outs);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        };
+        if let Err(e) = result {
+            // a queue that is known already (a restart registers what the hub registered before) is no error
+            if e != SchedError::DuplicateQueue {
+                self.clients
+                    .get_mut(i)
+                    .unwrap()
+                    .hub_errors
+                    .push(e.to_string());
+            }
+        }
+    }
+
+    /// Give client `i` a store-backed hub as its cell source.
+    ///
+    /// # Panics
+    /// If there is no client `i`: a test failure, never a production path.
+    pub fn attach_hub(&mut self, i: usize, hub: Box<dyn StoreHub>) {
+        self.clients.get_mut(i).unwrap().hub = Some(hub);
+    }
+
+    /// Client `i`'s process dies and starts again from its store (SE-14): every connection is cut, the scheduler is new
+    /// (`mode`, `params`, timing seed `seed`) and so is the hub, which registers what the store holds.
+    ///
+    /// # Panics
+    /// If there is no client `i`: a test failure, never a production path.
+    pub fn restart_client(
+        &mut self,
+        i: usize,
+        hub: Box<dyn StoreHub>,
+        (mode, params, seed): (Mode, Params, u64),
+    ) {
+        let c = self.clients.get_mut(i).unwrap();
+        for conn in c.conns.values() {
+            conn.stream.cut();
+        }
+        c.conns.clear();
+        c.sched = Scheduler::new(params, mode, TimingRng::seeded(seed));
+        c.hub = Some(hub);
+        c.worker_free = 0;
+    }
+
+    /// Create a queue on the relay for client `i` with the given seeds (set-up traffic like [`VirtualDriver::new_queue`]:
+    /// a pool queue the client made earlier).
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    pub fn new_queue_with(&mut self, i: usize, recv: &[u8; 32], send: &[u8; 32]) {
+        let access = self.harness.access_key();
+        let fp = self.harness.relay_fp();
+        let stream = self.harness.open_stream().unwrap();
+        let unix = self.harness.clock().unix();
+        let c = self.clients.get_mut(i).unwrap();
+        let mut t =
+            RelayQueueTransport::connect(stream, fp, Some(&access), unix, c.entropy.get()).unwrap();
+        t.create_queue(
+            &SecretBytes::from_slice(recv).unwrap(),
+            &SecretBytes::from_slice(send).unwrap(),
+            &access,
+        )
+        .unwrap();
     }
 
     // ---- connections ----------------------------------------------------------------------------------------------
@@ -688,7 +1093,14 @@ impl VirtualDriver {
         let mut queue: VecDeque<Output> = outs.into();
         while let Some(out) = queue.pop_front() {
             match out {
-                Output::Event(e) => self.clients.get_mut(i).unwrap().events.push((t, e)),
+                Output::Event(e) => {
+                    let client = self.clients.get_mut(i).unwrap();
+                    // the retirement of a queue the relay no longer has is complete (Q201)
+                    if let LinkEvent::QueueGone(q) = &e {
+                        hub_queue_deleted(client, *q);
+                    }
+                    client.events.push((t, e));
+                }
                 Output::Connect {
                     link,
                     key,
@@ -702,8 +1114,13 @@ impl VirtualDriver {
                     let more = self.connect(i, t, link);
                     queue.extend(more);
                 }
-                Output::Write { link, bytes, at } => {
-                    let more = self.write(i, t, at, link, &bytes);
+                Output::Write {
+                    link,
+                    bytes,
+                    at,
+                    frame,
+                } => {
+                    let more = self.write(i, t, at, (link, frame), &bytes);
                     queue.extend(more);
                 }
                 Output::Close { link } => {
@@ -808,7 +1225,14 @@ impl VirtualDriver {
         }
     }
 
-    fn write(&mut self, i: usize, t: u64, at: u64, link: LinkId, bytes: &[u8]) -> Vec<Output> {
+    fn write(
+        &mut self,
+        i: usize,
+        t: u64,
+        at: u64,
+        (link, frame): (LinkId, FrameId),
+        bytes: &[u8],
+    ) -> Vec<Output> {
         // the entry carries the driver's own time of the write; the tick the core stamped is kept apart
         for _ in 0..bytes.len() / FRAME {
             self.trace_at(i, t, at, FRAME, Dir::C2R, link.0);
@@ -831,7 +1255,14 @@ impl VirtualDriver {
         if ok {
             // the whole frame is on the stream: the core commits what the frame stood for (FIN-2)
             if self.report_written {
-                self.clients.get_mut(i).unwrap().sched.frame_written(link);
+                // reported once, in order, by its id (FINAL3 (e)): a trusted caller is never refused
+                let reported = self
+                    .clients
+                    .get_mut(i)
+                    .unwrap()
+                    .sched
+                    .frame_written(link, frame);
+                debug_assert_eq!(reported, Ok(()));
             }
             // the write is on the wire: the hook may kill the process here
             let c = self.clients.get_mut(i).unwrap();
@@ -891,6 +1322,25 @@ impl VirtualDriver {
             .unwrap()
             .controls_started
             .push((t, op, kind));
+        // Q300 (EXT3-1 Repro B): the host's prepare step before any link opens, as the runtime; nothing to do opens no link
+        match self.prepare_control(i, kind) {
+            Ok(true) => {}
+            Ok(false) => {
+                let c = self.clients.get_mut(i).unwrap();
+                c.sched.control_done(op);
+                c.controls_done.push((t, kind));
+                return Vec::new();
+            }
+            Err(_) => {
+                self.clients
+                    .get_mut(i)
+                    .unwrap()
+                    .sched
+                    .control_failed(t, op, false)
+                    .unwrap();
+                return Vec::new();
+            }
+        }
         let slot = CONTROL_SLOT_BASE.saturating_add(op.0);
         let (keep, outcome) = self.handshake(i);
         let Hs::Up(session) = outcome else {
@@ -940,9 +1390,56 @@ impl VirtualDriver {
                 c.sched.control_done(op);
                 c.controls_done.push((t, kind));
             }
-            Err(_) => c.sched.control_failed(t, op, false).unwrap(),
+            // Q300 phase rule (M7-S4d): the link was up — whatever ended the command (a relay `ERR` of any code, an unfitting
+            // answer, a local error after the handshake) it is answered, never a link failure; a consume ends the accept
+            // (`ControlRunner::unanswered`)
+            Err(_) => {
+                if let ControlKind::LinkGetConsume(n) = kind {
+                    if let Some(hub) = c.hub.as_mut() {
+                        hub.accept_failed(n);
+                    }
+                    c.sched.control_done(op);
+                    c.controls_done.push((t, kind));
+                } else {
+                    c.sched.control_answered(t, op).unwrap();
+                }
+            }
         }
         Vec::new()
+    }
+
+    /// The owner-status `LINK_GET` of link data `n` of client `idx` (Q297): the answer is recorded and goes to the hub.
+    fn owner_status_query(
+        &mut self,
+        idx: usize,
+        transport: &mut RelayQueueTransport<HarnessStream>,
+        n: u32,
+        now: u64,
+        answer: Option<TransportError>,
+    ) -> Result<(), TransportError> {
+        let client = self.clients.get_mut(idx).unwrap();
+        let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+        let owner = SecretBytes::from_slice(&m.owner_seed).unwrap();
+        let ld = m.ld_id;
+        if let Some(e) = answer {
+            return Err(e);
+        }
+        let got = transport.get_link_data(ld, LinkGetMode::OwnerStatus(&owner))?;
+        client.link_status.push((now, n, got.present, got.consumed));
+        // Q297: a store-backed client's answer goes to its hub (the re-put and the next query come back as its
+        // actions); a client without a hub keeps the scheduler's re-put (CO-05)
+        if let Some(hub) = client.hub.as_mut() {
+            if let Err(e) = hub.owner_status(n, got.present, got.consumed) {
+                client.hub_errors.push(format!("owner_status: {e}"));
+            }
+        } else {
+            let relay = client.relay;
+            let expired = false;
+            let _ = client
+                .sched
+                .owner_status(now, relay, n, got.present, got.consumed, expired);
+        }
+        Ok(())
     }
 
     fn run_control(
@@ -953,20 +1450,37 @@ impl VirtualDriver {
         access: &secmp_proto::link::ids::AccessKey,
         now: u64,
     ) -> Result<(), TransportError> {
+        let answer = self
+            .clients
+            .get(idx)
+            .and_then(|c| c.opts.answer_err)
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, e)| e);
         match kind {
             ControlKind::QueueNew(queue) => {
                 let client = self.clients.get_mut(idx).unwrap();
                 let known = client.material.queues.get(&queue.0).copied();
-                let (recv, send) = if let Some(m) = known {
-                    m
-                } else {
-                    let m: ([u8; 32], [u8; 32]) = (
-                        client.entropy.bytes(32).try_into().unwrap(),
-                        client.entropy.bytes(32).try_into().unwrap(),
-                    );
-                    client.material.queues.insert(queue.0, m);
-                    m
+                let (recv, send) = match known {
+                    Some((recv, Some(send))) => (recv, send),
+                    Some((_, None)) => {
+                        // Q214: no sender seed in the stored entry: nothing is signed with a made-up one
+                        client
+                            .hub_errors
+                            .push(format!("QUEUE_NEW {}: no sender seed", queue.0));
+                        return Err(TransportError::Invalid);
+                    }
+                    None => {
+                        let m: ([u8; 32], [u8; 32]) = (
+                            client.entropy.bytes(32).try_into().unwrap(),
+                            client.entropy.bytes(32).try_into().unwrap(),
+                        );
+                        client.material.queues.insert(queue.0, (m.0, Some(m.1)));
+                        m
+                    }
                 };
+                if let Some(e) = answer {
+                    return Err(e);
+                }
                 let (rc, _sc) = transport.create_queue(
                     &SecretBytes::from_slice(&recv).unwrap(),
                     &SecretBytes::from_slice(&send).unwrap(),
@@ -977,6 +1491,13 @@ impl VirtualDriver {
                 Ok(())
             }
             ControlKind::QueueDel(queue) => {
+                if self
+                    .clients
+                    .get(idx)
+                    .is_some_and(|c| c.opts.relay_drops_before_queue_del)
+                {
+                    self.drop_queue_on_relay(idx, queue);
+                }
                 let client = self.clients.get_mut(idx).unwrap();
                 let (recv, _) = *client
                     .material
@@ -984,46 +1505,161 @@ impl VirtualDriver {
                     .get(&queue.0)
                     .ok_or(TransportError::Invalid)?;
                 let cap = RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap())?;
-                transport.delete_queue(&cap)
+                // a queue the relay does not have (the `QUEUE_DEL` ran, the host did not record it) is deleted all the same
+                match transport.delete_queue(&cap) {
+                    Ok(()) | Err(TransportError::NoQueue) => {}
+                    Err(e) => return Err(e),
+                }
+                hub_queue_deleted(client, queue);
+                Ok(())
             }
             ControlKind::LinkPut(n) => {
                 let client = self.clients.get_mut(idx).unwrap();
                 let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
                 let blob = LinkBlob::decode(&m.blob).map_err(|_| TransportError::Invalid)?;
-                transport.put_link_data(
+                if let Some(e) = answer {
+                    return secmp_client_core::scheduler::run::link_put_outcome(Err(e));
+                }
+                // Q299 (F1-1): the production outcome rule — `ERR_EXISTS` completes the operation
+                secmp_client_core::scheduler::run::link_put_outcome(transport.put_link_data(
                     m.ld_id,
                     &SecretBytes::from_slice(&m.owner_seed).unwrap(),
                     &blob,
                     m.one_time,
                     m.expires_bucket,
                     access,
-                )
+                ))
             }
-            ControlKind::LinkGetOwner(n) => {
-                let client = self.clients.get_mut(idx).unwrap();
-                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
-                let owner = SecretBytes::from_slice(&m.owner_seed).unwrap();
-                let ld = m.ld_id;
-                let got = transport.get_link_data(ld, LinkGetMode::OwnerStatus(&owner))?;
-                client.link_status.push((now, n, got.present, got.consumed));
-                let relay = client.relay;
-                let expired = false;
-                let _ =
+            ControlKind::LinkGetOwner(n) => self.owner_status_query(idx, transport, n, now, answer),
+            ControlKind::LinkGetConsume(n) => self.consume_query(idx, transport, n, now, answer),
+        }
+    }
+
+    /// The consuming `LINK_GET` of link data `n` of client `idx` (the accept): the answer goes to the hub; a relay `ERR`
+    /// ends the accept (Q300, EXT3-4).
+    fn consume_query(
+        &mut self,
+        idx: usize,
+        transport: &mut RelayQueueTransport<HarnessStream>,
+        n: u32,
+        now: u64,
+        answer: Option<TransportError>,
+    ) -> Result<(), TransportError> {
+        let client = self.clients.get_mut(idx).unwrap();
+        let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+        let ld = m.ld_id;
+        // Q300 (EXT3-4): the production rule — a relay `ERR` ends the accept, never retried
+        let answered =
+            answer.map_or_else(|| transport.get_link_data(ld, LinkGetMode::Consume), Err);
+        let Some(got) = secmp_client_core::scheduler::run::consume_outcome(answered)? else {
+            if let Some(hub) = client.hub.as_mut() {
+                hub.accept_failed(n);
+            }
+            return Ok(());
+        };
+        client
+            .link_consumed
+            .push((now, n, got.present, got.consumed, got.blob.is_some()));
+        if let Some(hub) = client.hub.as_mut() {
+            let blob = got
+                .blob
+                .as_ref()
+                .map(|b| secmp_proto::Encode::encode(b).unwrap().to_vec());
+            if let Err(e) = hub.link_consumed(n, blob) {
+                client.hub_errors.push(e);
+            }
+        }
+        Ok(())
+    }
+
+    /// The relay loses `queue` (a `QUEUE_DEL` by its owner's key on a connection of its own; the client's connections and
+    /// requests are untouched).
+    fn drop_queue_on_relay(&mut self, idx: usize, queue: QueueId) {
+        let access = self.harness.access_key();
+        let fp = self.harness.relay_fp();
+        let unix = self.harness.clock().unix();
+        let stream = self.harness.open_stream().unwrap();
+        let client = self.clients.get_mut(idx).unwrap();
+        let (recv, _) = *client.material.queues.get(&queue.0).unwrap();
+        let mut t =
+            RelayQueueTransport::connect(stream, fp, Some(&access), unix, client.entropy.get())
+                .unwrap();
+        t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap()).unwrap())
+            .unwrap();
+    }
+
+    /// The host's prepare step of a control operation (Q300; the runtime's `ControlRunner::prepare`): a store-backed client's
+    /// material, then the gates of Q298 (`LinkPut`) and Q300 (`LinkGetOwner`); `Ok(false)`: nothing to do, no link opens.
+    fn prepare_control(&mut self, idx: usize, kind: ControlKind) -> Result<bool, TransportError> {
+        self.hub_material(idx, kind);
+        let client = self.clients.get(idx).unwrap();
+        if let Some(hub) = client.hub.as_ref() {
+            let go = match kind {
+                ControlKind::LinkPut(n) => {
+                    hub.put_allowed(n).map_err(|_| TransportError::Invalid)?
+                }
+                ControlKind::LinkGetOwner(n) => hub
+                    .owner_query_allowed(n)
+                    .map_err(|_| TransportError::Invalid)?,
+                _ => true,
+            };
+            if !go {
+                return Ok(false);
+            }
+        }
+        // Q300 (M7-S4d, S4-3): the command's local material is checked before any link opens, as the runtime's `prepare`; a
+        // failure opens no link and is retried after the back-off (CO-06), invisible to the relay
+        match kind {
+            ControlKind::LinkPut(n) => {
+                LinkBlob::decode(&client.links.get(&n).ok_or(TransportError::Invalid)?.blob)
+                    .map_err(|_| TransportError::Invalid)?;
+            }
+            ControlKind::QueueDel(queue) => {
+                let (recv, _) = *client
+                    .material
+                    .queues
+                    .get(&queue.0)
+                    .ok_or(TransportError::Invalid)?;
+                RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap())?;
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// A store-backed client keeps the material of its control operations in the store: the queues' seeds, the link data.
+    fn hub_material(&mut self, idx: usize, kind: ControlKind) {
+        let client = self.clients.get_mut(idx).unwrap();
+        let Some(hub) = client.hub.as_mut() else {
+            return;
+        };
+        match kind {
+            ControlKind::QueueNew(queue) | ControlKind::QueueDel(queue) => {
+                // the driver's own copy of the material (Q211/Q214: the hub hands it out typed, an absent sender seed as
+                // `None`, kept as `None`; only a `QUEUE_DEL` can use such an entry)
+                let material = hub.queue_material(queue).or_else(|| {
+                    // a spare the scheduler's pool creates: its seeds are made durable first (D4′)
+                    if matches!(kind, ControlKind::QueueNew(_)) {
+                        hub.pool_material(queue).map(|(r, s)| (r, Some(s)))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((recv, send)) = material {
+                    let send = send.map(|s| *s.expose_secret());
                     client
-                        .sched
-                        .owner_status(now, relay, n, got.present, got.consumed, expired);
-                Ok(())
+                        .material
+                        .queues
+                        .entry(queue.0)
+                        .or_insert((*recv.expose_secret(), send));
+                }
             }
-            ControlKind::LinkGetConsume(n) => {
-                let client = self.clients.get_mut(idx).unwrap();
-                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
-                let ld = m.ld_id;
-                let got = transport.get_link_data(ld, LinkGetMode::Consume)?;
-                client
-                    .link_consumed
-                    .push((now, n, got.present, got.consumed, got.blob.is_some()));
-                Ok(())
+            ControlKind::LinkPut(n) | ControlKind::LinkGetOwner(n) => {
+                if let Some(m) = hub.link_put(n) {
+                    client.links.entry(n).or_insert(m);
+                }
             }
+            ControlKind::LinkGetConsume(_) => {}
         }
     }
 
@@ -1035,8 +1671,12 @@ impl VirtualDriver {
         let now = self.now;
         let outs = {
             let c = self.clients.get_mut(i).unwrap();
+            let source: &mut dyn Source = match c.hub.as_mut() {
+                Some(hub) => &mut **hub,
+                None => &mut c.convs,
+            };
             c.sched
-                .set_send_counter_kat(link, value, now, &mut Gate::new(&mut c.convs, &mut c.gate))
+                .set_send_counter_kat(link, value, now, &mut Gate::new(source, &mut c.gate))
                 .unwrap()
         };
         self.apply(i, now, outs);

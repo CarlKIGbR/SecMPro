@@ -32,6 +32,10 @@
     clippy::panic
 )]
 
+// the unit tests share files of `tests/common/` that name this crate `secmp_proto` (G7-18: `tr_digest.rs`)
+#[cfg(test)]
+extern crate self as secmp_proto;
+
 pub mod codec;
 mod error;
 pub mod hx;

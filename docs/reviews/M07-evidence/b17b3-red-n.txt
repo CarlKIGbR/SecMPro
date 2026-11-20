@@ -1,0 +1,86 @@
+head bf06e60c570306c273f1b2b771cace9fb132ba65
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index bf151a4..79f9e0a 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -778,7 +778,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+     /// the id of the first `OK_SEND` there of a later cell (Q249); every other marker read at open keeps holding its
+     /// `KeyChange`.
+     pub fn set_send_sid(&mut self, queue: QueueId, sid: Id) {
+-        self.adopt(queue, sid, 0, true);
++        if self.send_queue.is_none() { self.adopt(queue, sid, 0, true); }
+         self.send_sid = Some((queue, sid));
+     }
+ 
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.96s
+────────────
+ Nextest run ID 57750226-5739-4025-b02f-6a2592cf2057 with nextest profile: default
+    Starting 42 tests across 1 binary (251 tests skipped)
+        PASS [   0.022s] ( 1/42) secmp-client-core sessions::tests::overlap_codec_is_strict
+        PASS [   0.020s] ( 2/42) secmp-client-core sessions::tests::marker_codec_is_strict
+        PASS [   0.086s] ( 3/42) secmp-client-core sessions::tests::overlap_codec_is_total_and_canonical
+        PASS [   0.124s] ( 4/42) secmp-client-core sessions::actor::tests::overlap_rows_not_registered_again_go
+        PASS [   0.134s] ( 5/42) secmp-client-core sessions::actor::tests::overlap_row_is_written_at_the_switch
+        PASS [   0.137s] ( 6/42) secmp-client-core sessions::actor::tests::dropped_overlap_writes_no_late_row
+        PASS [   0.163s] ( 7/42) secmp-client-core sessions::actor::tests::dropped_overlap_deletes_its_row
+        PASS [   0.219s] ( 8/42) secmp-client-core sessions::actor::tests::dropped_queue_with_a_key_change_cell_on_its_way_holds
+        PASS [   0.220s] ( 9/42) secmp-client-core sessions::actor::tests::old_queue_marker_goes_when_nothing_can_be_there
+        PASS [   0.232s] (10/42) secmp-client-core sessions::actor::tests::copies_on_names_the_highest_mark_of_that_queue
+        PASS [   0.245s] (11/42) secmp-client-core sessions::actor::tests::markers_go_before_their_key_change
+        PASS [   0.249s] (12/42) secmp-client-core sessions::actor::tests::dropped_queue_marker_is_not_taken_over_in_the_same_process
+        PASS [   0.267s] (13/42) secmp-client-core sessions::actor::tests::key_change_cell_waits_for_its_marker
+        PASS [   2.416s] (14/42) secmp-client-core sessions::tests::orphan_marker_holds_nothing_and_goes
+        PASS [   2.661s] (15/42) secmp-client-core hub::tests::restart_after_a_stale_route_registers_the_current_queue
+        PASS [   2.610s] (16/42) secmp-client-core sessions::tests::restart_without_the_overlap_row_holds
+        PASS [   2.825s] (17/42) secmp-client-core hub::tests::restart_later_keeps_the_stored_end
+        PASS [   2.833s] (18/42) secmp-client-core hub::tests::restart_registers_each_old_queue_with_its_own_route
+        PASS [   2.845s] (19/42) secmp-client-core hub::tests::restart_registers_the_rows_after_a_skipped_one
+        PASS [   2.761s] (20/42) secmp-client-core sessions::tests::restart_on_the_marked_queue_then_a_switch_holds
+        PASS [   2.735s] (21/42) secmp-client-core sessions::tests::resumed_queue_without_a_copy_drops_its_marker
+        PASS [   2.922s] (22/42) secmp-client-core hub::tests::restart_keeps_one_sender_per_physical_queue
+        PASS [   2.682s] (23/42) secmp-client-core sessions::tests::undecodable_marker_fails_the_open
+        PASS [   2.957s] (24/42) secmp-client-core hub::tests::restart_registers_the_old_send_queue_until_its_end
+        FAIL [   2.984s] (25/42) secmp-client-core sessions::tests::later_registration_of_a_marked_sid_counts_its_copy
+  stdout ───
+
+    running 1 test
+    test sessions::tests::later_registration_of_a_marked_sid_counts_its_copy ... FAILED
+
+    failures:
+
+    failures:
+        sessions::tests::later_registration_of_a_marked_sid_counts_its_copy
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 292 filtered out; finished in 2.97s
+
+  stderr ───
+
+    thread '<unnamed>' (149902) panicked at crates/secmp-client-core/src/sessions/tests.rs:4058:9:
+    assertion `left == right` failed: Q253: the later registration takes the marker over
+      left: [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]
+     right: [[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.742s] (26/42) secmp-client-core sessions::tests::undecodable_overlap_row_fails_the_open
+        PASS [   3.015s] (27/42) secmp-client-core hub::tests::restart_in_overlap_counts_the_copy_away
+        PASS [   2.873s] (28/42) secmp-client-core sessions::tests::resumed_mark_of_unknown_id_counts_from_a_later_ok_send
+        PASS [   2.760s] (29/42) secmp-client-core sessions::tests::unknown_marks_on_the_head_keep_its_row
+        PASS [   3.030s] (30/42) secmp-client-core hub::tests::overlap_end_before_the_count_holds
+        PASS [   2.865s] (31/42) secmp-client-core sessions::tests::resumed_row_naming_id_one_marks_it
+        PASS [   2.971s] (32/42) secmp-client-core sessions::tests::restart_with_a_cell_on_its_way_counts_from_the_first_later_id
+        PASS [   3.102s] (33/42) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+        PASS [   3.080s] (34/42) secmp-client-core sessions::tests::restart_counts_the_old_queue_from_the_stored_id
+        PASS [   3.109s] (35/42) secmp-client-core hub::tests::end_passed_while_down_holds
+        PASS [   2.891s] (36/42) secmp-client-core sessions::tests::second_restart_elsewhere_keeps_an_uncounted_marker
+        PASS [   4.484s] (37/42) secmp-client-core sessions::tests::restart_keeps_the_marker_of_an_uncounted_old_queue
+        PASS [   4.821s] (38/42) secmp-client-core hub::tests::restart_after_routes_in_one_pump_registers_the_new_one
+        PASS [   4.758s] (39/42) secmp-client-core sessions::tests::two_rows_of_one_sid_are_taken_together
+        PASS [   5.072s] (40/42) secmp-client-core hub::tests::restart_reads_the_marker_of_the_sent_queue
+        PASS [   7.000s] (41/42) secmp-client-core sessions::tests::overlap_row_names_the_copies_at_the_switch
+        PASS [  15.185s] (42/42) secmp-client-core sessions::tests::unknown_send_at_the_switch_is_held
+────────────
+     Summary [  17.602s] 42 tests run: 41 passed, 1 failed, 251 skipped
+        FAIL [   2.984s] (25/42) secmp-client-core sessions::tests::later_registration_of_a_marked_sid_counts_its_copy
+error: test run failed

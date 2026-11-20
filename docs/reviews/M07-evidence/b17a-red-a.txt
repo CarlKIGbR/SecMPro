@@ -1,0 +1,44 @@
+head d0ea52d9823d0c22582cc7c774b857d951e5fdc6
+edit (a), row hold off: sed -i '753s#!held(id, e) && ##' crates/secmp-client-core/src/sessions/actor.rs
+command:
+cargo test --locked -p secmp-client-core --features kat --lib -- --test-threads=1 key_change_row_lives_until_its_window_passes failed_first_plan_keeps_the_key_change_guarded switch_then_restart_keeps_the_key_change_guarded stranded_key_change_holds_until_the_old_queue_window_passes lost_old_queue_releases_a_stranded_key_change restart_in_the_window_keeps_the_rotation_guard restart_after_the_window_resends_nothing_and_rotates switch_resends_settled_key_change control_row_deleted_only_after_last_ok_send superseded_control_attempt_outcomes_are_ignored pending_control_content_survives_restart end_of_overlap_keeps_a_stranded_key_change in_flight_key_change_at_the_switch_is_held two_switches_keep_both_stranded_marks failed_replan_is_planned_at_the_next_preparation unknown_send_at_the_switch_is_held lost_current_queue_keeps_the_old_queue_mark
+output:
+thread '<unnamed>' (3589381) panicked at crates/secmp-client-core/src/api.rs:1916:13:
+assertion `left == right` failed: Q240: the row outlives the last OK_SEND
+  left: 0
+ right: 1
+--
+thread '<unnamed>' (3589383) panicked at crates/secmp-client-core/src/sessions/tests.rs:3224:9:
+assertion `left == right` failed: Q240: kept while a cell is in the eviction window
+  left: 0
+ right: 1
+--
+thread '<unnamed>' (3589385) panicked at crates/secmp-client-core/src/sessions/tests.rs:2651:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+--
+thread '<unnamed>' (3589395) panicked at crates/secmp-client-core/src/sessions/tests.rs:2380:9:
+assertion `left == right` failed: Q240: the row lives while a cell is in the eviction window
+  left: 0
+ right: 1
+--
+thread '<unnamed>' (3589403) panicked at crates/secmp-client-core/src/sessions/tests.rs:2550:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+--
+thread '<unnamed>' (3589407) panicked at crates/secmp-client-core/src/sessions/tests.rs:2317:9:
+assertion `left == right` failed: Q240: the row lives while a cell is in the eviction window
+  left: 0
+ right: 1
+--
+thread '<unnamed>' (3589409) panicked at crates/secmp-client-core/src/sessions/tests.rs:2483:9:
+assertion `left == right` failed: Q240: the row lives after the new queue's last OK_SEND
+  left: 0
+ right: 1
+--
+test result: FAILED. 10 passed; 7 failed; 0 ignored; 0 measured; 223 filtered out; finished in 41.79s
+
+error: test failed, to rerun pass `-p secmp-client-core --lib`
+cause: without the held(id, e) test a KeyChange row is deleted at the last OK_SEND although a copy is still in the eviction window.

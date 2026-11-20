@@ -1,0 +1,26 @@
+red-first lines of WEISUNG M7-B-4b step 1 (head d77fb3ca29a21ab21e992b6f4c331102afa0ea35, tree = Astra's module appended + the sanctioned adaptations below)
+$ cargo nextest run -p secmp-client-core --features kat -E test(/extb1_/) --no-fail-fast
+adaptations (call forms B-4 changed; no assertion message touched): has_recipient decodes contacts.queues through QueueSet (B-4's format) instead of the old `count ‖ seed` cursor; extb1_retirement: the op's `when` is When::AfterEmptyFetch(QueueId(1)) (Q194), not When::Delayed.
+extra test: extb1_rejected_duplicate_group_spent_next_round = the EXTB1-4 test without the drop/reopen lines (Q202's killer).
+
+extb1_rejected_duplicate_group_spent_next_round: panicked at crates/secmp-client-core/src/invitations_tests.rs:1617:9
+    assertion `left == right` failed: no new cells: an already rejected complete group must not be reconstructed from retained duplicates
+    left: Some("inner checks")
+    right: Some("no complete group")
+    running 1 test
+extb1_retirement_keeps_recipient_until_queue_del: panicked at crates/secmp-client-core/src/invitations_tests.rs:1502:9
+    retirement lost the signing key before the delayed FETCH/QUEUE_DEL can execute
+extb1_rejected_duplicate_group_not_reprocessed_after_restart: panicked at crates/secmp-client-core/src/invitations_tests.rs:1584:9
+    assertion `left == right` failed: no new cells: an already rejected complete group must not be reconstructed from retained duplicates
+    left: Some("inner checks")
+    right: Some("no complete group")
+    PASS [   0.850s] (4/6) secmp-client-core invitations::tests::extb1_review::extb1_successful_invitee_keeps_reply_recipient
+extb1_issue_preserves_invitation_period: panicked at crates/secmp-client-core/src/invitations_tests.rs:1521:9
+    S10 and S80 invitations have identical persisted records; restart cannot recover their period
+extb1_issue_preserves_queue_sender_key: panicked at crates/secmp-client-core/src/invitations_tests.rs:1549:9
+    different sender keys/sids have identical remaining pools and invitation records
+
+extb1_successful_invitee_keeps_reply_recipient: GREEN at <B4-END> d77fb3c (6 tests run: 5 red, this one passes).
+  greened by B-4 commit 676e9eb (accept_invitation writes the contact with its queue entry, the session and the cells in one txn; Q200 as built).
+  proof of red: in accept_invitation the NewContact `queues: Some(&queues)` replaced by `queues: None` (the pre-676e9eb state of the reply queue's recipient key): the test is red at its message assertion
+  invitations_tests.rs (its message assertion) "successful accept lost the recipient key of its advertised reply queue"; the edit reverted, `git diff` of invitations.rs empty.

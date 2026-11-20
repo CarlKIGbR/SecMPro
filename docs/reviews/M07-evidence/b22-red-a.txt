@@ -1,0 +1,18 @@
+head a1de559ca3e88752434849f5032b9c889741ec79
+edit: sed -i '576s#for bytes in \&routes {#for bytes in routes.iter().filter_map(|_| routes.last()) {#' crates/secmp-client-core/src/hub.rs
+command: cargo test --locked -p secmp-client-core --features kat --lib -- --test-threads=1 new_route_then_stale_one_in_one_pump_registers_the_new_one stale_route_then_new_one_in_one_pump_registers_the_new_one three_routes_in_one_pump_register_in_arrival_order one_route_per_pump_registers_as_before restart_after_routes_in_one_pump_registers_the_new_one failed_commit_records_no_route pump_after_the_overlap_registers_nothing_again second_contact_registers_its_own_routes
+
+thread '<unnamed>' (3741237) panicked at crates/secmp-client-core/src/hub.rs:1734:13:
+assertion `left == right` failed: Q242: C once, A nothing
+  left: []
+ right: [[7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]]
+thread '<unnamed>' (3741243) panicked at crates/secmp-client-core/src/hub.rs:1848:13:
+assertion `left == right` failed: Q242: after a restart
+  left: [[[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]], [[7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]]]
+ right: [[[7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]], [[7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7]]]
+thread '<unnamed>' (3741250) panicked at crates/secmp-client-core/src/hub.rs:1783:13:
+assertion `left == right` failed: Q242: C, then D
+  left: []
+ right: [[7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]]
+test result: FAILED. 5 passed; 3 failed; 0 ignored; 0 measured; 240 filtered out; finished in 15.09s
+cause: registering from the last stored body only drops every earlier route of the pump (C never registered, A skipped as stale).

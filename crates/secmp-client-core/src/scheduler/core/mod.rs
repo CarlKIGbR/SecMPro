@@ -37,15 +37,16 @@ use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
 use crate::scheduler::pool::QueuePool;
 pub use crate::scheduler::types::LinkKind;
 use crate::scheduler::types::{
-    Alert, CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
-    QueueId, Reason, RelayId, SendFailure, Transport,
+    Alert, CellSource, CellToken, ControlKind, FrameId, IsolationKey, LinkEvent, LinkId,
+    LogicalLinkId, OpId, Output, QueueId, Reason, RelayId, SendFailure, Transport,
 };
 use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
 use self::pure::{
-    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
-    unwritten_max,
+    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, fetch_due, fetch_gate,
+    fetch_lead_deadline, hand_out, ledger_admits, note_sent, reserved_rr, send_choice,
+    send_missing, sendable, take_response, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -59,8 +60,15 @@ pub enum SchedError {
     TooManyQueues,
     /// No such queue.
     UnknownQueue,
+    /// A queue with this id is already registered.
+    DuplicateQueue,
+    /// A key does not give a capability.
+    BadKey,
     /// No randomness (fail closed).
     Unavailable,
+    /// `frame_written` named a frame that is not the oldest one handed out on the link (a duplicate or unknown report;
+    /// nothing changed).
+    UnknownFrame,
 }
 
 impl From<Unavailable> for SchedError {
@@ -76,7 +84,10 @@ impl core::fmt::Display for SchedError {
             Self::RateBound => "recv-queue rate bound exceeded",
             Self::TooManyQueues => "too many recv-queues for one FETCH_MULTI",
             Self::UnknownQueue => "unknown queue",
+            Self::DuplicateQueue => "queue id in use",
+            Self::BadKey => "not a queue key",
             Self::Unavailable => "randomness unavailable",
+            Self::UnknownFrame => "not the oldest frame handed out",
         })
     }
 }
@@ -97,8 +108,9 @@ struct RecvQ {
     relay: RelayId,
     period_ms: u64,
     cap: RecvCap,
-    /// The cumulative acknowledgement (spec §9.3): every cell at or below it is decided and committed — also the dedup.
-    acked: u64,
+    /// The cumulative acknowledgement (spec §9.3; every cell at or below it is decided and committed — also the dedup),
+    /// the generation, and the fetched cells above the acknowledgement (OQ-20).
+    ledger: RecvLedger<RECEIVED_MAX>,
     pool: bool,
     recreating: bool,
 }
@@ -112,16 +124,27 @@ enum Spec {
 
 /// What a request was (kept until its response is complete).
 enum ReqKind {
-    Send { queue: QueueId, token: CellToken },
+    Send {
+        queue: QueueId,
+        token: CellToken,
+    },
     Ping,
-    Fetch(QueueId),
-    FetchMulti(Vec<QueueId>),
+    /// The queue and the generation it was asked in.
+    Fetch(QueueId, u64),
+    /// The queues and the generation each was asked in.
+    FetchMulti(Vec<(QueueId, u64)>),
 }
 
 struct Req {
     tick: u32,
     seq: u32,
     kind: ReqKind,
+}
+
+impl Ticked for Req {
+    fn tick(&self) -> u32 {
+        self.tick
+    }
 }
 
 struct Part {
@@ -147,11 +170,11 @@ struct Up {
     period: u64,
     send_part: Option<Part>,
     fetch_part: Option<Part>,
-    flight: Flight,
-    reqs: VecDeque<Req>,
+    /// The requests whose responses are outstanding and the in-flight count of their ticks (spec §10.3, SC-06).
+    flight: InFlight<Req>,
     /// One entry per frame handed to the driver and not yet reported as written ([`Scheduler::frame_written`]), oldest
-    /// first: the round-robin position the frame commits when it is completely written (a `SEND`), or `None`.
-    unwritten: Vec<Option<usize>>,
+    /// first: the frame's id and the round-robin position it commits when it is completely written (a `SEND`), or `None`.
+    unwritten: Vec<(FrameId, Option<usize>)>,
 }
 
 enum State {
@@ -163,6 +186,8 @@ enum State {
 
 struct Link {
     spec: Spec,
+    /// The logical link (FIN5b-1): the same id on every connection of this link.
+    logical: LogicalLinkId,
     state: State,
     /// Consecutive closes before `RELAYINFO` (back-off, LR-03); reset when `HS2` is accepted.
     closed_before: u32,
@@ -209,6 +234,9 @@ pub struct PrepRecord {
     pub kind: u8,
     /// The queue of a send or a single fetch.
     pub queue: Option<QueueId>,
+    /// `seal_calls` right after the frame was sealed (the frame's place among the seals of the thread; TEST-SPEC-M7
+    /// PC-04 orders the decisions before and after it).
+    pub seal: u64,
 }
 
 /// What a teardown hands back to the cell source (`release`): done at once by the work-phase calls, and noted by
@@ -265,10 +293,15 @@ struct World {
     pool: QueuePool,
     next_queue: u32,
     next_link: u64,
+    next_logical: u64,
+    next_frame: u64,
     next_key: u64,
     next_op: u64,
+    /// Created spares whose registration found no randomness (`Scheduler::pool_queue_ready`; EXT3b-3): still creations under way in the pool, registered at a later `work` pass, one attempt per pass, without a second `QUEUE_NEW`.
+    parked: Vec<(QueueId, RecvCap)>,
     overruns: u64,
-    /// `frame_written` calls on an up link with nothing unwritten ([`Scheduler::unmatched_written`]).
+    /// `frame_written` calls on an up link that named no handed-out frame or not the oldest one
+    /// ([`Scheduler::unmatched_written`]).
     unmatched_written: u64,
     last_now: u64,
     out: Vec<Output>,
@@ -308,8 +341,8 @@ fn counters_now() -> [u64; 4] {
     [
         secmp_transport::channel::counters::seal_calls(),
         secmp_transport::channel::counters::sign_calls(),
-        crate::scheduler::conversation::counters::tr_encrypt_calls(),
-        crate::scheduler::conversation::counters::persist_calls(),
+        crate::sessions::actor::counters::tr_encrypt_calls(),
+        crate::sessions::actor::counters::persist_calls(),
     ]
 }
 
@@ -332,6 +365,7 @@ impl PrepLog {
             at: now,
             kind: kind.0,
             queue: kind.1,
+            seal: secmp_transport::channel::counters::seal_calls(),
         });
     }
 
@@ -374,6 +408,18 @@ impl World {
         LinkId(id)
     }
 
+    fn new_logical_id(&mut self) -> LogicalLinkId {
+        let id = self.next_logical;
+        self.next_logical = self.next_logical.saturating_add(1);
+        LogicalLinkId(id)
+    }
+
+    fn new_frame_id(&mut self) -> FrameId {
+        let id = self.next_frame;
+        self.next_frame = self.next_frame.saturating_add(1);
+        FrameId(id)
+    }
+
     fn new_op_id(&mut self) -> OpId {
         let id = self.next_op;
         self.next_op = self.next_op.saturating_add(1);
@@ -404,6 +450,35 @@ impl World {
         self.recvs.iter().any(|r| r.relay == relay)
     }
 
+    /// The links the queue set needs in `mode`, in creation order (one per queue in Strict, one per relay otherwise), with
+    /// `adding` — a queue about to be registered, `(id, relay, recv)` — counted as registered (Q301: drawn before it is).
+    fn wanted_specs(&self, mode: Mode, adding: Option<(QueueId, RelayId, bool)>) -> Vec<Spec> {
+        let mut queues: Vec<(QueueId, RelayId, Spec)> = self
+            .sends
+            .iter()
+            .map(|s| (s.id, s.relay, Spec::Send(s.id)))
+            .chain(self.recvs.iter().map(|r| (r.id, r.relay, Spec::Recv(r.id))))
+            .chain(adding.map(|(id, relay, recv)| {
+                (
+                    id,
+                    relay,
+                    if recv { Spec::Recv(id) } else { Spec::Send(id) },
+                )
+            }))
+            .collect();
+        queues.sort_by_key(|(q, _, _)| *q);
+        if mode == Mode::Strict {
+            return queues.into_iter().map(|(_, _, s)| s).collect();
+        }
+        let mut wanted: Vec<Spec> = Vec::new();
+        for (_, relay, _) in queues {
+            if !wanted.contains(&Spec::Relay(relay)) {
+                wanted.push(Spec::Relay(relay));
+            }
+        }
+        wanted
+    }
+
     /// Release what a link held: prepared cells go back, written `SEND`s whose answer never came are re-queued.
     fn release<R: Release>(up: &mut Up, source: &mut R) {
         for part in [up.send_part.take(), up.fetch_part.take()]
@@ -414,10 +489,44 @@ impl World {
                 source.release_discard(queue, token);
             }
         }
-        for req in up.reqs.drain(..) {
+        for req in up.flight.drain() {
             if let ReqKind::Send { queue, token } = req.kind {
                 source.release_failed(queue, token);
             }
+        }
+    }
+
+    /// Take the connection down with nothing drawn (Q301): what it held goes back, `Close` and `TornDown(reason)` are output,
+    /// and the link is `Down` at `now + delay` (a delay drawn before anything changed) or removed (`None`). Cannot fail.
+    fn close<R: Release>(
+        &mut self,
+        link: &mut Link,
+        now: u64,
+        reason: Reason,
+        source: &mut R,
+        delay: Option<u64>,
+    ) {
+        match core::mem::replace(&mut link.state, State::Gone) {
+            State::Up(mut up) => {
+                Self::release(&mut up, source);
+                self.out.push(Output::Close { link: up.id });
+                self.out.push(Output::Event(LinkEvent::TornDown(
+                    up.id,
+                    link.logical,
+                    reason,
+                )));
+            }
+            State::Connecting { id } => {
+                self.out.push(Output::Close { link: id });
+                self.out
+                    .push(Output::Event(LinkEvent::TornDown(id, link.logical, reason)));
+            }
+            State::Down { .. } | State::Gone => {}
+        }
+        if let Some(delay) = delay {
+            link.state = State::Down {
+                at: now.saturating_add(delay),
+            };
         }
     }
 
@@ -429,26 +538,17 @@ impl World {
         reason: Reason,
         source: &mut R,
     ) -> Result<(), SchedError> {
-        match core::mem::replace(&mut link.state, State::Gone) {
-            State::Up(mut up) => {
-                Self::release(&mut up, source);
-                self.out.push(Output::Close { link: up.id });
-                self.out
-                    .push(Output::Event(LinkEvent::TornDown(up.id, reason)));
-            }
-            State::Connecting { id } => {
-                self.out.push(Output::Close { link: id });
-                self.out
-                    .push(Output::Event(LinkEvent::TornDown(id, reason)));
-            }
-            State::Down { .. } | State::Gone => {}
-        }
-        if reason != Reason::ModeChange {
-            let delay = reconnect_delay(&self.params, &mut self.rng, link.closed_before)?;
-            link.state = State::Down {
-                at: now.saturating_add(delay),
-            };
-        }
+        // Q301: the back-off is drawn before anything changes; `ModeChange` removes the link and draws nothing
+        let delay = if reason == Reason::ModeChange {
+            None
+        } else {
+            Some(reconnect_delay(
+                &self.params,
+                &mut self.rng,
+                link.closed_before,
+            )?)
+        };
+        self.close(link, now, reason, source, delay);
         Ok(())
     }
 
@@ -489,6 +589,7 @@ impl World {
         );
         self.out.push(Output::Connect {
             link: id,
+            logical: link.logical,
             key,
             relay,
             transport,
@@ -524,7 +625,7 @@ impl World {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
-        if !up.flight.on_tick() {
+        if !up.flight.admit() {
             return TickResult::Tear(Reason::InFlight);
         }
         let needs_send = matches!(spec, Spec::Send(_) | Spec::Relay(_));
@@ -567,24 +668,28 @@ impl World {
             } else {
                 None
             };
-            hand_out(&mut up.unwritten, commits);
+            let frame = self.new_frame_id();
+            hand_out(&mut up.unwritten, frame, commits);
             debug_assert!(up.unwritten.len() <= unwritten_max);
             self.out.push(Output::Write {
                 link: up.id,
                 at,
                 bytes: part.prepared.bytes().to_vec(),
+                frame,
             });
-            up.reqs.push_back(Req {
+            let held = up.flight.push(Req {
                 tick: next,
                 seq: part.prepared.seq(),
                 kind: part.kind,
             });
+            // not reachable (two ticks of two requests): an unheld request fails its response's match, fail closed
+            debug_assert!(held);
         }
         up.k = next;
         if let Some(q) = sent_to
             && let Some(sq) = self.sends.iter_mut().find(|s| s.id == q)
         {
-            sq.last_send = Some(at);
+            note_sent(&mut sq.last_send, at);
         }
         TickResult::Wrote
     }
@@ -622,14 +727,33 @@ impl World {
             }
             // a tick's parts go out SEND first (`tick`): its FETCH is sealed only after its SEND, so the counters are in
             // write order even when the cell source answers "not ready" (EXTB-1)
-            let send_missing = needs_send && up.send_part.is_none();
-            if tear.is_none() && !send_missing && needs_fetch && up.fetch_part.is_none() {
+            let unsent = send_missing(needs_send, up.send_part.is_some());
+            if fetch_gate(
+                tear.is_some(),
+                unsent,
+                needs_fetch && up.fetch_part.is_none(),
+            ) {
                 let fetch_outstanding = up
-                    .reqs
+                    .flight
                     .iter()
-                    .any(|r| matches!(r.kind, ReqKind::Fetch(_) | ReqKind::FetchMulti(_)));
-                let lead_reached = now >= slot.saturating_sub(self.params.fetch_lead_ms);
-                if !fetch_outstanding || lead_reached {
+                    .any(|r| matches!(r.kind, ReqKind::Fetch(..) | ReqKind::FetchMulti(_)));
+                // the acknowledgement the FETCH carries is fixed when it is sealed: it waits for the commits of the cells
+                // already fetched (OQ-20), at most until its lead (OPEN-M6-13) — the frame's time never moves
+                let commits_pending = self.recvs.iter().any(|q| {
+                    q.ledger.has_pending()
+                        && match spec {
+                            Spec::Recv(r) => q.id == r,
+                            Spec::Relay(r) => q.relay == r,
+                            Spec::Send(_) => false,
+                        }
+                });
+                if fetch_due(
+                    fetch_outstanding,
+                    commits_pending,
+                    now,
+                    slot,
+                    self.params.fetch_lead_ms,
+                ) {
                     tear = self.prepare_fetch(up, spec, slot, now);
                 }
             }
@@ -661,13 +785,9 @@ impl World {
                     .collect();
                 let table: Vec<(Option<u64>, u64)> =
                     members.iter().map(|(_, l, p)| (*l, *p)).collect();
-                match rr_select(rr, &table, slot) {
-                    Some(at) => {
-                        next_rr = Some(
-                            at.checked_add(1)
-                                .and_then(|n| n.checked_rem(members.len()))
-                                .unwrap_or(0),
-                        );
+                match send_choice(rr, &table, slot) {
+                    Some((at, next)) => {
+                        next_rr = Some(next);
                         members.get(at).map(|(q, _, _)| *q)
                     }
                     None => None,
@@ -695,9 +815,7 @@ impl World {
         let cap = self.sends.iter().find(|s| s.id == queue).map(|s| &s.cap)?;
         // not ready, or not persisted: nothing is built, the tick finds no frame — and the same queue is asked again at
         // the next pass (the round-robin position moves only when a SEND is written, EXTB-1, GLM2B-1)
-        let Ok(Some(cell)) = source.prepare_cell(queue, now) else {
-            return None;
-        };
+        let cell = sendable(source.prepare_cell(queue, now))?;
         // the round-robin position moves in `tick`, when this SEND is written (GLM2B-1)
         match up.chan.prepare(&Command::Send {
             to: cap,
@@ -730,12 +848,12 @@ impl World {
                 let rq = self.recvs.iter().find(|r| r.id == q)?;
                 match up.chan.prepare(&Command::Fetch {
                     from: &rq.cap,
-                    ack: rq.acked,
+                    ack: rq.ledger.acked(),
                 }) {
                     Ok(prepared) => {
                         up.fetch_part = Some(Part {
                             prepared,
-                            kind: ReqKind::Fetch(q),
+                            kind: ReqKind::Fetch(q, rq.ledger.generation()),
                             ready: now,
                             open: true,
                             next_rr: None,
@@ -752,8 +870,11 @@ impl World {
                     return None;
                 }
                 let entries: Vec<(&RecvCap, u64)> =
-                    members.iter().map(|q| (&q.cap, q.acked)).collect();
-                let ids: Vec<QueueId> = members.iter().map(|q| q.id).collect();
+                    members.iter().map(|q| (&q.cap, q.ledger.acked())).collect();
+                let ids: Vec<(QueueId, u64)> = members
+                    .iter()
+                    .map(|q| (q.id, q.ledger.generation()))
+                    .collect();
                 match up.chan.prepare(&Command::FetchMulti { from: &entries }) {
                     Ok(prepared) => {
                         up.fetch_part = Some(Part {
@@ -795,7 +916,16 @@ impl World {
         };
         match todo {
             Todo::Connect => self.start_connect(link),
-            Todo::Lifetime => self.tear(link, now, Reason::Lifetime, source)?,
+            Todo::Lifetime => {
+                // spec §10.6 (1), S-1 (Q296): a recv link whose queue was handed out at another period ends at the
+                // instant drawn at the hand-out, and its successor (new key, the new period) connects at that instant
+                let handover = matches!(link.spec, Spec::Recv(_))
+                    && matches!(&link.state, State::Up(up) if self.period_of(link.spec) != Some(up.period));
+                self.tear(link, now, Reason::Lifetime, source)?;
+                if handover {
+                    self.start_connect(link);
+                }
+            }
             Todo::Run => {
                 #[cfg(feature = "kat")]
                 let (before, out_before) = (counters_now(), self.out.len());
@@ -853,16 +983,21 @@ impl World {
 
     fn recreate(&mut self, queue: QueueId, now: u64) -> Result<(), SchedError> {
         let (lo, hi) = self.params.recreate_delay_ms;
-        let Some(rq) = self.recvs.iter_mut().find(|r| r.id == queue) else {
+        let Some(relay) = self
+            .recvs
+            .iter()
+            .find(|r| r.id == queue && !r.recreating)
+            .map(|r| r.relay)
+        else {
             return Ok(());
         };
-        if rq.recreating {
-            return Ok(());
-        }
-        rq.recreating = true;
-        rq.acked = 0;
-        let relay = rq.relay;
+        // Q301: the delay is drawn before the queue changes generation
         let at = now.saturating_add(self.ctl.uniform(lo, hi)?);
+        if let Some(rq) = self.recvs.iter_mut().find(|r| r.id == queue) {
+            // a new generation: nothing acknowledged, nothing fetched; a response asked before changes nothing (SC-07)
+            rq.recreating = true;
+            rq.ledger.recreate();
+        }
         let op = self.new_op_id();
         self.control.schedule(
             &self.params,
@@ -879,26 +1014,50 @@ impl World {
         Ok(())
     }
 
+    /// The cells of a `FETCH` response for `queue`, asked in `generation`: every present cell goes to the cell source in one
+    /// pass and the acknowledgement moves to the highest committed prefix (OQ-20, `pure::RecvLedger::take`). A response
+    /// with no present cell is an empty `FETCH`: a `QUEUE_DEL` that waited for it starts its delay (Q163, Q194).
     fn fetched<S: CellSource>(
         &mut self,
         queue: QueueId,
+        generation: u64,
+        cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
+        source: &mut S,
+        now: u64,
+    ) {
+        let empty = cells.is_empty();
+        self.take_cells(queue, generation, cells, source);
+        self.note_empty(queue, generation, empty, now);
+    }
+
+    /// The present cells of a response for `queue`, asked in `generation`, to the cell source (see [`World::fetched`]).
+    fn take_cells<S: CellSource>(
+        &mut self,
+        queue: QueueId,
+        generation: u64,
         cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
         source: &mut S,
     ) {
-        let Some(rq) = self.recvs.iter_mut().find(|r| r.id == queue) else {
-            return;
-        };
-        for (id, cell) in cells {
-            // at or below the acknowledgement: decided already (a re-fetch with an older `ack`, spec §9.3)
-            if id <= rq.acked {
-                continue;
-            }
-            if source.deliver(queue, id, &cell).is_err() {
-                // not committed: no acknowledgement, the cell comes again
-                break;
-            }
-            rq.acked = id;
+        let queues = self.recvs.iter_mut().map(|r| (r.id, &mut r.ledger));
+        take_response(queues, &queue, generation, cells, |id, cell| {
+            source.deliver(queue, generation, id, &cell)
+        });
+    }
+
+    /// A response of the current generation of `queue` held no present cell of it (`empty`): the `QUEUE_DEL` that waited
+    /// for it starts its delay (Q163, Q194).
+    fn note_empty(&mut self, queue: QueueId, generation: u64, empty: bool, now: u64) {
+        if empty && self.current(queue, generation) {
+            self.control
+                .note_empty_fetch(&self.params, &mut self.ctl, queue, now);
         }
+    }
+
+    /// Whether `queue` exists and is in `generation` (a response asked in an older generation changes nothing, SC-07).
+    fn current(&self, queue: QueueId, generation: u64) -> bool {
+        self.recvs
+            .iter()
+            .any(|r| r.id == queue && r.ledger.generation() == generation)
     }
 
     fn queue_error(
@@ -908,6 +1067,11 @@ impl World {
         now: u64,
     ) -> Result<(), SchedError> {
         match error {
+            // a queue whose `QUEUE_DEL` waits is not re-created (SE-14): the relay has already forgotten it, the retirement is
+            // complete (Q201)
+            TransportError::NoQueue if self.control.queue_del_pending(queue) => {
+                self.out.push(Output::Event(LinkEvent::QueueGone(queue)));
+            }
             TransportError::NoQueue => self.recreate(queue, now)?,
             TransportError::Auth => self
                 .out
@@ -916,6 +1080,64 @@ impl World {
                 .out
                 .push(Output::Event(LinkEvent::Alert(queue, Alert::QueueRate))),
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// The response of a `FETCH_MULTI` of `queues` (each with the generation it was asked in): `cells` and `errors` as the
+    /// transport decoded the `F_M` frames. Every queue's present cells go to the cell source and its error is handled; a
+    /// queue counts as "a `FETCH` returned no present cell" only if, after the error loop, it is not in error, no present
+    /// frame is for it (decodable or not) and the response held at least one dummy frame — present and error frames fewer
+    /// than `F_M` (docs/03 `FETCH_MULTI`: "… then dummies"; Q209) — the `F_M` the transport enforces, the frames of a
+    /// response (`secmp_proto::link::FETCH_MULTI_BATCH`), not the scheduler's parameter. A queue starved by a full batch of
+    /// other queues' cells may still hold cells. The cells are taken by value: each queue's go to the source as they are
+    /// (no copy, no second parse), so a queue is "present" exactly if it has a cell here.
+    fn fetched_multi<S: CellSource>(
+        &mut self,
+        queues: &[(QueueId, u64)],
+        cells: Vec<(QueueRef, u64, secmp_proto::wire::cell::Cell)>,
+        errors: &[(QueueRef, TransportError)],
+        source: &mut S,
+        now: u64,
+    ) -> Result<(), SchedError> {
+        let frames = u64::try_from(cells.len().saturating_add(errors.len())).unwrap_or(u64::MAX);
+        let batch = u64::try_from(secmp_proto::link::FETCH_MULTI_BATCH).unwrap_or(u64::MAX);
+        let had_dummy = frames < batch;
+        let mut cells = cells;
+        let mut quiet = Vec::new();
+        for (q, generation) in queues {
+            let Some(rid) = self
+                .recvs
+                .iter()
+                .find(|r| r.id == *q)
+                .map(|r| r.cap.queue())
+            else {
+                continue;
+            };
+            let (taken, rest): (Vec<_>, Vec<_>) =
+                cells.into_iter().partition(|(r, _, _)| *r == rid);
+            cells = rest;
+            let mine: Vec<_> = taken.into_iter().map(|(_, id, cell)| (id, cell)).collect();
+            // a present cell counts, whatever the source decides about it
+            let present = !mine.is_empty();
+            self.take_cells(*q, *generation, mine, source);
+            if !self.current(*q, *generation) {
+                continue;
+            }
+            let mut errored = false;
+            for (r, e) in errors {
+                if *r == rid {
+                    errored = true;
+                    self.queue_error(*q, *e, now)?;
+                }
+            }
+            if !present && !errored && had_dummy {
+                quiet.push((*q, *generation));
+            }
+        }
+        // after the error loop: a queue re-created by its error is in another generation and arms nothing
+        for (q, generation) in quiet {
+            self.note_empty(q, generation, true, now);
         }
         Ok(())
     }
@@ -959,43 +1181,17 @@ impl World {
                 Err(_) => source.send_failed(queue, token, SendFailure::Unknown),
             },
             (ReqKind::Ping, Outcome::Ping(_)) => {}
-            (ReqKind::Fetch(queue), Outcome::Fetch(result)) => match result {
-                Ok(cells) => self.fetched(queue, cells, source),
-                Err(e) => self.queue_error(queue, e, now)?,
+            (ReqKind::Fetch(queue, generation), Outcome::Fetch(result)) => match result {
+                Ok(cells) => self.fetched(queue, generation, cells, source, now),
+                Err(e) if self.current(queue, generation) => self.queue_error(queue, e, now)?,
+                Err(_) => {}
             },
             (ReqKind::FetchMulti(queues), Outcome::FetchMulti(result)) => match result {
-                Ok(done) => {
-                    for q in &queues {
-                        let Some(rid) = self
-                            .recvs
-                            .iter()
-                            .find(|r| r.id == *q)
-                            .map(|r| r.cap.queue())
-                        else {
-                            continue;
-                        };
-                        let cells: Vec<_> = done
-                            .cells
-                            .iter()
-                            .filter(|(r, _, _)| *r == rid)
-                            .map(|(_, id, cell)| {
-                                (
-                                    *id,
-                                    secmp_proto::wire::cell::Cell::from_bytes(cell.as_bytes()),
-                                )
-                            })
-                            .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
-                            .collect();
-                        self.fetched(*q, cells, source);
-                        for (r, e) in &done.errors {
-                            if *r == rid {
-                                self.queue_error(*q, *e, now)?;
-                            }
-                        }
-                    }
-                }
+                Ok(done) => self.fetched_multi(&queues, done.cells, &done.errors, source, now)?,
                 Err(e) => {
-                    if let Some(first) = queues.first() {
+                    if let Some((first, generation)) = queues.first()
+                        && self.current(*first, *generation)
+                    {
                         self.queue_error(*first, e, now)?;
                     }
                 }
@@ -1006,28 +1202,64 @@ impl World {
         Ok(true)
     }
 
-    fn top_up_pool(&mut self, now: u64) -> Result<(), SchedError> {
-        for (relay, need) in self.pool.missing() {
-            for _ in 0..need {
+    /// `missing` capped per relay by the entries its `FETCH_MULTI` link has left, in a mode with one (spec D.2: at most [`FETCH_MULTI_LIMIT`]; EXT3b-3, Q304): a created spare must be admitted (`Scheduler::check_balanced` counts every recv queue of the relay), so the creations under way count too. Strict mode has no such link: `missing` as it is. At an open the runtime manages the pool after the hub's registrations (`runtime::engine`), so the count includes the contacts' recv-queues.
+    fn room_for(&self, missing: Vec<(RelayId, usize)>) -> Vec<(RelayId, usize)> {
+        if self.params.slot_ms(self.effective_mode()).is_none() {
+            return missing;
+        }
+        missing
+            .into_iter()
+            .filter_map(|(relay, need)| {
+                let held = self
+                    .recvs
+                    .iter()
+                    .filter(|r| r.relay == relay)
+                    .count()
+                    .saturating_add(self.pool.pending_on(relay));
+                let need = need.min(FETCH_MULTI_LIMIT.saturating_sub(held));
+                (need > 0).then_some((relay, need))
+            })
+            .collect()
+    }
+
+    /// The refill's delays `U[1 min, 60 min]`, one per creation `missing` asks for, drawn before anything changes (Q301): the
+    /// same draws, in the same order, as `ControlOps::schedule` made.
+    fn draw_top_up(&mut self, missing: &[(RelayId, usize)]) -> Result<Vec<u64>, SchedError> {
+        let (lo, hi) = self.params.control_delay_ms;
+        let mut delays = Vec::new();
+        for (_, need) in missing {
+            for _ in 0..*need {
+                delays.push(self.ctl.uniform(lo, hi)?);
+            }
+        }
+        Ok(delays)
+    }
+
+    /// Queue the creations of `missing` with the delays of [`World::draw_top_up`]; cannot fail.
+    fn apply_top_up(&mut self, now: u64, missing: &[(RelayId, usize)], delays: Vec<u64>) {
+        let mut drawn_delays = delays.into_iter();
+        for (relay, need) in missing {
+            for _ in 0..*need {
+                let Some(drawn) = drawn_delays.next() else {
+                    return;
+                };
                 let queue = QueueId(self.next_queue);
                 self.next_queue = self.next_queue.saturating_add(1);
                 let op = self.new_op_id();
-                self.control.schedule(
-                    &self.params,
-                    &mut self.ctl,
+                self.control.schedule_drawn(
                     op,
                     now,
                     OpSpec {
                         kind: ControlKind::QueueNew(queue),
-                        relay,
+                        relay: *relay,
                         related: u64::MAX.saturating_sub(u64::from(queue.0)),
                         when: When::Delayed,
                     },
-                )?;
-                self.pool.creating(relay, queue);
+                    drawn,
+                );
+                self.pool.creating(*relay, queue);
             }
         }
-        Ok(())
     }
 }
 
@@ -1036,6 +1268,22 @@ const fn reason_of(e: TransportError) -> Reason {
         TransportError::NewLinkRequired => Reason::NewLinkRequired,
         TransportError::Closed => Reason::Closed,
         _ => Reason::Rejected,
+    }
+}
+
+/// Whether `spec` is the link of `queue`.
+fn on_queue(spec: Spec, queue: QueueId) -> bool {
+    matches!(spec, Spec::Send(q) | Spec::Recv(q) if q == queue)
+}
+
+/// Whether the link `spec` ends when `queue` is removed: its own, or a relay link with no other queue (`remove_queue`).
+fn ends_with(world: &World, spec: Spec, queue: QueueId) -> bool {
+    match spec {
+        Spec::Send(q) | Spec::Recv(q) => q == queue,
+        Spec::Relay(r) => {
+            !world.sends.iter().any(|s| s.relay == r && s.id != queue)
+                && !world.recvs.iter().any(|x| x.relay == r && x.id != queue)
+        }
     }
 }
 
@@ -1059,8 +1307,11 @@ impl Scheduler {
                 pool,
                 next_queue: 0,
                 next_link: 0,
+                next_logical: 0,
+                next_frame: 0,
                 next_key: 0,
                 next_op: 0,
+                parked: Vec::new(),
                 overruns: 0,
                 unmatched_written: 0,
                 last_now: 0,
@@ -1077,6 +1328,13 @@ impl Scheduler {
     #[must_use]
     pub fn effective_mode(&self) -> Mode {
         self.world.effective_mode()
+    }
+
+    /// The mode the user chose (Q301: the runtime's `sched_mode` is re-read from it); in direct mode
+    /// [`Scheduler::effective_mode`] is Balanced (spec §10.2).
+    #[must_use]
+    pub const fn mode(&self) -> Mode {
+        self.world.mode
     }
 
     /// The parameters.
@@ -1123,7 +1381,19 @@ impl Scheduler {
             .recvs
             .iter()
             .find(|r| r.id == queue)
-            .map(|r| r.acked)
+            .map(|r| r.ledger.acked())
+    }
+
+    /// The cell source finished committing the decision of cell `cell_id` of `queue`, which `deliver` answered
+    /// [`crate::scheduler::types::Delivered::Pending`] (OQ-20): the acknowledgement moves to the highest committed prefix
+    /// of what was fetched, and the next `FETCH` carries it (spec §9.3). A report for a cell the queue does not hold
+    /// (another generation's, or decided already) changes nothing.
+    pub fn delivery_committed(&mut self, queue: QueueId, generation: u64, cell_id: u64) {
+        if let Some(rq) = self.world.recv_mut(queue)
+            && rq.ledger.generation() == generation
+        {
+            rq.ledger.committed(cell_id);
+        }
     }
 
     /// What each tick cost in counted work (tests only).
@@ -1272,6 +1542,7 @@ impl Scheduler {
             return Err(SchedError::BadPeriod);
         }
         let id = self.next_queue_id();
+        let plan = self.missing_links(Some((id, relay, false)), None)?;
         self.world.sends.push(SendQ {
             id,
             relay,
@@ -1280,7 +1551,7 @@ impl Scheduler {
             last_send: None,
             dead: false,
         });
-        self.sync_links(now)?;
+        self.add_links(now, plan);
         Ok(id)
     }
 
@@ -1301,6 +1572,65 @@ impl Scheduler {
         Ok(id)
     }
 
+    /// Add the queue we receive on as `id` (a stable id the host keeps: a pool queue, a contact's queue), from the recipient
+    /// seed — the capability is made here, so the host names no transport type. The queue is fetched at `period_ms`.
+    ///
+    /// # Errors
+    /// [`SchedError::DuplicateQueue`], [`SchedError::BadKey`], and those of [`Scheduler::add_recv_queue`].
+    pub fn add_recv_queue_seed(
+        &mut self,
+        now: u64,
+        id: QueueId,
+        relay: RelayId,
+        seed: &secmp_crypto::SecretBytes<32>,
+        period_ms: u64,
+    ) -> Result<(), SchedError> {
+        if self.world.recv_mut(id).is_some() || self.world.send_mut(id).is_some() {
+            return Err(SchedError::DuplicateQueue);
+        }
+        let cap = RecvCap::from_seed(seed).map_err(|_| SchedError::BadKey)?;
+        self.add_recv_with_id(now, id, relay, cap, period_ms, false)
+    }
+
+    /// Add the queue we send to as `id`, from a route's `sid` and sender seed (spec §9.8).
+    ///
+    /// # Errors
+    /// [`SchedError::DuplicateQueue`], [`SchedError::BadKey`], and those of [`Scheduler::add_send_queue`].
+    pub fn add_send_queue_route(
+        &mut self,
+        now: u64,
+        id: QueueId,
+        relay: RelayId,
+        route: (secmp_proto::wire::Id, &secmp_crypto::SecretBytes<32>),
+        period_ms: u64,
+    ) -> Result<(), SchedError> {
+        if self.world.recv_mut(id).is_some() || self.world.send_mut(id).is_some() {
+            return Err(SchedError::DuplicateQueue);
+        }
+        if !self.world.params.period_valid(period_ms) {
+            return Err(SchedError::BadPeriod);
+        }
+        let cap = SendCap::from_route(route.0, route.1).map_err(|_| SchedError::BadKey)?;
+        let plan = self.missing_links(Some((id, relay, false)), None)?;
+        self.world.sends.push(SendQ {
+            id,
+            relay,
+            period_ms,
+            cap,
+            last_send: None,
+            dead: false,
+        });
+        self.add_links(now, plan);
+        Ok(())
+    }
+
+    /// Whether `queue` is registered (as a send or a recv queue).
+    #[must_use]
+    pub fn has_queue(&self, queue: QueueId) -> bool {
+        self.world.sends.iter().any(|s| s.id == queue)
+            || self.world.recvs.iter().any(|r| r.id == queue)
+    }
+
     fn add_recv_with_id(
         &mut self,
         now: u64,
@@ -1310,21 +1640,62 @@ impl Scheduler {
         period_ms: u64,
         pool: bool,
     ) -> Result<(), SchedError> {
+        let plan = self.plan_recv(id, relay, period_ms, pool)?;
+        self.push_recv(now, (id, relay, period_ms, pool), cap, plan);
+        Ok(())
+    }
+
+    /// The checks and the drawn link plan of the recv queue `id` about to be added (Q301: every draw before any change).
+    fn plan_recv(
+        &mut self,
+        id: QueueId,
+        relay: RelayId,
+        period_ms: u64,
+        pool: bool,
+    ) -> Result<Vec<(Spec, u64)>, SchedError> {
         if !self.world.params.period_valid(period_ms) {
             return Err(SchedError::BadPeriod);
         }
         let mode = self.world.effective_mode();
         self.check_balanced(relay, Some((period_ms, !pool)), mode)?;
+        self.missing_links(Some((id, relay, true)), None)
+    }
+
+    /// Register the recv queue `id` with the links of a plan of [`Scheduler::plan_recv`]; cannot fail.
+    fn push_recv(
+        &mut self,
+        now: u64,
+        (id, relay, period_ms, pool): (QueueId, RelayId, u64, bool),
+        cap: RecvCap,
+        plan: Vec<(Spec, u64)>,
+    ) {
         self.world.recvs.push(RecvQ {
             id,
             relay,
             period_ms,
             cap,
-            acked: 0,
+            ledger: RecvLedger::new(),
             pool,
             recreating: false,
         });
-        self.sync_links(now)
+        self.add_links(now, plan);
+    }
+
+    /// The created spares whose registration found no randomness, once more (EXT3b-3, Q304): one attempt each; one that fails again waits for the next pass. Nothing is sent: the queue exists on the relay.
+    fn register_parked(&mut self, now: u64) {
+        let period = self.world.params.p_pool_ms;
+        for (queue, cap) in core::mem::take(&mut self.world.parked) {
+            let Some(relay) = self.world.pool.pending_relay(queue) else {
+                continue;
+            };
+            match self.plan_recv(queue, relay, period, true) {
+                Ok(plan) => {
+                    self.push_recv(now, (queue, relay, period, true), cap, plan);
+                    self.world.pool.created(queue);
+                }
+                Err(_) => self.world.parked.push((queue, cap)),
+            }
+        }
     }
 
     /// Stop sending to / receiving on a queue; its link ends.
@@ -1342,31 +1713,32 @@ impl Scheduler {
         if !known {
             return Err(SchedError::UnknownQueue);
         }
+        // Q301: the teardown draws of the links that end come first (made and discarded, as before: the links are removed)
+        for link in &self.links {
+            // the immutable borrow of `self.world` ends before the draw borrows `self.world.rng`
+            if ends_with(&self.world, link.spec, queue) {
+                reconnect_delay(&self.world.params, &mut self.world.rng, link.closed_before)?;
+            }
+        }
         self.world.sends.retain(|s| s.id != queue);
         self.world.recvs.retain(|r| r.id != queue);
+        self.world.control.drop_queue_ops(queue);
         let (world, links) = (&mut self.world, &mut self.links);
         for link in links.iter_mut() {
-            let gone = match link.spec {
-                Spec::Send(q) | Spec::Recv(q) => q == queue,
-                Spec::Relay(r) => {
-                    !world.sends.iter().any(|s| s.relay == r)
-                        && !world.recvs.iter().any(|q| q.relay == r)
-                }
-            };
-            if gone {
-                world.tear(link, now, Reason::Closed, source)?;
-                link.state = State::Gone;
+            if ends_with(world, link.spec, queue) {
+                world.close(link, now, Reason::Closed, source, None);
             }
         }
         self.links.retain(|l| !matches!(l.state, State::Gone));
         Ok(core::mem::take(&mut self.world.out))
     }
 
-    /// Change the period of a queue (a hand-out announced with another period, spec §10.6 (1)): a Strict link is
-    /// replaced by a new one with its own key and phase.
+    /// Change the period of a queue (spec §10.6 (1)). Strict: a send queue's link is replaced (new key and phase); a
+    /// recv queue's link is untouched at the call and hands over at an instant drawn at it (S-1, Q296; `World::step_due`).
     ///
     /// # Errors
-    /// [`SchedError::UnknownQueue`], [`SchedError::BadPeriod`], [`SchedError::RateBound`].
+    /// [`SchedError::UnknownQueue`], [`SchedError::BadPeriod`], [`SchedError::RateBound`], [`SchedError::Unavailable`]
+    /// (nothing changes, Q301).
     pub fn set_queue_period<S: CellSource>(
         &mut self,
         now: u64,
@@ -1377,85 +1749,166 @@ impl Scheduler {
         if !self.world.params.period_valid(period_ms) {
             return Err(SchedError::BadPeriod);
         }
-        if let Some(sq) = self.world.send_mut(queue) {
-            sq.period_ms = period_ms;
-        } else if let Some(rq) = self.world.recvs.iter().find(|r| r.id == queue) {
-            let (relay, was) = (rq.relay, rq.period_ms);
-            let mode = self.world.effective_mode();
-            if let Some(rq) = self.world.recv_mut(queue) {
-                rq.period_ms = period_ms;
-            }
-            if let Err(e) = self.check_balanced(relay, None, mode) {
-                if let Some(rq) = self.world.recv_mut(queue) {
-                    rq.period_ms = was;
-                }
-                return Err(e);
-            }
+        if self.world.sends.iter().any(|s| s.id == queue) {
+            self.set_send_period(now, queue, period_ms, source)?;
         } else {
-            return Err(SchedError::UnknownQueue);
-        }
-        if self.world.effective_mode() == Mode::Strict {
-            let (world, links) = (&mut self.world, &mut self.links);
-            for link in links.iter_mut() {
-                if matches!(link.spec, Spec::Send(q) | Spec::Recv(q) if q == queue) {
-                    world.tear(link, now, Reason::Closed, source)?;
-                    link.state = State::Gone;
-                }
-            }
-            self.links.retain(|l| !matches!(l.state, State::Gone));
-            self.sync_links(now)?;
+            let end = self.plan_recv_period(now, queue, period_ms, false)?;
+            self.apply_recv_period(queue, period_ms, end);
         }
         Ok(core::mem::take(&mut self.world.out))
     }
 
-    /// Add the links a queue set needs and does not have yet; each starts `U[0, 3 min]` from `now`.
-    fn sync_links(&mut self, now: u64) -> Result<(), SchedError> {
-        let mode = self.world.effective_mode();
-        let mut wanted: Vec<Spec> = Vec::new();
-        if mode == Mode::Strict {
-            let mut ids: Vec<(QueueId, Spec)> = self
-                .world
-                .sends
-                .iter()
-                .map(|s| (s.id, Spec::Send(s.id)))
-                .chain(self.world.recvs.iter().map(|r| (r.id, Spec::Recv(r.id))))
-                .collect();
-            ids.sort_by_key(|(q, _)| *q);
-            wanted.extend(ids.into_iter().map(|(_, s)| s));
-        } else {
-            let mut seen: Vec<RelayId> = Vec::new();
-            let relays = self
-                .world
-                .sends
-                .iter()
-                .map(|s| (s.id, s.relay))
-                .chain(self.world.recvs.iter().map(|r| (r.id, r.relay)));
-            let mut ordered: Vec<(QueueId, RelayId)> = relays.collect();
-            ordered.sort_by_key(|(q, _)| *q);
-            for (_, r) in ordered {
-                if !seen.contains(&r) {
-                    seen.push(r);
-                    wanted.push(Spec::Relay(r));
-                }
-            }
+    /// `check_balanced` for the recv-queue `queue` (on `relay`) at `period_ms`, in the rate sum if `counts`, with nothing
+    /// changed (Q301: a refusal comes before any draw).
+    fn check_changed(
+        &self,
+        relay: RelayId,
+        queue: QueueId,
+        period_ms: u64,
+        counts: bool,
+        mode: Mode,
+    ) -> Result<(), SchedError> {
+        if self.world.params.slot_ms(mode).is_none() {
+            return Ok(());
         }
-        for spec in wanted {
-            if self
-                .links
-                .iter()
-                .any(|l| l.spec == spec && !matches!(l.state, State::Gone))
-            {
+        let on_relay = self.world.recvs.iter().filter(|r| r.relay == relay);
+        if on_relay.clone().count() > FETCH_MULTI_LIMIT {
+            return Err(SchedError::TooManyQueues);
+        }
+        let periods = on_relay
+            .filter(|r| r.id != queue && !r.pool)
+            .map(|r| r.period_ms)
+            .chain(counts.then_some(period_ms));
+        if self.world.params.rate_bound_ok(mode, periods) {
+            Ok(())
+        } else {
+            Err(SchedError::RateBound)
+        }
+    }
+
+    /// A recv-queue's period change, checked and drawn with nothing changed (Q301; S-1, Q296): the instant its Strict link
+    /// ends — `U[0, 3 min]` after `now` when the period changes in Strict — or `None`. `leaves_pool`: a hand-out.
+    fn plan_recv_period(
+        &mut self,
+        now: u64,
+        queue: QueueId,
+        period_ms: u64,
+        leaves_pool: bool,
+    ) -> Result<Option<u64>, SchedError> {
+        let rq = self
+            .world
+            .recvs
+            .iter()
+            .find(|r| r.id == queue)
+            .ok_or(SchedError::UnknownQueue)?;
+        let (relay, was, counts) = (rq.relay, rq.period_ms, leaves_pool || !rq.pool);
+        let mode = self.world.effective_mode();
+        self.check_changed(relay, queue, period_ms, counts, mode)?;
+        if mode == Mode::Strict && was != period_ms {
+            return Ok(Some(now.saturating_add(self.world.phase()?)));
+        }
+        Ok(None)
+    }
+
+    /// Apply [`Scheduler::plan_recv_period`]; cannot fail.
+    fn apply_recv_period(&mut self, queue: QueueId, period_ms: u64, end: Option<u64>) {
+        if let Some(rq) = self.world.recv_mut(queue) {
+            rq.period_ms = period_ms;
+        }
+        let Some(end) = end else {
+            return;
+        };
+        // spec §10.1, §10.6 (1), S-1 (Q296): nothing reaches the wire at a hand-out (a user action or a
+        // received reply); the successor starts at an independent draw `U[0, 3 min]` after it, and the old
+        // link ends there
+        for link in &mut self.links {
+            if link.spec != Spec::Recv(queue) {
                 continue;
             }
-            let at = now.saturating_add(self.world.phase()?);
+            match &mut link.state {
+                State::Up(up) if up.period != period_ms => {
+                    up.die_at = up.die_at.min(end);
+                }
+                State::Down { at } => *at = (*at).min(end),
+                State::Up(_) | State::Connecting { .. } | State::Gone => {}
+            }
+        }
+    }
+
+    /// A send queue's new period (spec §10.6 (1), HB-53): in Strict its link is replaced (new key and phase). Every draw
+    /// comes first (Q301): first the teardown draws of the replaced links, made and discarded as before, then the
+    /// successor's phase.
+    fn set_send_period<S: CellSource>(
+        &mut self,
+        now: u64,
+        queue: QueueId,
+        period_ms: u64,
+        source: &mut S,
+    ) -> Result<(), SchedError> {
+        let mut plan = None;
+        if self.world.effective_mode() == Mode::Strict {
+            for link in self.links.iter().filter(|l| on_queue(l.spec, queue)) {
+                reconnect_delay(&self.world.params, &mut self.world.rng, link.closed_before)?;
+            }
+            plan = Some(self.missing_links(None, Some(queue))?);
+        }
+        if let Some(sq) = self.world.send_mut(queue) {
+            sq.period_ms = period_ms;
+        }
+        if let Some(plan) = plan {
+            let (world, links) = (&mut self.world, &mut self.links);
+            for link in links.iter_mut() {
+                if on_queue(link.spec, queue) {
+                    world.close(link, now, Reason::Closed, source, None);
+                }
+            }
+            self.links.retain(|l| !matches!(l.state, State::Gone));
+            self.add_links(now, plan);
+        }
+        Ok(())
+    }
+
+    /// Whether a link of `spec` exists that is not `Gone` (Q301: the plan of the links to add is drawn before it is applied).
+    fn has_link(&self, spec: Spec) -> bool {
+        self.links
+            .iter()
+            .any(|l| l.spec == spec && !matches!(l.state, State::Gone))
+    }
+
+    /// One phase `U[0, 3 min]` per spec, in order, drawn before any link is added (Q301); stops at the first failure.
+    fn draw_links(&mut self, specs: Vec<Spec>) -> Result<Vec<(Spec, u64)>, SchedError> {
+        specs
+            .into_iter()
+            .map(|s| Ok((s, self.world.phase()?)))
+            .collect()
+    }
+
+    /// Add the links of a plan drawn by [`Scheduler::draw_links`]: each starts at its phase after `now`; cannot fail (Q301).
+    fn add_links(&mut self, now: u64, plan: Vec<(Spec, u64)>) {
+        for (spec, phase) in plan {
+            let logical = self.world.new_logical_id();
             self.links.push(Link {
                 spec,
-                state: State::Down { at },
+                logical,
+                state: State::Down {
+                    at: now.saturating_add(phase),
+                },
                 closed_before: 0,
                 rr: 0,
             });
         }
-        Ok(())
+    }
+
+    /// The links the queue set needs and does not have yet, with their phases drawn (Q301): `adding` is a queue about to be
+    /// registered, and the links of `replacing` count as missing (they are about to be closed).
+    fn missing_links(
+        &mut self,
+        adding: Option<(QueueId, RelayId, bool)>,
+        replacing: Option<QueueId>,
+    ) -> Result<Vec<(Spec, u64)>, SchedError> {
+        let mut specs = self.world.wanted_specs(self.world.effective_mode(), adding);
+        specs.retain(|s| replacing.is_some_and(|q| on_queue(*s, q)) || !self.has_link(*s));
+        self.draw_links(specs)
     }
 
     /// Change the mode (spec `docs/02` §4.4): every link is torn down (`TornDown(ModeChange)`) and the links of the
@@ -1463,7 +1916,7 @@ impl Scheduler {
     ///
     /// # Errors
     /// [`SchedError::RateBound`] / [`SchedError::TooManyQueues`] if the recv-queues do not fit the new mode (nothing
-    /// changes); [`SchedError::Unavailable`].
+    /// changes); [`SchedError::Unavailable`] without randomness (nothing changes either, Q301).
     pub fn set_mode<S: CellSource>(
         &mut self,
         now: u64,
@@ -1503,17 +1956,20 @@ impl Scheduler {
             self.check_balanced(relay, None, effective)?;
         }
         let before = self.world.effective_mode();
-        self.world.mode = mode;
-        self.world.direct = direct;
         if effective == before {
+            (self.world.mode, self.world.direct) = (mode, direct);
             return Ok(Vec::new());
         }
+        // Q301 (Q276 extended to the scheduler; EXT3-2): the phases of the new mode's links are drawn before anything changes —
+        // a failed draw leaves the mode, the links and the outputs as they were
+        let plan = self.draw_links(self.world.wanted_specs(effective, None))?;
+        (self.world.mode, self.world.direct) = (mode, direct);
         let (world, links) = (&mut self.world, &mut self.links);
         for link in links.iter_mut() {
-            world.tear(link, now, Reason::ModeChange, source)?;
+            world.close(link, now, Reason::ModeChange, source, None);
         }
         self.links.clear();
-        self.sync_links(now)?;
+        self.add_links(now, plan);
         Ok(core::mem::take(&mut self.world.out))
     }
 
@@ -1524,8 +1980,18 @@ impl Scheduler {
     /// # Errors
     /// [`SchedError::Unavailable`].
     pub fn manage_pool(&mut self, now: u64, relay: RelayId) -> Result<(), SchedError> {
+        // Q301 (EXT3b-5, Q304): the refill is drawn before the relay is managed — a failed draw changes nothing — then applied through a path that cannot fail
+        let missing = self.world.room_for(self.world.pool.missing_with(relay));
+        let delays = self.world.draw_top_up(&missing)?;
         self.world.pool.manage(relay);
-        self.world.top_up_pool(now)
+        self.world.apply_top_up(now, &missing, delays);
+        Ok(())
+    }
+
+    /// Whether the pool still creates the spare `queue` (its `QUEUE_NEW` is scheduled or running).
+    #[must_use]
+    pub fn pool_pending(&self, queue: QueueId) -> bool {
+        self.world.pool.pending_relay(queue).is_some()
     }
 
     /// Spare queues on `relay`.
@@ -1535,6 +2001,7 @@ impl Scheduler {
     }
 
     /// The host created the queue of a `QueueNew(queue)` operation: it is a spare, fetched at `P_POOL`.
+    /// Without randomness it stays a creation under way and is registered at a later `work` pass (EXT3b-3, Q304): `Ok`.
     ///
     /// # Errors
     /// [`SchedError::UnknownQueue`] if `queue` was not a pool creation; the add errors.
@@ -1551,16 +2018,54 @@ impl Scheduler {
             .ok_or(SchedError::UnknownQueue)?;
         let period = self.world.params.p_pool_ms;
         // admitted first: a refused queue (more than 32 entries) leaves the pool as it was
-        self.add_recv_with_id(now, queue, relay, cap, period, true)?;
+        let plan = match self.plan_recv(queue, relay, period, true) {
+            Ok(plan) => plan,
+            // EXT3b-3 (Q304): the queue exists on the relay; without randomness it waits for a later pass, never created twice
+            Err(SchedError::Unavailable) => {
+                self.world.parked.push((queue, cap));
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        self.push_recv(now, (queue, relay, period, true), cap, plan);
         self.world.pool.created(queue);
         Ok(())
+    }
+
+    /// A spare that already exists on the relay — one the host stored, at an open (M7-C1, D4′): it is registered as created
+    /// and fetched at `P_POOL`, counted in the pool, and the queue-id counter is raised above it. Nothing is created.
+    ///
+    /// # Errors
+    /// [`SchedError::DuplicateQueue`] if `queue` is registered; the add errors.
+    pub fn adopt_pool_queue(
+        &mut self,
+        now: u64,
+        relay: RelayId,
+        queue: QueueId,
+        cap: RecvCap,
+    ) -> Result<(), SchedError> {
+        if self.has_queue(queue) {
+            return Err(SchedError::DuplicateQueue);
+        }
+        let period = self.world.params.p_pool_ms;
+        self.add_recv_with_id(now, queue, relay, cap, period, true)?;
+        self.world.pool.adopt(relay, queue);
+        self.floor_queue_ids(queue.0.saturating_add(1));
+        Ok(())
+    }
+
+    /// Raise the queue-id counter to at least `next`: the ids the scheduler makes for its own pool creations stay above
+    /// every id the host stored (the hub's and the scheduler's ids share one space).
+    pub fn floor_queue_ids(&mut self, next: u32) {
+        self.world.next_queue = self.world.next_queue.max(next);
     }
 
     /// Hand out a spare of `relay` for an invitation announced with `announced_ms`: its link is replaced by one at the
     /// announced period, and a replacement spare is queued (not now: a `QUEUE_NEW` is never needed at that moment).
     ///
     /// # Errors
-    /// [`SchedError::BadPeriod`], [`SchedError::RateBound`], [`SchedError::Unavailable`].
+    /// [`SchedError::BadPeriod`], [`SchedError::RateBound`], [`SchedError::Unavailable`]. A refusal or a failed draw changes
+    /// nothing (Q301).
     pub fn take_pool_queue<S: CellSource>(
         &mut self,
         now: u64,
@@ -1568,31 +2073,68 @@ impl Scheduler {
         announced_ms: u64,
         source: &mut S,
     ) -> Result<(Option<QueueId>, Vec<Output>), SchedError> {
+        self.take_spare(now, (relay, None), announced_ms, source)
+    }
+
+    /// [`Scheduler::take_pool_queue`] for the named spare `queue` (the one the host's store handed out, M7-C1, D4′);
+    /// `None` if it is not a spare of `relay` (yet).
+    ///
+    /// # Errors
+    /// As [`Scheduler::take_pool_queue`].
+    pub fn take_pool_queue_id<S: CellSource>(
+        &mut self,
+        now: u64,
+        relay: RelayId,
+        queue: QueueId,
+        announced_ms: u64,
+        source: &mut S,
+    ) -> Result<(Option<QueueId>, Vec<Output>), SchedError> {
+        self.take_spare(now, (relay, Some(queue)), announced_ms, source)
+    }
+
+    fn take_spare<S: CellSource>(
+        &mut self,
+        now: u64,
+        (relay, named): (RelayId, Option<QueueId>),
+        announced_ms: u64,
+        _source: &mut S,
+    ) -> Result<(Option<QueueId>, Vec<Output>), SchedError> {
         if !self.world.params.period_valid(announced_ms) {
             return Err(SchedError::BadPeriod);
         }
-        let Some(queue) = self.world.pool.take(relay) else {
+        // Q301 (Q276 extended to the scheduler; EXT3-2): which spare, the rate bound and every draw — the handover instant, the
+        // refill's delays — come before the first change; a refusal or a failed draw leaves the pool, the spare and its link as they were
+        let found = match named {
+            None => self.world.pool.oldest(relay),
+            Some(q) => self.world.pool.position(relay, q).map(|_| q),
+        };
+        let Some(queue) = found else {
             return Ok((None, Vec::new()));
         };
+        let end = self.plan_recv_period(now, queue, announced_ms, true)?;
+        let missing = self
+            .world
+            .room_for(self.world.pool.missing_after_take(relay, queue));
+        let delays = self.world.draw_top_up(&missing)?;
+        // nothing below can fail
+        let handed = self.world.pool.take_named(relay, queue);
+        debug_assert_eq!(handed, Some(queue));
         if let Some(rq) = self.world.recv_mut(queue) {
             rq.pool = false;
         }
-        let out = match self.set_queue_period(now, queue, announced_ms, source) {
-            Ok(out) => out,
-            Err(e) => {
-                // refused (e.g. the rate bound at the announced period): the spare stays the oldest one, unchanged
-                if let Some(rq) = self.world.recv_mut(queue) {
-                    rq.pool = true;
-                }
-                self.world.pool.untake(relay, queue);
-                return Err(e);
-            }
-        };
-        self.world.top_up_pool(now)?;
-        Ok((Some(queue), out))
+        self.apply_recv_period(queue, announced_ms, end);
+        self.world.apply_top_up(now, &missing, delays);
+        Ok((Some(queue), core::mem::take(&mut self.world.out)))
+    }
+
+    /// The control operations' randomness, replaced (tests only; EXT3b-3: a schedule that finds none).
+    #[cfg(test)]
+    pub(crate) fn set_control_rng(&mut self, rng: TimingRng) {
+        self.world.ctl = rng;
     }
 
     /// Queue a control operation (spec §10.6 (2)).
+    /// A `LINK_PUT` or owner-status `LINK_GET` that joins the operation of its kind already waiting for its link data (Q304, `ControlOps::coalesced`) returns that operation's id; no id is taken and nothing is drawn.
     ///
     /// # Errors
     /// [`SchedError::Unavailable`].
@@ -1604,6 +2146,10 @@ impl Scheduler {
         related: u64,
         when: When,
     ) -> Result<OpId, SchedError> {
+        // Q304 (EXT3b-4): it joins the link data's waiting operation of its kind
+        if let Some(op) = self.world.control.coalesced(kind, relay) {
+            return Ok(op);
+        }
         let op = self.world.new_op_id();
         self.world.control.schedule(
             &self.world.params,
@@ -1656,6 +2202,18 @@ impl Scheduler {
         Ok(())
     }
 
+    /// The link was up and no answer was committed (Q300 phase rule, M7-S4d): it is queued again as a fresh delayed
+    /// operation (spec §10.6 (2)).
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`].
+    pub fn control_answered(&mut self, now: u64, op: OpId) -> Result<(), SchedError> {
+        self.world
+            .control
+            .answered(&self.world.params, &mut self.world.ctl, op, now)?;
+        Ok(())
+    }
+
     /// The owner-status answer for link data `ld` (spec §9.7 (1)): `{0, 0}` before `expires` re-issues the identical
     /// `LINK_PUT` after `U[1 min, 60 min]`.
     ///
@@ -1699,7 +2257,7 @@ impl Scheduler {
                         && let Some(at) = tick_time(up.since, next, up.period)
                     {
                         take(at);
-                        let lead = at.saturating_sub(self.world.params.fetch_lead_ms);
+                        let lead = fetch_lead_deadline(at, self.world.params.fetch_lead_ms);
                         if lead > self.world.last_now {
                             take(lead);
                         }
@@ -1716,6 +2274,8 @@ impl Scheduler {
     /// start. Nothing here writes a frame.
     fn work_pass<S: CellSource>(&mut self, now: u64, source: &mut S) -> Result<(), SchedError> {
         self.world.last_now = self.world.last_now.max(now);
+        // EXT3b-3 (Q304): a created spare that found no randomness, once per pass
+        self.register_parked(now);
         let (world, links) = (&mut self.world, &mut self.links);
         World::begin_work(links);
         let held = core::mem::take(&mut world.deferred);
@@ -1838,26 +2398,28 @@ impl Scheduler {
         })
     }
 
-    /// The driver has written the oldest frame it was handed for `link` (an [`Output::Write`]) completely — the stream took
-    /// every byte; a failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position
-    /// here (A′, GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames
-    /// complete in the order they were handed out; an unknown or closed link is ignored.
+    /// The driver has written frame `frame` of `link` (an [`Output::Write`]) completely — the stream took every byte; a
+    /// failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position here (A′,
+    /// GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames complete
+    /// in the order they were handed out; an unknown or closed link is ignored (`Ok`).
     ///
-    /// A call on an up link whose ledger is empty reports a write that was never handed out: it is counted
-    /// ([`Scheduler::unmatched_written`]) and changes nothing else (no panic, the rotation is untouched). A duplicate
-    /// report while the ledger is not empty cannot be told from a genuine one — a frame carries no id — so it pops the
-    /// oldest entry: the driver is a trusted caller that reports each write once (Astra FINAL3 (e)).
-    pub fn frame_written(&mut self, link: LinkId) {
+    /// # Errors
+    /// [`SchedError::UnknownFrame`] if `frame` is not the oldest frame handed out on the up link `link` — its ledger is
+    /// empty (a write that was never handed out) or the report is a duplicate (FINAL3 (e)): it is counted
+    /// ([`Scheduler::unmatched_written`]) and changes nothing else (the ledger and the rotation are untouched).
+    pub fn frame_written(&mut self, link: LinkId, frame: FrameId) -> Result<(), SchedError> {
         for l in &mut self.links {
             if let State::Up(up) = &mut l.state
                 && up.id == link
             {
-                if !complete_oldest(&mut up.unwritten, &mut l.rr) {
-                    self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
+                if complete_oldest(&mut up.unwritten, &mut l.rr, &frame) {
+                    return Ok(());
                 }
-                return;
+                self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
+                return Err(SchedError::UnknownFrame);
             }
         }
+        Ok(())
     }
 
     /// The handshake of connection `id` succeeded at `now`: the link is up; its lifetime is drawn now.
@@ -1893,11 +2455,12 @@ impl Scheduler {
                 period,
                 send_part: None,
                 fetch_part: None,
-                flight: Flight::new(world.params.max_in_flight),
-                reqs: VecDeque::new(),
+                flight: InFlight::new(world.params.max_in_flight),
                 unwritten: Vec::new(),
             }));
-            world.out.push(Output::Event(LinkEvent::Up(id)));
+            world
+                .out
+                .push(Output::Event(LinkEvent::Up(id, link.logical)));
         }
         Ok(core::mem::take(&mut self.world.out))
     }
@@ -1918,18 +2481,21 @@ impl Scheduler {
         };
         let (world, links) = (&mut self.world, &mut self.links);
         if let Some(link) = links.get_mut(at) {
-            let reason = if closed_before_relayinfo {
-                link.closed_before = link.closed_before.saturating_add(1);
-                Reason::ClosedBeforeRelayInfo
+            let (closed, reason) = if closed_before_relayinfo {
+                (
+                    link.closed_before.saturating_add(1),
+                    Reason::ClosedBeforeRelayInfo,
+                )
             } else {
-                link.closed_before = 0;
-                Reason::Closed
+                (0, Reason::Closed)
             };
+            // Q301: the back-off is drawn before anything changes
+            let delay = reconnect_delay(&world.params, &mut world.rng, closed)?;
+            link.closed_before = closed;
             // the driver already dropped the connection: no `Close` for it
             world
                 .out
-                .push(Output::Event(LinkEvent::TornDown(id, reason)));
-            let delay = reconnect_delay(&world.params, &mut world.rng, link.closed_before)?;
+                .push(Output::Event(LinkEvent::TornDown(id, link.logical, reason)));
             link.state = State::Down {
                 at: now.saturating_add(delay),
             };
@@ -1979,7 +2545,7 @@ impl Scheduler {
                     Err(_) => bad = true,
                 }
                 if let Some(completed) = &done
-                    && up.reqs.front().is_none_or(|r| r.seq != completed.seq)
+                    && up.flight.front().is_none_or(|r| r.seq != completed.seq)
                 {
                     bad = true;
                     done = None;
@@ -1990,12 +2556,7 @@ impl Scheduler {
             } else if let Some(completed) = done {
                 let mut req = None;
                 if let State::Up(up) = &mut link.state {
-                    req = up.reqs.pop_front();
-                    if let Some(r) = &req
-                        && !up.reqs.iter().any(|o| o.tick == r.tick)
-                    {
-                        up.flight.on_response();
-                    }
+                    req = up.flight.complete();
                 }
                 if let Some(req) = req {
                     world.pending.push_back(PendingOutcome {
@@ -2021,13 +2582,1126 @@ impl Scheduler {
     }
 }
 
+/// Unit tests of the core with an up link (feature `kat`: a channel over a real SecMP-LINK handshake).
+#[cfg(test)]
+#[cfg(feature = "kat")]
+mod tests {
+    use secmp_crypto::{Ed25519SigningKey, MlKem1024Dk, SecretBytes, X25519Secret};
+    use secmp_proto::link::client;
+    use secmp_proto::link::relay::{self, RelayKeys};
+    use secmp_proto::tr::OsEntropy;
+    use secmp_proto::wire::cell::Cell;
+    use secmp_transport::{Channel, Error as TransportError, Outcome, RecvCap, SendCap};
+
+    use super::{LinkId, SchedError, Scheduler};
+    use crate::scheduler::params::{Mode, Params};
+    use crate::scheduler::types::{
+        CellSource, CellToken, ControlKind, Delivered, FrameId, LinkEvent, LinkKind, Output,
+        PreparedCell, QueueId, Reason, RelayId, SendFailure, SourceError,
+    };
+    use crate::timing::TimingRng;
+
+    type Fail = &'static str;
+
+    const NOW: u64 = 1_760_000_000;
+
+    /// The client end of an honest SecMP-LINK handshake (spec §8.2, §8.3) as a channel.
+    fn channel() -> Result<Channel, Fail> {
+        let access = SecretBytes::from_slice(&[4; 32]).map_err(|_| "access")?;
+        let keys = RelayKeys::new(
+            Ed25519SigningKey::from_seed(&[1; 32]).map_err(|_| "sig")?,
+            X25519Secret::from_bytes(&[2; 32]).map_err(|_| "dh")?,
+            MlKem1024Dk::from_seed(&[3; 64]).map_err(|_| "kem")?,
+            SecretBytes::from_slice(&[4; 32]).map_err(|_| "access")?,
+            1,
+        )
+        .map_err(|_| "keys")?;
+        let (hello, wait_info) =
+            client::start(keys.fp(), Some(&access), NOW).map_err(|_| "hello")?;
+        let (info, wait_hs1) = relay::accept(&keys)
+            .on_hello(&hello, NOW.saturating_add(86_400))
+            .map_err(|_| "relayinfo")?;
+        let (hs1, wait_hs2) = wait_info
+            .on_relayinfo(&info, &mut OsEntropy)
+            .map_err(|_| "hs1")?;
+        let (hs2, _relay) = wait_hs1.on_hs1(&hs1, &mut OsEntropy).map_err(|_| "hs2")?;
+        let link = wait_hs2.on_hs2(&hs2).map_err(|_| "link")?;
+        Ok(Channel::from_link_kat(link))
+    }
+
+    /// A cell source with a dummy cell for every slot.
+    struct Dummies(u64);
+
+    impl CellSource for Dummies {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            self.0 = self.0.saturating_add(1);
+            let cell = Cell::from_bytes(&[0x5a; 4096]).map_err(|_| SourceError)?;
+            Ok(Some(PreparedCell::unpersisted_kat(cell, CellToken(self.0))))
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &Cell,
+        ) -> Result<Delivered, SourceError> {
+            Ok(Delivered::Committed)
+        }
+    }
+
+    /// A cell source that refuses every received cell (`deliver` fails) and has nothing to send.
+    struct Refusing;
+
+    impl CellSource for Refusing {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            Ok(None)
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &Cell,
+        ) -> Result<Delivered, SourceError> {
+            Err(SourceError)
+        }
+    }
+
+    /// A cell source whose decisions are never committed in the call (`Delivered::Pending`).
+    struct PendingSource;
+
+    impl CellSource for PendingSource {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            Ok(None)
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &Cell,
+        ) -> Result<Delivered, SourceError> {
+            Ok(Delivered::Pending)
+        }
+    }
+
+    /// The frames written (link, id).
+    fn writes(outs: &[Output]) -> Vec<(LinkId, FrameId)> {
+        outs.iter()
+            .filter_map(|o| match o {
+                Output::Write { link, frame, .. } => Some((*link, *frame)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// SC-05 (FINAL3 (e)): two frames handed out on a Strict send link and not reported; the second reported before the
+    /// first is `Err(UnknownFrame)`; the first is reported written (`Ok`); the same id again — a duplicate with a non-empty
+    /// ledger — is `Err(UnknownFrame)`, counted, and leaves the ledger as it was; so does any id on an empty ledger. An
+    /// unknown link is ignored.
+    #[test]
+    fn frame_written_duplicate_detected() -> Result<(), Fail> {
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[9; 32]).map_err(|_| "seed")?;
+        let cap = SendCap::from_route([1; 16], &seed).map_err(|_| "cap")?;
+        sched
+            .add_send_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let mut src = Dummies(0);
+        let outs = sched.poll(0, &mut src).map_err(|_| "poll")?;
+        let link = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::Connect { link, .. } => Some(*link),
+                _ => None,
+            })
+            .ok_or("no connect")?;
+        sched.link_up(link, 0, channel()?).map_err(|_| "up")?;
+        let _ = sched.work(0, &mut src).map_err(|_| "work")?;
+        let first = writes(&sched.poll(10_000, &mut src).map_err(|_| "tick 1")?);
+        let second = writes(&sched.poll(20_000, &mut src).map_err(|_| "tick 2")?);
+        let (Some((l1, a)), Some((l2, b))) = (first.first().copied(), second.first().copied())
+        else {
+            return Err("two writes");
+        };
+        assert_eq!((l1, l2), (link, link));
+        assert_ne!(a, b);
+        assert_eq!(sched.unwritten_len(link), Some(2));
+        // the second frame before the first: not the oldest
+        assert_eq!(sched.frame_written(link, b), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(2), 1)
+        );
+        assert_eq!(sched.frame_written(link, a), Ok(()));
+        assert_eq!(sched.unwritten_len(link), Some(1));
+        // the duplicate report of `a` with `b` still in the ledger
+        assert_eq!(sched.frame_written(link, a), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(1), 2)
+        );
+        assert_eq!(sched.frame_written(link, b), Ok(()));
+        // an empty ledger
+        assert_eq!(sched.frame_written(link, b), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(0), 3)
+        );
+        // an unknown link is ignored
+        assert_eq!(sched.frame_written(LinkId(9_999), a), Ok(()));
+        assert_eq!(sched.unmatched_written(), 3);
+        assert_eq!(
+            SchedError::UnknownFrame.to_string(),
+            "not the oldest frame handed out"
+        );
+        Ok(())
+    }
+
+    /// Q219 (the fuzz target `scheduler_event_sequence` stamped a `SEND` with the driver's poll time, not the tick's): a
+    /// Strict send link up at 200 000 on a queue of period 10 000, polled 35 ms and then 20 ms after its ticks (inside
+    /// `driver_jitter_ms`). `Output::Write::at` is the tick's time — 210 000 and 220 000, exactly one period apart — and
+    /// the poll times are 35 and 20 ms later (green before and after; the red of Q219 is the fuzz seed
+    /// `regress-b4c13-00c9f834`).
+    #[test]
+    fn sends_stamped_at_tick_are_period_apart_under_late_polls() -> Result<(), Fail> {
+        fn stamps(outs: &[Output]) -> Vec<u64> {
+            outs.iter()
+                .filter_map(|o| match o {
+                    Output::Write { at, .. } => Some(*at),
+                    _ => None,
+                })
+                .collect()
+        }
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let jitter = params.driver_jitter_ms;
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[9; 32]).map_err(|_| "seed")?;
+        let cap = SendCap::from_route([1; 16], &seed).map_err(|_| "cap")?;
+        sched
+            .add_send_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let mut src = Dummies(0);
+        let outs = sched.poll(200_000, &mut src).map_err(|_| "poll")?;
+        let link = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::Connect { link, .. } => Some(*link),
+                _ => None,
+            })
+            .ok_or("no connect")?;
+        sched.link_up(link, 200_000, channel()?).map_err(|_| "up")?;
+        let _ = sched.work(200_000, &mut src).map_err(|_| "work")?;
+        let first = stamps(&sched.poll(210_035, &mut src).map_err(|_| "tick 1")?);
+        let second = stamps(&sched.poll(220_020, &mut src).map_err(|_| "tick 2")?);
+        let ([a], [b]) = (first.as_slice(), second.as_slice()) else {
+            return Err("one write per poll");
+        };
+        assert_eq!((*a, *b), (210_000, 220_000));
+        assert_eq!(b.checked_sub(*a), Some(10_000));
+        assert_eq!(
+            (210_035_u64.checked_sub(*a), 220_020_u64.checked_sub(*b)),
+            (Some(35), Some(20))
+        );
+        assert!(35 <= jitter);
+        Ok(())
+    }
+
+    /// OPEN-M7-B-3 (red first on the tree where `delivery_committed` took no generation: the old generation's report
+    /// acknowledged the new generation's cell 1): a commit of generation `g` that arrives after the queue was re-created as
+    /// `g + 1` is ignored — the acknowledgement of `g + 1` is unchanged; the commit of the current generation moves it.
+    #[test]
+    fn late_commit_of_old_generation_ignored() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::Cell;
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[0x23; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        let q = sched
+            .add_recv_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let cell = || Cell::from_bytes(&[7_u8; 4096]).map_err(|_| "cell");
+        // generation 0 fetches cell 1 (pending), the queue is re-created, generation 1 fetches its cell 1 (pending)
+        let mut pending = PendingSource;
+        sched
+            .world
+            .fetched(q, 0, vec![(1, cell()?)], &mut pending, 0);
+        sched.world.recreate(q, 0).map_err(|_| "recreate")?;
+        sched
+            .world
+            .fetched(q, 1, vec![(1, cell()?)], &mut pending, 0);
+        assert_eq!(sched.acked(q), Some(0));
+        // generation 0's worker finishes late
+        sched.delivery_committed(q, 0, 1);
+        assert_eq!(
+            sched.acked(q),
+            Some(0),
+            "the old generation's commit is ignored"
+        );
+        sched.delivery_committed(q, 1, 1);
+        assert_eq!(
+            sched.acked(q),
+            Some(1),
+            "the current generation's commit counts"
+        );
+        Ok(())
+    }
+
+    /// Q201: `ERR_NOQUEUE` on a recv-queue whose `QUEUE_DEL` waits does not re-create the queue — the retirement is complete
+    /// (`LinkEvent::QueueGone`); on any other recv-queue it does (SE-14). Removing the queue drops its `QUEUE_DEL`.
+    #[test]
+    fn no_queue_on_a_retiring_queue_completes_the_retirement() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        use crate::scheduler::types::{ControlKind, LinkEvent};
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let mk = |b: u8| -> Result<RecvCap, &'static str> {
+            let seed = SecretBytes::from_slice(&[b; 32]).map_err(|_| "seed")?;
+            RecvCap::from_seed(&seed).map_err(|_| "cap")
+        };
+        let gone = sched
+            .add_recv_queue(0, RelayId(0), mk(0x31)?, 10_000)
+            .map_err(|_| "queue")?;
+        let other = sched
+            .add_recv_queue(0, RelayId(0), mk(0x32)?, 10_000)
+            .map_err(|_| "queue")?;
+        sched
+            .schedule_control(
+                0,
+                ControlKind::QueueDel(gone),
+                RelayId(0),
+                1,
+                When::AfterEmptyFetch(gone),
+            )
+            .map_err(|_| "del")?;
+        assert_eq!(sched.world.control.len(), 1);
+
+        sched
+            .world
+            .queue_error(gone, TransportError::NoQueue, 0)
+            .map_err(|_| "error")?;
+        let events = |out: &[Output]| {
+            out.iter()
+                .filter(|o| matches!(o, Output::Event(LinkEvent::QueueGone(_))))
+                .count()
+        };
+        assert_eq!(events(&sched.world.out), 1);
+        assert_eq!(
+            sched.world.control.len(),
+            1,
+            "no QUEUE_NEW: it is not re-created"
+        );
+        assert!(
+            !sched
+                .world
+                .recvs
+                .iter()
+                .any(|r| r.id == gone && r.recreating)
+        );
+
+        sched
+            .world
+            .queue_error(other, TransportError::NoQueue, 0)
+            .map_err(|_| "error")?;
+        assert_eq!(events(&sched.world.out), 1, "another queue raises nothing");
+        assert_eq!(sched.world.control.len(), 2, "its QUEUE_NEW is queued");
+
+        let mut src = Dummies(0);
+        sched
+            .remove_queue(0, gone, &mut src)
+            .map_err(|_| "remove")?;
+        assert!(!sched.world.control.queue_del_pending(gone));
+        assert_eq!(
+            sched.world.control.len(),
+            1,
+            "only the QUEUE_NEW of the other queue is left"
+        );
+        Ok(())
+    }
+
+    /// B-SC mutant killers (`core/mod.rs` `impl Ticked for Req`, `World::current`, the generation guard of
+    /// `World::outcome`): a request's tick is its own; `current` holds for the queue's id in its generation only; after a
+    /// re-creation an error answer to a `FETCH` asked in the old generation raises nothing, one asked in the new does.
+    #[test]
+    fn old_generation_errors_change_nothing() -> Result<(), Fail> {
+        use super::{Req, ReqKind};
+        use crate::scheduler::core::pure::Ticked;
+        use crate::scheduler::types::{Alert, LinkEvent};
+        let ping = Req {
+            tick: 5,
+            seq: 1,
+            kind: ReqKind::Ping,
+        };
+        assert_eq!(Ticked::tick(&ping), 5);
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[0x21; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        let q = sched
+            .add_recv_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        assert!(sched.world.current(q, 0));
+        assert!(!sched.world.current(q, 1));
+        assert!(!sched.world.current(QueueId(99), 0));
+        sched.world.recreate(q, 0).map_err(|_| "recreate")?;
+        assert!(sched.world.current(q, 1));
+        let fetch = |generation| Req {
+            tick: 1,
+            seq: 1,
+            kind: ReqKind::Fetch(q, generation),
+        };
+        let auth = || Outcome::Fetch(Err(TransportError::Auth));
+        let mut src = Dummies(0);
+        let fit = sched
+            .world
+            .outcome(fetch(0), auth(), 0, &mut src)
+            .map_err(|_| "old")?;
+        assert!(fit);
+        let alert = |out: &[Output]| {
+            out.iter()
+                .any(|o| matches!(o, Output::Event(LinkEvent::Alert(_, Alert::QueueAuth))))
+        };
+        assert!(
+            !alert(&sched.world.out),
+            "an old generation's error raises nothing"
+        );
+        sched
+            .world
+            .outcome(fetch(1), auth(), 0, &mut src)
+            .map_err(|_| "new")?;
+        assert!(
+            alert(&sched.world.out),
+            "the current generation's error raises the alert"
+        );
+        Ok(())
+    }
+    /// B-4 killers (`Scheduler::has_queue`, `add_recv_queue_seed`, `add_send_queue_route`): a queue the host registered by
+    /// id is known, whichever kind it is; an id in use is refused for both kinds and both orders.
+    #[test]
+    fn queues_by_id_and_seed() -> Result<(), Fail> {
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(3));
+        let seed = |byte: u8| SecretBytes::<32>::from_slice(&[byte; 32]).map_err(|_| "seed");
+        assert!(!sched.has_queue(QueueId(5)));
+        sched
+            .add_recv_queue_seed(0, QueueId(5), RelayId(0), &seed(0x21)?, 10_000)
+            .map_err(|_| "recv")?;
+        assert!(sched.has_queue(QueueId(5)));
+        assert!(!sched.has_queue(QueueId(6)));
+        sched
+            .add_send_queue_route(0, QueueId(6), RelayId(0), ([7; 16], &seed(0x22)?), 10_000)
+            .map_err(|_| "send")?;
+        assert!(sched.has_queue(QueueId(6)));
+        assert!(!sched.has_queue(QueueId(7)));
+        for id in [QueueId(5), QueueId(6)] {
+            assert_eq!(
+                sched.add_recv_queue_seed(0, id, RelayId(0), &seed(0x23)?, 10_000),
+                Err(SchedError::DuplicateQueue)
+            );
+            assert_eq!(
+                sched.add_send_queue_route(0, id, RelayId(0), ([8; 16], &seed(0x24)?), 10_000),
+                Err(SchedError::DuplicateQueue)
+            );
+        }
+        assert_eq!(
+            sched.add_recv_queue_seed(0, QueueId(8), RelayId(0), &seed(0x25)?, 15_000),
+            Err(SchedError::BadPeriod)
+        );
+        assert_eq!(
+            sched.add_send_queue_route(0, QueueId(8), RelayId(0), ([9; 16], &seed(0x26)?), 15_000),
+            Err(SchedError::BadPeriod)
+        );
+        Ok(())
+    }
+
+    /// Q209 (VERIFY-B4 P2 M-2; §10.6 (4) `docs/03:696`, the `FETCH_MULTI` row `docs/03:606`): in a `FETCH_MULTI` response a
+    /// waiting `QUEUE_DEL` of a queue is armed only if the queue returned no present cell — not when it is in error, not when
+    /// the `F_M` frames are all other queues' cells (it may still hold cells), not when a present frame is for it (the
+    /// transport's frames are 4096-byte cells: a present frame is present, decodable or not); with only dummies left for
+    /// it, it is.
+    #[test]
+    fn empty_fetch_not_armed_on_error_or_starved_queue() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        use crate::scheduler::types::ControlKind;
+        let cell = || Cell::from_bytes(&[7_u8; 4096]).map_err(|_| "cell");
+        let seed = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]).map_err(|_| "seed");
+        let cap =
+            |b: u8| -> Result<RecvCap, Fail> { RecvCap::from_seed(&seed(b)?).map_err(|_| "cap") };
+        // (cells for the queue, cells for the other queue, the queue in error, `F_M` of the parameters) -> armed. The one
+        // present cell of `(1, 0, ..)` is present although its source refuses it; `F_M = 16` with 8 frames of the other
+        // queue: the response is full at the transport's batch of 8, whatever the parameter says (C1-6 a)
+        for (mine, others, error, f_m, armed) in [
+            (0_u64, 0_u64, true, 8_u64, false),
+            (0, 8, false, 8, false),
+            (1, 0, false, 8, false),
+            (0, 2, false, 8, true),
+            (0, 0, false, 8, true),
+            (0, 8, false, 16, false),
+        ] {
+            let params = Params {
+                f_m,
+                ..Params::default()
+            };
+            let mut sched = Scheduler::new(params, Mode::Balanced, TimingRng::seeded(21));
+            let q = sched
+                .add_recv_queue(0, RelayId(0), cap(0x41)?, 10_000)
+                .map_err(|_| "queue")?;
+            let o = sched
+                .add_recv_queue(0, RelayId(0), cap(0x42)?, 10_000)
+                .map_err(|_| "queue")?;
+            let (rq, ro) = (cap(0x41)?.queue(), cap(0x42)?.queue());
+            let op = sched
+                .schedule_control(
+                    0,
+                    ControlKind::QueueDel(q),
+                    RelayId(0),
+                    1,
+                    When::AfterEmptyFetch(q),
+                )
+                .map_err(|_| "op")?;
+            let mut cells = Vec::new();
+            for id in 1..=mine {
+                cells.push((rq, id, cell()?));
+            }
+            for id in 1..=others {
+                cells.push((ro, id, cell()?));
+            }
+            let errors = if error {
+                vec![(rq, TransportError::Auth)]
+            } else {
+                Vec::new()
+            };
+            let queues = [(q, 0), (o, 0)];
+            let done = if mine == 1 {
+                sched
+                    .world
+                    .fetched_multi(&queues, cells, &errors, &mut Refusing, 1_000)
+            } else {
+                sched
+                    .world
+                    .fetched_multi(&queues, cells, &errors, &mut Dummies(0), 1_000)
+            };
+            done.map_err(|_| "fetched")?;
+            assert_eq!(
+                !sched.world.control.awaits_empty_fetch(op),
+                armed,
+                "mine {mine}, others {others}, error {error}, F_M {f_m}"
+            );
+        }
+        Ok(())
+    }
+
+    /// B-4 killer (`World::fetched`, Q194): a `FETCH` response without a cell starts the delay of a waiting `QUEUE_DEL` only
+    /// when it was asked in the queue's current generation.
+    #[test]
+    fn empty_response_of_an_old_generation_arms_nothing() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        use crate::scheduler::types::ControlKind;
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(11));
+        let seed = SecretBytes::<32>::from_slice(&[0x31; 32]).map_err(|_| "seed")?;
+        sched
+            .add_recv_queue_seed(0, QueueId(4), RelayId(0), &seed, 10_000)
+            .map_err(|_| "queue")?;
+        let op = sched
+            .schedule_control(
+                0,
+                ControlKind::QueueDel(QueueId(4)),
+                RelayId(0),
+                4,
+                When::AfterEmptyFetch(QueueId(4)),
+            )
+            .map_err(|_| "op")?;
+        sched
+            .world
+            .recreate(QueueId(4), 0)
+            .map_err(|_| "recreate")?;
+        let mut source = Dummies(0);
+        sched
+            .world
+            .fetched(QueueId(4), 0, Vec::new(), &mut source, 1_000);
+        assert!(
+            sched.world.control.awaits_empty_fetch(op),
+            "generation 0 is old"
+        );
+        sched
+            .world
+            .fetched(QueueId(4), 1, Vec::new(), &mut source, 1_000);
+        assert!(
+            !sched.world.control.awaits_empty_fetch(op),
+            "generation 1 is current"
+        );
+        Ok(())
+    }
+
+    /// The connection of every `Output::Connect`.
+    fn connects(outs: &[Output]) -> Vec<LinkId> {
+        outs.iter()
+            .filter_map(|o| match o {
+                Output::Connect { link, .. } => Some(*link),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Strict, no phase, a send queue on relay 1 (`QueueId(0)`) and a recv queue on relay 2 (`QueueId(1)`), both at
+    /// 10 000 ms, both links up at 0 (Q301 sweep).
+    fn two_relays_up() -> Result<(Scheduler, Dummies), Fail> {
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(31));
+        let seed = SecretBytes::from_slice(&[0x51; 32]).map_err(|_| "seed")?;
+        let out_cap = SendCap::from_route([5; 16], &seed).map_err(|_| "send cap")?;
+        sched
+            .add_send_queue(0, RelayId(1), out_cap, 10_000)
+            .map_err(|_| "send queue")?;
+        let recv = RecvCap::from_seed(&seed).map_err(|_| "recv cap")?;
+        sched
+            .add_recv_queue(0, RelayId(2), recv, 10_000)
+            .map_err(|_| "recv queue")?;
+        let mut src = Dummies(0);
+        let ids = connects(&sched.poll(0, &mut src).map_err(|_| "poll")?);
+        if ids.len() != 2 {
+            return Err("two connects");
+        }
+        for id in ids {
+            sched.link_up(id, 0, channel()?).map_err(|_| "up")?;
+        }
+        Ok((sched, src))
+    }
+
+    /// Strict, no phase, a pool of one spare on relay 1 created and up at `T` = 3 600 000: the scheduler, its source, the
+    /// spare and `T` (Q301, EXT3-2).
+    fn spare_up() -> Result<(Scheduler, Dummies, QueueId, u64), Fail> {
+        const T: u64 = 3_600_000;
+        let params = Params {
+            phase_max_ms: 0,
+            pool_target: 1,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(41));
+        sched
+            .manage_pool(0, RelayId(1))
+            .map_err(|_| "manage pool")?;
+        let mut src = Dummies(0);
+        let outs = sched.poll(T, &mut src).map_err(|_| "poll 1")?;
+        let (op, spare) = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::Control {
+                    op,
+                    kind: ControlKind::QueueNew(q),
+                    ..
+                } => Some((*op, *q)),
+                _ => None,
+            })
+            .ok_or("no QueueNew")?;
+        let seed = SecretBytes::from_slice(&[0x52; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        sched.pool_queue_ready(T, spare, cap).map_err(|_| "ready")?;
+        sched.control_done(op);
+        let ids = connects(&sched.poll(T, &mut src).map_err(|_| "poll 2")?);
+        let [it] = ids.as_slice() else {
+            return Err("one connect");
+        };
+        sched.link_up(*it, T, channel()?).map_err(|_| "up")?;
+        Ok((sched, src, spare, T))
+    }
+
+    /// The period and the pool flag of the recv queue `q`.
+    fn recv_state(sched: &Scheduler, q: QueueId) -> Option<(u64, bool)> {
+        sched
+            .world
+            .recvs
+            .iter()
+            .find(|r| r.id == q)
+            .map(|r| (r.period_ms, r.pool))
+    }
+
+    /// Q301 (Q276 extended to the scheduler; EXT3-2): a mode change whose phase draw fails — at the first or at the second
+    /// of the two new links — leaves the mode, the links and the outputs as they were, and nothing is torn down later.
+    #[test]
+    fn set_mode_without_randomness_changes_nothing() -> Result<(), Fail> {
+        for budget in [0_u64, 1] {
+            let (mut sched, mut src) = two_relays_up()?;
+            let before = sched.links();
+            sched.world.rng = TimingRng::failing_after(31, budget);
+            let call = sched.set_mode(1, Mode::Balanced, &mut src);
+            assert_eq!(call.err(), Some(SchedError::Unavailable), "{budget}");
+            assert_eq!(
+                (sched.effective_mode(), sched.mode()),
+                (Mode::Strict, Mode::Strict),
+                "{budget}"
+            );
+            assert_eq!(sched.links(), before, "{budget}");
+            assert!(sched.world.out.is_empty(), "{budget}");
+            sched.world.rng = TimingRng::seeded(32);
+            let outs = sched.poll_due(2).map_err(|_| "poll_due")?;
+            let torn = outs.iter().any(|o| {
+                matches!(
+                    o,
+                    Output::Close { .. } | Output::Event(LinkEvent::TornDown(..))
+                )
+            });
+            assert!(!torn, "{budget}");
+        }
+        Ok(())
+    }
+
+    /// Q301 (EXT3-2): a spare handed out whose handover draw fails keeps its period, its pool place and its link.
+    #[test]
+    fn take_spare_draw_failure_restores_period() -> Result<(), Fail> {
+        let (mut sched, mut src, spare, t) = spare_up()?;
+        let before = sched.links();
+        let ops = sched.world.control.len();
+        sched.world.rng = TimingRng::failing();
+        let call = sched.take_pool_queue_id(t + 1, RelayId(1), spare, 10_000, &mut src);
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert_eq!(recv_state(&sched, spare), Some((80_000, true)));
+        assert_eq!(sched.pool_spares(RelayId(1)), 1);
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
+        assert_eq!(sched.world.control.len(), ops);
+        Ok(())
+    }
+
+    /// Q301 (EXT3-2): after a failed draw the same hand-out, retried, is announced and fetched at the announced period: the
+    /// spare's link ends at the handover instant (not at its 6–24 h lifetime) and its successor fetches at 10 s.
+    #[test]
+    fn take_spare_retry_after_failed_draw_hands_over() -> Result<(), Fail> {
+        let (mut sched, mut src, spare, t) = spare_up()?;
+        let ops = sched.world.control.len();
+        sched.world.rng = TimingRng::failing();
+        let first = sched.take_pool_queue_id(t + 1, RelayId(1), spare, 10_000, &mut src);
+        assert_eq!(first.err(), Some(SchedError::Unavailable));
+        sched.world.rng = TimingRng::seeded(42);
+        let at = t + 1;
+        let (taken, outs) = sched
+            .take_pool_queue_id(at, RelayId(1), spare, 10_000, &mut src)
+            .map_err(|_| "retry")?;
+        assert_eq!(taken, Some(spare));
+        let moved = outs.iter().any(|o| {
+            matches!(
+                o,
+                Output::Close { .. }
+                    | Output::Connect { .. }
+                    | Output::Event(LinkEvent::TornDown(..))
+            )
+        });
+        assert!(!moved);
+        let die_at = sched
+            .links()
+            .iter()
+            .find(|l| l.queue == Some(spare))
+            .and_then(|l| l.die_at);
+        assert_eq!(die_at, Some(at));
+        assert_eq!(recv_state(&sched, spare), Some((10_000, false)));
+        assert_eq!(sched.pool_spares(RelayId(1)), 0);
+        assert_eq!(sched.world.control.len(), ops + 1);
+        let outs = sched.poll(at, &mut src).map_err(|_| "poll")?;
+        let torn = outs
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o,
+                    Output::Event(LinkEvent::TornDown(_, _, Reason::Lifetime))
+                )
+            })
+            .count();
+        let connected = outs
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o,
+                    Output::Connect {
+                        kind: LinkKind::Recv,
+                        period_ms: 10_000,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!((torn, connected), (1, 1));
+        Ok(())
+    }
+
+    /// Q301 (V-EXT3-2's sibling): a hand-out whose refill draw fails answers `Err` and hands nothing out — the spare, its
+    /// period and its link are as they were.
+    #[test]
+    fn take_spare_refill_draw_failure_hands_out_nothing() -> Result<(), Fail> {
+        let (mut sched, mut src, spare, t) = spare_up()?;
+        let before = sched.links();
+        let ops = sched.world.control.len();
+        sched.world.ctl = TimingRng::failing();
+        let call = sched.take_pool_queue_id(t + 1, RelayId(1), spare, 10_000, &mut src);
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert_eq!(recv_state(&sched, spare), Some((80_000, true)));
+        assert_eq!(sched.pool_spares(RelayId(1)), 1);
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
+        assert_eq!(sched.world.control.len(), ops);
+        Ok(())
+    }
+
+    /// Q301 sweep: a send queue's period change in Strict whose draws fail — in the teardown back-off or in the successor's
+    /// phase — changes neither the period nor the links.
+    #[test]
+    fn send_period_change_without_randomness_changes_nothing() -> Result<(), Fail> {
+        for budget in [0_u64, 1] {
+            let (mut sched, mut src) = two_relays_up()?;
+            let before = sched.links();
+            sched.world.rng = TimingRng::failing_after(31, budget);
+            let call = sched.set_queue_period(1, QueueId(0), 20_000, &mut src);
+            assert_eq!(call.err(), Some(SchedError::Unavailable), "{budget}");
+            let period = sched
+                .world
+                .sends
+                .iter()
+                .find(|s| s.id == QueueId(0))
+                .map(|s| s.period_ms);
+            assert_eq!(period, Some(10_000), "{budget}");
+            assert_eq!(sched.links(), before, "{budget}");
+            assert!(sched.world.out.is_empty(), "{budget}");
+        }
+        Ok(())
+    }
+
+    /// Q301 sweep: a queue removal whose teardown draw fails removes nothing.
+    #[test]
+    fn remove_queue_without_randomness_changes_nothing() -> Result<(), Fail> {
+        let (mut sched, mut src) = two_relays_up()?;
+        let before = sched.links();
+        sched.world.rng = TimingRng::failing();
+        let call = sched.remove_queue(1, QueueId(0), &mut src);
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert!(sched.has_queue(QueueId(0)));
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
+        Ok(())
+    }
+
+    /// Q301 sweep: a close of an up link whose back-off draw fails leaves the link as it was.
+    #[test]
+    fn teardown_without_randomness_leaves_the_link() -> Result<(), Fail> {
+        let (mut sched, _src) = two_relays_up()?;
+        let before = sched.links();
+        let id = before.first().and_then(|l| l.id).ok_or("no link id")?;
+        sched.world.rng = TimingRng::failing();
+        let call = sched.on_closed(id, 1);
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
+        Ok(())
+    }
+
+    /// Q301 sweep: a failed connect whose back-off draw fails does not count the close.
+    #[test]
+    fn connect_failed_without_randomness_changes_nothing() -> Result<(), Fail> {
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(33));
+        let seed = SecretBytes::from_slice(&[0x53; 32]).map_err(|_| "seed")?;
+        let cap = SendCap::from_route([6; 16], &seed).map_err(|_| "cap")?;
+        sched
+            .add_send_queue(0, RelayId(1), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let mut src = Dummies(0);
+        let ids = connects(&sched.poll(0, &mut src).map_err(|_| "poll")?);
+        let [id] = ids.as_slice() else {
+            return Err("one connect");
+        };
+        let before = sched.links();
+        sched.world.rng = TimingRng::failing();
+        let call = sched.connect_failed(*id, 1, true);
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
+        Ok(())
+    }
+
+    /// Q301 sweep: a re-creation whose delay draw fails keeps the generation of the queue and queues nothing.
+    #[test]
+    fn recreate_without_randomness_keeps_the_generation() -> Result<(), Fail> {
+        let (mut sched, _src) = two_relays_up()?;
+        let ops = sched.world.control.len();
+        sched.world.ctl = TimingRng::failing();
+        let call = sched.world.recreate(QueueId(1), 1);
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert!(sched.world.current(QueueId(1), 0));
+        let recreating = sched
+            .world
+            .recvs
+            .iter()
+            .any(|r| r.id == QueueId(1) && r.recreating);
+        assert!(!recreating);
+        assert_eq!(sched.world.control.len(), ops);
+        Ok(())
+    }
+
+    /// Q301 sweep: a pool refill whose second creation's delay draw fails queues nothing, and a later refill queues both.
+    #[test]
+    fn manage_pool_failed_draw_queues_nothing() -> Result<(), Fail> {
+        let params = Params {
+            pool_target: 2,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(43));
+        sched.world.ctl = TimingRng::failing_after(43, 1);
+        let call = sched.manage_pool(0, RelayId(1));
+        assert_eq!(call.err(), Some(SchedError::Unavailable));
+        assert_eq!(sched.world.control.len(), 0);
+        assert!(!sched.pool_pending(QueueId(0)));
+        assert_eq!(sched.world.next_queue, 0);
+        assert!(
+            sched.world.pool.missing().is_empty(),
+            "the relay is not managed after a failed draw"
+        );
+        sched.world.ctl = TimingRng::seeded(44);
+        sched.manage_pool(0, RelayId(1)).map_err(|_| "retry")?;
+        assert_eq!(sched.world.control.len(), 2);
+        assert!(sched.pool_pending(QueueId(0)) && sched.pool_pending(QueueId(1)));
+        Ok(())
+    }
+
+    /// UA3 — Q304 (EXT3b-4): `schedule_control` and `owner_status` of a `LINK_PUT` whose link data has one waiting return that operation's id: no operation, no id and no draw is added.
+    #[test]
+    fn schedule_control_returns_the_waiting_link_put() -> Result<(), Fail> {
+        use crate::scheduler::control::When;
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(46));
+        let first = sched
+            .schedule_control(0, ControlKind::LinkPut(7), RelayId(0), 7, When::Delayed)
+            .map_err(|_| "first")?;
+        let draws = sched.world.ctl.draws();
+        let again = sched
+            .schedule_control(1, ControlKind::LinkPut(7), RelayId(0), 7, When::Delayed)
+            .map_err(|_| "again")?;
+        let answer = sched
+            .owner_status(2, RelayId(0), 7, false, false, false)
+            .map_err(|_| "owner")?;
+        assert_eq!((again, answer), (first, Some(first)));
+        assert_eq!(
+            (
+                sched.world.control.len(),
+                sched.world.next_op,
+                sched.world.ctl.draws()
+            ),
+            (1, 1, draws)
+        );
+        Ok(())
+    }
+
+    /// The first `QueueNew` control output of `outs`: its operation and queue (T3-1, T3-2).
+    fn queue_new(outs: &[Output]) -> Result<(crate::scheduler::types::OpId, QueueId), Fail> {
+        outs.iter()
+            .find_map(|o| match o {
+                Output::Control {
+                    op,
+                    kind: ControlKind::QueueNew(q),
+                    ..
+                } => Some((*op, *q)),
+                _ => None,
+            })
+            .ok_or("no QueueNew")
+    }
+
+    /// T3-1 — EXT3b-3 (V-EXT3b-34 T3-1): a created spare whose registration finds no randomness stays a creation under way, nothing is registered, and a later pass with randomness registers it — one attempt per pass, no second `QUEUE_NEW`.
+    #[test]
+    fn pool_queue_ready_without_randomness_registers_at_a_later_pass() -> Result<(), Fail> {
+        const T: u64 = 3_600_000;
+        let params = Params {
+            phase_max_ms: 0,
+            pool_target: 1,
+            ..Params::default()
+        };
+        let (mut sched, mut src) = (
+            Scheduler::new(params, Mode::Strict, TimingRng::seeded(41)),
+            Dummies(0),
+        );
+        sched
+            .manage_pool(0, RelayId(1))
+            .map_err(|_| "manage pool")?;
+        let (op, spare) = queue_new(&sched.poll(T, &mut src).map_err(|_| "poll 1")?)?;
+        let cap = RecvCap::from_seed(&SecretBytes::from_slice(&[0x52; 32]).map_err(|_| "seed")?)
+            .map_err(|_| "cap")?;
+        sched.world.rng = TimingRng::failing();
+        assert_eq!(sched.pool_queue_ready(T, spare, cap), Ok(()));
+        assert!(!sched.has_queue(spare) && sched.pool_pending(spare));
+        sched.control_done(op);
+        sched
+            .poll(T.saturating_add(1), &mut src)
+            .map_err(|_| "poll without randomness")?;
+        assert!(
+            !sched.has_queue(spare) && sched.pool_pending(spare),
+            "one attempt per pass"
+        );
+        sched.world.rng = TimingRng::seeded(42);
+        sched
+            .poll(T.saturating_add(2), &mut src)
+            .map_err(|_| "poll 2")?;
+        assert!(sched.has_queue(spare) && !sched.pool_pending(spare));
+        assert_eq!(
+            (sched.pool_spares(RelayId(1)), sched.world.control.len()),
+            (1, 0),
+            "no second QUEUE_NEW"
+        );
+        let ids = connects(
+            &sched
+                .poll(T.saturating_add(3), &mut src)
+                .map_err(|_| "poll 3")?,
+        );
+        assert_eq!(ids.len(), 1, "the spare is fetched");
+        Ok(())
+    }
+
+    /// T3-2 — EXT3b-3 (V-EXT3b-34 T3-2; spec D.2): in Balanced the pool plans no creation the relay's `FETCH_MULTI` link has no entry for: 31 queues leave room for one spare, and handing it out (it stays an entry) plans no refill.
+    #[test]
+    fn pool_refill_respects_fetch_multi_entries() -> Result<(), Fail> {
+        const T: u64 = 3_600_000;
+        let (mut sched, mut src) = (
+            Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(45)),
+            Dummies(0),
+        );
+        let cap = |n: u8| -> Result<RecvCap, Fail> {
+            RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?)
+                .map_err(|_| "cap")
+        };
+        for n in 1..=31_u8 {
+            sched
+                .add_recv_queue(0, RelayId(1), cap(n)?, 80_000)
+                .map_err(|_| "queue")?;
+        }
+        sched
+            .manage_pool(0, RelayId(1))
+            .map_err(|_| "manage pool")?;
+        assert_eq!(sched.world.control.len(), 1, "room for one spare");
+        let (op, spare) = queue_new(&sched.poll(T, &mut src).map_err(|_| "poll")?)?;
+        sched
+            .pool_queue_ready(T, spare, cap(0x55)?)
+            .map_err(|_| "ready")?;
+        sched.control_done(op);
+        let (taken, _) = sched
+            .take_pool_queue_id(T.saturating_add(1), RelayId(1), spare, 80_000, &mut src)
+            .map_err(|_| "take")?;
+        assert_eq!(
+            (taken, sched.world.control.len()),
+            (Some(spare), 0),
+            "no refill beyond 32 entries"
+        );
+        Ok(())
+    }
+
+    /// S7-1 (Q304 (C)): why the runtime manages the pool after the open's registrations — `World::room_for` only counts queues that are registered when the pool is managed.
+    #[test]
+    fn pool_managed_after_registrations_plans_no_creation() -> Result<(), Fail> {
+        let relay = RelayId(1);
+        let cap = |n: u8| -> Result<RecvCap, Fail> {
+            RecvCap::from_seed(&SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?)
+                .map_err(|_| "cap")
+        };
+        let recvs = |sched: &Scheduler| {
+            sched
+                .world
+                .recvs
+                .iter()
+                .filter(|r| r.relay == relay)
+                .count()
+        };
+        // (i) the registrations first: 31 queues and one adopted spare fill the relay, so the pool plans nothing
+        let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(47));
+        for n in 1..=31_u8 {
+            sched
+                .add_recv_queue(0, relay, cap(n)?, 80_000)
+                .map_err(|_| "queue")?;
+        }
+        sched
+            .adopt_pool_queue(0, relay, QueueId(100), cap(0x56)?)
+            .map_err(|_| "adopt")?;
+        sched.manage_pool(0, relay).map_err(|_| "manage pool (i)")?;
+        assert_eq!((recvs(&sched), sched.world.control.len()), (32, 0), "(i)");
+        // (ii) the pool first: with only the spare registered one creation is planned, and the 31 queues that follow fill
+        // the relay to 32 entries — the creation would be refused with `TooManyQueues` when it completes
+        let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(48));
+        sched
+            .adopt_pool_queue(0, relay, QueueId(100), cap(0x56)?)
+            .map_err(|_| "adopt")?;
+        sched
+            .manage_pool(0, relay)
+            .map_err(|_| "manage pool (ii)")?;
+        let before = sched.world.control.len();
+        for n in 1..=31_u8 {
+            sched
+                .add_recv_queue(0, relay, cap(n)?, 80_000)
+                .map_err(|_| "queue")?;
+        }
+        assert_eq!(
+            (before, recvs(&sched), sched.world.control.len()),
+            (1, 32, 1),
+            "(ii)"
+        );
+        Ok(())
+    }
+
+    /// S5-1 — Q301 (XREVIEW-M7-S5 S5-1): a queue add whose phase draw fails registers nothing — neither a recv queue nor a send queue, no link.
+    #[test]
+    fn add_without_randomness_registers_nothing() -> Result<(), Fail> {
+        let (mut sched, _src) = two_relays_up()?;
+        let before = sched.links();
+        let seed = SecretBytes::from_slice(&[0x54; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        sched.world.rng = TimingRng::failing();
+        assert_eq!(
+            sched.add_recv_queue(1, RelayId(3), cap, 10_000).err(),
+            Some(SchedError::Unavailable)
+        );
+        let added = sched.add_send_queue_route(1, QueueId(9), RelayId(3), ([5; 16], &seed), 10_000);
+        assert_eq!(added.err(), Some(SchedError::Unavailable));
+        assert!(!sched.has_queue(QueueId(2)) && !sched.has_queue(QueueId(9)));
+        assert_eq!(sched.links(), before);
+        assert!(sched.world.out.is_empty());
+        Ok(())
+    }
+}
+
 /// Positive control of the tick audit (WEISUNG M6-C1-4, mutants `counters_now -> [0; 4]` / `[1; 4]`): the instrument moves
 /// when counted work happens — a blind audit would pass every tick. The counters are thread-local, so the deltas are exact.
 #[cfg(test)]
 #[cfg(feature = "kat")]
 mod m6_mut {
     use super::counters_now;
-    use crate::scheduler::conversation::counters;
+    use crate::sessions::actor::counters;
 
     #[test]
     fn counters_now_moves_when_a_counted_step_runs() {

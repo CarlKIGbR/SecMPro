@@ -1,0 +1,9 @@
+ci-full raw logs of B-4c (Q218): kept outside the repository in target/fable/ci-full-raw/ (git-ignored); each is above the 2 MiB gate of ADR-052, the committed files ci-full-b4c-<name>.txt are B-4b-form excerpts of them
+head: HEAD of the code under test ab72776d22d5ac22720084a7d207725a32697ec2 (attempt 5: e80e11c2c5dbdf91a57af7867af7e601dd8b760b)
+# sha256  bytes  name
+e10dae13764a189c016cd0c5cad8e8086c7348fd45f8cbdc8567fad9b0a602c8  3491762  ci-full-b4c-ab72776.partial-4h-cap.txt
+c118512e4a1a58777126ac243ae63f6fc8f1f17222bfb7650f528b2fb2294713  3568662  ci-full-b4c-ab72776.partial2-4h-cap.txt
+1c5bd790dbfb7a4d53050d31be7606ee24878c87e68897d78cb38f0dbd74b7a3  4152293  ci-full-b4c-ab72776.partial3.txt
+7d90ff122e1ac2b9e17ea5cba34fb80c07a64e629cee9c340761e0c135d77444  652734  ci-full-b4c-ab72776.partial4-advisory.txt
+5025bb01bbea0ff24fcdc56edbbb31af6d0285ebbe55e9028d916a2bd7dea22b  3165913  ci-full-b4c-e80e11c.txt
+34f9c5456cdbe1c0c053deb83a980781e3c7133d80617d14edf4d946be18f74f  2598770  fuzz-b4c14-2e420d8.txt   (raw log of docs/reviews/M07-evidence/fuzz-b4c14-2e420d8.txt)

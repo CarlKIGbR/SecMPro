@@ -1,0 +1,4720 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! The in-memory conversation behind the cell source (M6; M7's `Sessions` replace it): one ratchet state, the queue it
+//! sends to and the queue it receives on, an [`Outbox`], a [`Persist`], the receiver's dedup by `msg_id`, receipts.
+//!
+//! **One path for real and dummy cells (spec §10.1, CLAUDE.md §1.4).** Every cell — a message, a fragment, a receipt, a
+//! dummy — is sealed by [`Conversation::seal`], the only call of `RatchetState::encrypt_with` in the crate, and
+//! persisted (`Sealed::persist`) before it is released: persist-before-send (spec §7.5). A received cell is decrypted,
+//! its content processed, the new state committed, and only then is the cell reported as decided
+//! (persist-before-ack); a cell that does not decrypt is discarded and is decided too (spec §9.3: every delivered cell
+//! is acknowledged).
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use secmp_crypto::{HybridVerifyingKey, SecretBytes, Zeroizing};
+use secmp_proto::Encode;
+use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy, split_chunks};
+use secmp_proto::tr::{Entropy, OsEntropy, RatchetParts, RatchetState};
+use secmp_proto::wire::cell::{
+    AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, ControlCode, Fragment,
+    FragmentPayload, KeyChangeBody, ReceiptBody, ReceiptKind, RouteDescriptor, RouteUpdateBody,
+};
+use secmp_proto::wire::inv::IksPublic;
+use secmp_proto::wire::{Id, Period};
+
+use crate::scheduler::outbox::{
+    CommitParts, DeliveredMessage, MsgId, OutMessage, Outbox, Persist, PersistError, PersistKind,
+    trust_code,
+};
+use crate::scheduler::types::{
+    CellSource, CellToken, Delivered, PreparedCell, QueueId, SendFailure, SourceError,
+};
+
+/// Counting accessors of the `kat` build (`tr_encrypt_calls`, `persist_calls`; TEST-SPEC-M6 "Conventions"):
+/// thread-local, read before and after a unit.
+pub mod counters {
+    #[cfg(feature = "kat")]
+    mod imp {
+        use core::cell::{Cell, RefCell};
+
+        thread_local! {
+            pub(super) static ENCRYPT: Cell<u64> = const { Cell::new(0) };
+            pub(super) static PERSIST: Cell<u64> = const { Cell::new(0) };
+            pub(super) static SITES: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        }
+    }
+
+    /// Calls of `RatchetState::encrypt_with` on this thread.
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn tr_encrypt_calls() -> u64 {
+        imp::ENCRYPT.with(core::cell::Cell::get)
+    }
+
+    /// State commits (send and receive) on this thread.
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn persist_calls() -> u64 {
+        imp::PERSIST.with(core::cell::Cell::get)
+    }
+
+    /// The distinct call sites of `encrypt_with` seen on this thread.
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn encrypt_sites() -> Vec<&'static str> {
+        imp::SITES.with(|s| s.borrow().clone())
+    }
+
+    #[cfg(feature = "kat")]
+    pub(crate) fn note_encrypt(site: &'static str) {
+        imp::ENCRYPT.with(|c| c.set(c.get().saturating_add(1)));
+        imp::SITES.with(|s| {
+            let mut s = s.borrow_mut();
+            if !s.contains(&site) {
+                s.push(site);
+            }
+        });
+    }
+
+    #[cfg(feature = "kat")]
+    pub(crate) fn note_persist() {
+        imp::PERSIST.with(|c| c.set(c.get().saturating_add(1)));
+    }
+
+    #[cfg(not(feature = "kat"))]
+    pub(crate) const fn note_encrypt(_site: &'static str) {}
+
+    #[cfg(not(feature = "kat"))]
+    pub(crate) const fn note_persist() {}
+}
+
+/// Where a conversation gets its ratchet randomness.
+pub trait EntropySource {
+    /// The entropy.
+    type E: Entropy;
+    /// The entropy, for one operation.
+    fn entropy(&mut self) -> &mut Self::E;
+}
+
+/// The operating system's randomness (the only source of a shipped build).
+pub struct OsSource(OsEntropy);
+
+impl OsSource {
+    /// The operating system.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(OsEntropy)
+    }
+}
+
+impl Default for OsSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EntropySource for OsSource {
+    type E = OsEntropy;
+
+    fn entropy(&mut self) -> &mut OsEntropy {
+        &mut self.0
+    }
+}
+
+/// A message delivered to the application.
+pub struct Received {
+    /// Its id.
+    pub msg_id: MsgId,
+    /// Its kind.
+    pub kind: AppKind,
+    /// Its payload.
+    pub payload: Zeroizing<Vec<u8>>,
+}
+
+/// What a cell on the way carries (to map `OK_SEND` and eviction back to the outbox).
+#[derive(Clone)]
+enum Owner {
+    Message(MsgId),
+    Receipt(Vec<MsgId>),
+    /// A dummy, or a content planned by the tests only.
+    Dummy,
+    /// A persisted handshake cell (its bytes), sent again if its send fails.
+    Handshake(Vec<u8>),
+    /// A cell of an attempt of a control content (Q222 (1), spec §9.5, §10.6).
+    Control(ControlRef),
+}
+
+struct Planned {
+    content: Content,
+    owner: Owner,
+    /// How many cells the owner's message takes in all.
+    total: u16,
+}
+
+/// An attempt of a control content (Q222): `id` is the conversation's own number of the content — never the `ord` of
+/// its row, the store reuses `ord`s — and `attempt` counts its plans; the outcomes of a superseded attempt count nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ControlRef {
+    id: u64,
+    attempt: u64,
+}
+
+/// A control content of the session (a `RouteUpdate`, a `Control{1|2}`, a `KeyChange`) from its plan until every cell of
+/// its current attempt has its `OK_SEND` without an eviction (Q222 (2), spec §9.5): an eviction, a failed `SEND`, a lost
+/// queue and a send-queue switch plan the whole content again (new seals, a new fragment `msg_id`, Q222 (3)).
+struct ControlEntry {
+    /// [`PendingControl::encode`] of the content: it is planned again from this.
+    row: Zeroizing<Vec<u8>>,
+    /// Its durable row; `None`: in memory only, or deleted after the last `OK_SEND`.
+    ord: Option<i64>,
+    /// Made by [`Conversation::queue_pending`]: a plan after the row went writes the row again.
+    durable: bool,
+    attempt: u64,
+    /// How many cells its current attempt takes; 0: none planned (Q240: no randomness for the fragment `msg_id`) — the
+    /// entry stays and the next preparation plans it.
+    total: u16,
+    relayed: u16,
+    /// Every cell of `attempt` has its `OK_SEND`: the row goes at the next preparation.
+    done: bool,
+    /// Q224: superseded by a newer `RouteUpdate`: never planned again, its row is never written again; kept only until its
+    /// row delete succeeded. A retired entry always has `ord.is_some()`; an entry whose row is gone is removed.
+    retired: bool,
+    /// Q241 (D-B72): the cells of this `KeyChange` that may still wait on an old send queue (queue, cell id). Such a cell is
+    /// gone once a cell of that queue with an id at least `QUEUE_CAPACITY` higher has its `OK_SEND`, or once the queue is
+    /// lost.
+    stranded: Vec<(QueueId, u64)>,
+    /// Q241: the cells of this `KeyChange` whose `SEND` ended without an answer (queue, cell token): the relay may have
+    /// stored them under an id not known here. Such a mark becomes a stranded one with the id of the first `OK_SEND` on
+    /// that queue of a cell prepared after it.
+    unknown: Vec<(QueueId, u64)>,
+    /// Q248: the durable markers of this `KeyChange` — one per physical send queue a cell of it was sealed for.
+    markers: Vec<Marker>,
+}
+
+/// Q248 (ADR-060 (2), OPEN-M7-B-24 (A)): a CONTROL row `4 ‖ ord ‖ sid` — the `KeyChange` at `ord` may have a copy on the
+/// physical send queue `sid`. Written before the first cell of the `KeyChange` is sealed for that queue, deleted when no
+/// copy can be there any more, and before the `KeyChange`'s own row.
+struct Marker {
+    sid: Id,
+    /// Its row; `None`: this durability keeps no rows (`MemPersist` without mirror).
+    ord: Option<i64>,
+    /// The queue of this process it names; `None`: read at open and not taken over by a registration of its `sid` (Q249,
+    /// Q253) — nothing here can count its copy away, so it holds the `KeyChange` until one takes it over.
+    queue: Option<QueueId>,
+}
+
+impl ControlEntry {
+    /// Q241, Q249: a copy of this content may still wait on a queue it is no longer tracked on.
+    fn marked(&self) -> bool {
+        !self.stranded.is_empty()
+            || !self.unknown.is_empty()
+            || self.markers.iter().any(|m| m.queue.is_none())
+    }
+}
+
+/// The row tag of a [`Marker`] (Q248).
+const MARKER_TAG: u8 = 4;
+
+/// Q250 (ADR-060 Consequences, `docs/03` §10.3): a `SEND` of unknown outcome may reach the relay after a later link's
+/// `SEND`s — at most two requests are outstanding on a link — so its mark takes the id of the first later `OK_SEND` on
+/// its queue plus this margin.
+const IN_FLIGHT_MARGIN: u64 = 2;
+
+/// Q248: the row of a marker for the `KeyChange` at `ord` on the physical queue `sid`.
+#[must_use]
+pub fn marker_row(ord: i64, sid: &Id) -> Vec<u8> {
+    let mut row = Vec::with_capacity(25);
+    row.push(MARKER_TAG);
+    row.extend_from_slice(&ord.to_be_bytes());
+    row.extend_from_slice(sid);
+    row
+}
+
+/// Q248: the `KeyChange` `ord` and the `sid` of a marker row; `Ok(None)` for a row of another tag. Strict: exactly 24
+/// bytes after the tag and a non-negative `ord`.
+///
+/// # Errors
+/// [`SourceError`] for a marker row that does not decode.
+pub fn marker_of(row: &[u8]) -> Result<Option<(i64, Id)>, SourceError> {
+    let Some((&MARKER_TAG, body)) = row.split_first() else {
+        return Ok(None);
+    };
+    let (ord, sid) = body.split_first_chunk::<8>().ok_or(SourceError)?;
+    let ord = i64::from_be_bytes(*ord);
+    let sid: Id = sid.try_into().map_err(|_| SourceError)?;
+    if ord < 0 {
+        return Err(SourceError);
+    }
+    Ok(Some((ord, sid)))
+}
+
+/// The row tag of an [`OverlapRoute`] (Q252).
+const OVERLAP_TAG: u8 = 5;
+
+/// Q252: the length of an overlap row — tag, `sid`, seed, period, end, newest id, flag.
+const OVERLAP_LEN: usize = 68;
+
+/// Q252 (B17b-3, OPEN-M7-B-27): an old send queue in overlap, as its CONTROL row keeps it across a restart — the route
+/// the host sends to (`sid`, sender seed, period), the end of its overlap (Unix ms) and, for the `KeyChange`s that may
+/// have a copy there, the newest id of such a copy and whether one of unknown id may be there (Q254).
+pub struct OverlapRoute {
+    /// The queue's sender id (spec §9.1).
+    pub sid: Id,
+    /// The Ed25519 seed of the sender key (a secret: typed, zeroized, sealed in the row).
+    pub seed: SecretBytes<32>,
+    /// Its period (spec §10.2).
+    pub period: Period,
+    /// The end of the overlap the host drew at the switch, Unix ms.
+    pub until_ms: u64,
+    /// Q254: the newest cell id on that queue a `KeyChange` copy may have; 0: none known.
+    pub newest: u64,
+    /// Q254: a `KeyChange` copy of unknown id may be there.
+    pub unknown: bool,
+}
+
+impl OverlapRoute {
+    /// Q252: the row `5 ‖ sid[16] ‖ seed[32] ‖ period_s u16 ‖ until_ms u64 ‖ newest u64 ‖ unknown u8`, big-endian, 68
+    /// bytes; it holds the send seed (zeroized).
+    #[must_use]
+    pub fn row(&self) -> Zeroizing<Vec<u8>> {
+        let mut row = Zeroizing::new(Vec::with_capacity(OVERLAP_LEN));
+        row.push(OVERLAP_TAG);
+        row.extend_from_slice(&self.sid);
+        row.extend_from_slice(self.seed.expose_secret());
+        row.extend_from_slice(&self.period.seconds().to_be_bytes());
+        row.extend_from_slice(&self.until_ms.to_be_bytes());
+        row.extend_from_slice(&self.newest.to_be_bytes());
+        row.push(u8::from(self.unknown));
+        row
+    }
+
+    /// A copy (the seed copied into a new typed secret).
+    ///
+    /// # Errors
+    /// [`SourceError`] never in practice (the seed has its length).
+    pub fn copy(&self) -> Result<Self, SourceError> {
+        Ok(Self {
+            sid: self.sid,
+            seed: SecretBytes::from_slice(self.seed.expose_secret()).map_err(|_| SourceError)?,
+            period: self.period,
+            until_ms: self.until_ms,
+            newest: self.newest,
+            unknown: self.unknown,
+        })
+    }
+}
+
+/// Q252: the overlap of a row; `Ok(None)` for a row of another tag. Strict: exactly 67 bytes after the tag, a period of
+/// `PERIODS`, a flag 0 or 1.
+///
+/// # Errors
+/// [`SourceError`] for an overlap row that does not decode.
+pub fn overlap_of(row: &[u8]) -> Result<Option<OverlapRoute>, SourceError> {
+    let Some((&OVERLAP_TAG, body)) = row.split_first() else {
+        return Ok(None);
+    };
+    let (sid, body) = body.split_first_chunk::<16>().ok_or(SourceError)?;
+    let (seed, body) = body.split_first_chunk::<32>().ok_or(SourceError)?;
+    let (period, body) = body.split_first_chunk::<2>().ok_or(SourceError)?;
+    let (until, body) = body.split_first_chunk::<8>().ok_or(SourceError)?;
+    let (newest, body) = body.split_first_chunk::<8>().ok_or(SourceError)?;
+    let unknown = match body {
+        [0] => false,
+        [1] => true,
+        _ => return Err(SourceError),
+    };
+    Ok(Some(OverlapRoute {
+        sid: *sid,
+        seed: SecretBytes::from_slice(seed).map_err(|_| SourceError)?,
+        period: Period::from_seconds(u16::from_be_bytes(*period)).map_err(|_| SourceError)?,
+        until_ms: u64::from_be_bytes(*until),
+        newest: u64::from_be_bytes(*newest),
+        unknown,
+    }))
+}
+
+/// The row tag of a route journal entry (RJ, EXT2d-2).
+const JOURNAL_TAG: u8 = 6;
+
+/// RJ (EXT2d-2; ADR-060 amendment (RJ)): the journal row of the routes `routes` (a `RouteUpdateBody` encoding) that a
+/// receive commit makes durable: `6 ‖ RouteUpdateBody` of exactly the first `RelayQueue` route — the only route the hub
+/// follows (`Hub::register_route`). 157..=446 bytes: a `RelayRef` of 101 bytes, or 137 + a host of 1..=253 with `direct`
+/// (spec §5.3, D.5). `None`: no `RelayQueue` route, nothing to journal.
+///
+/// # Errors
+/// [`SourceError`] if `routes` does not decode or the route does not encode.
+pub fn journal_row(routes: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, SourceError> {
+    use secmp_proto::Decode as _;
+    let body = RouteUpdateBody::decode(routes).map_err(|_| SourceError)?;
+    let Some(first) = body
+        .routes
+        .into_iter()
+        .find(|r| matches!(r, RouteDescriptor::RelayQueue(_)))
+    else {
+        return Ok(None);
+    };
+    let one = RouteUpdateBody {
+        routes: vec![first],
+    }
+    .encode()
+    .map_err(|_| SourceError)?;
+    let mut row = Zeroizing::new(Vec::with_capacity(one.len().saturating_add(1)));
+    row.push(JOURNAL_TAG);
+    row.extend_from_slice(&one);
+    Ok(Some(row))
+}
+
+/// RJ: the routes body of a journal row (a `RouteUpdateBody` of one `RelayQueue` route, what `Hub::register_route`
+/// takes); `Ok(None)` for a row of another tag. Strict: the body decodes, holds exactly one route, of kind `RelayQueue`,
+/// and re-encodes to the same bytes (canonical).
+///
+/// # Errors
+/// [`SourceError`] for a journal row that does not decode.
+pub fn journal_of(row: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>, SourceError> {
+    use secmp_proto::Decode as _;
+    let Some((&JOURNAL_TAG, body)) = row.split_first() else {
+        return Ok(None);
+    };
+    let decoded = RouteUpdateBody::decode(body).map_err(|_| SourceError)?;
+    if !matches!(decoded.routes.as_slice(), [RouteDescriptor::RelayQueue(_)]) {
+        return Err(SourceError);
+    }
+    let again = decoded.encode().map_err(|_| SourceError)?;
+    // the body holds a send seed: compared in constant time (CLAUDE.md §1.6)
+    if !bool::from(secmp_crypto::ConstantTimeEq::ct_eq(again.as_slice(), body)) {
+        return Err(SourceError);
+    }
+    Ok(Some(again))
+}
+
+/// Q251, Q255 (M7 FZ, Q272): what a row of a session's CONTROL part is at an open — a `KeyChange`'s marker (tag 4), an old
+/// send queue's overlap (tag 5), a route journal entry (tag 6, RJ) or a control content (tags 1–3).
+pub enum ControlRow {
+    /// The marker of the `KeyChange` at `key_change` on the physical send queue `sid` ([`marker_of`]).
+    Marker {
+        /// The `ord` of the `KeyChange`'s row.
+        key_change: i64,
+        /// The queue's sender id.
+        sid: Id,
+    },
+    /// An old send queue's overlap ([`overlap_of`]).
+    Overlap(OverlapRoute),
+    /// RJ: a route a receive commit made durable and the hub has not applied yet ([`journal_of`]: its routes body).
+    Journal(Zeroizing<Vec<u8>>),
+    /// A control content ([`PendingControl::decode`]).
+    Pending(PendingControl),
+}
+
+/// Q251, Q255 (M7 FZ, Q272): the class of a CONTROL row as an open reads it — a marker, else an overlap, else a journal
+/// entry (RJ), else a content; the four decoders accept disjoint tags. Strict like each of them.
+///
+/// # Errors
+/// [`SourceError`] for a row that none of them decodes, or that the one for its tag refuses.
+pub fn control_row_of(row: &[u8]) -> Result<ControlRow, SourceError> {
+    if let Some((key_change, sid)) = marker_of(row)? {
+        return Ok(ControlRow::Marker { key_change, sid });
+    }
+    if let Some(route) = overlap_of(row)? {
+        return Ok(ControlRow::Overlap(route));
+    }
+    if let Some(body) = journal_of(row)? {
+        return Ok(ControlRow::Journal(body));
+    }
+    PendingControl::decode(row).map(ControlRow::Pending)
+}
+
+/// Q252: an old send queue's overlap and its row.
+struct Overlap {
+    route: OverlapRoute,
+    /// The queue of this process; `None`: read at open and not registered again — its row goes at the next preparation.
+    queue: Option<QueueId>,
+    /// Its row; `None`: not written yet, or this durability keeps no rows.
+    ord: Option<i64>,
+    /// The row is still to be written (a failed write is tried again at the next preparation).
+    unwritten: bool,
+}
+
+/// Q240: a `KeyChange` (row tag 3).
+fn is_key_change(row: &[u8]) -> bool {
+    row.first() == Some(&3)
+}
+
+/// Q244 (ADR-060 (5)): whether the content `id` may be planned. Only the head of a conversation's chain of durable
+/// `KeyChange`s is: one behind an older live one (lower id: added earlier, and at an open in the rows' `ord` order, which
+/// the row seal authenticates) waits until that one's row is gone and its entry dropped, so `KC_{n+1}` is never sent
+/// while a copy of `KC_n` may still reach the peer (ADR-058: the peer keeps one previous identity). The in-memory
+/// `KeyChange` of the test kit (Q245) is outside the chain.
+fn plannable(controls: &BTreeMap<u64, ControlEntry>, id: u64) -> bool {
+    let chained = |e: &ControlEntry| is_key_change(&e.row) && e.durable;
+    controls
+        .get(&id)
+        .is_some_and(|e| !chained(e) || !controls.range(..id).any(|(_, o)| chained(o)))
+}
+
+/// How long a succession may stay pending towards one contact before [`SessionEvent::SuccessionPending`] is raised
+/// (ADR-060 (6), Q246): 24 h, monotonic ms of the conversation's preparations.
+pub const SUCCESSION_WARN_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// A control content that is durable from the commit that makes its effect durable until the last cell's `OK_SEND`
+/// (Q210 c, Q222): the rotation's `RouteUpdate`, the `KeyChange` of an identity rotation, the `Control{1|2}` of a removal or
+/// a reset. Its row (the store's CONTROL part, sealed) is `tag u8 ‖ body`: 1 `RouteUpdateBody`, 2 `ControlBody` (no
+/// argument), 3 `KeyChangeBody` — the bodies in their wire encodings; the decoding is strict. Tag 4 is a `KeyChange`'s
+/// marker (Q248, [`marker_of`]), tag 5 an old send queue's overlap (Q252, [`overlap_of`]), not a content.
+pub enum PendingControl {
+    /// A `RouteUpdate`.
+    Routes(RouteUpdateBody),
+    /// A `Control` without an argument.
+    Control(ControlCode),
+    /// A `KeyChange`, signed by the old `IK_sig`.
+    KeyChange(KeyChangeBody),
+}
+
+impl PendingControl {
+    /// The row of this content.
+    ///
+    /// # Errors
+    /// [`SourceError`] if the body does not encode.
+    pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, SourceError> {
+        let (tag, body) = match self {
+            Self::Routes(b) => (1, b.encode()),
+            Self::Control(code) => (
+                2,
+                secmp_proto::wire::cell::ControlBody {
+                    code: *code,
+                    arg: Zeroizing::new(Vec::new()),
+                }
+                .encode(),
+            ),
+            Self::KeyChange(b) => (3, b.encode()),
+        };
+        let body = body.map_err(|_| SourceError)?;
+        let mut out = Zeroizing::new(Vec::with_capacity(body.len().saturating_add(1)));
+        out.push(tag);
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+
+    /// The content of a row.
+    ///
+    /// # Errors
+    /// [`SourceError`] for an unknown tag, a body that does not decode, or a `Control` with an argument.
+    pub fn decode(row: &[u8]) -> Result<Self, SourceError> {
+        use secmp_proto::Decode as _;
+        let (tag, body) = row.split_first().ok_or(SourceError)?;
+        match tag {
+            1 => Ok(Self::Routes(
+                RouteUpdateBody::decode(body).map_err(|_| SourceError)?,
+            )),
+            2 => {
+                let control =
+                    secmp_proto::wire::cell::ControlBody::decode(body).map_err(|_| SourceError)?;
+                if control.arg.is_empty() {
+                    Ok(Self::Control(control.code))
+                } else {
+                    Err(SourceError)
+                }
+            }
+            3 => Ok(Self::KeyChange(
+                KeyChangeBody::decode(body).map_err(|_| SourceError)?,
+            )),
+            _ => Err(SourceError),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Sent {
+    owner: Owner,
+    total: u16,
+    /// The send queue it was prepared for (`None`: a dummy of a queue in send overlap).
+    queue: Option<QueueId>,
+}
+
+/// ADR-054 items 1 and 3 (EXTB2-3): an `AppMessage` of kind 1 (text) or 3 (view-once text) whose payload is
+/// well-formed UTF-8 of 1 … [`super::MESSAGE_MAX`] bytes without U+0000; kinds 2, 4, 5 and 6 are not defined for M7. The
+/// `Api` refuses what fails here; a receiver drops it (the cell is committed and acknowledged, spec §9.3).
+pub(crate) fn app_payload_ok(kind: AppKind, payload: &[u8]) -> bool {
+    matches!(kind, AppKind::Text | AppKind::ViewOnceText)
+        && (1..=super::MESSAGE_MAX).contains(&payload.len())
+        && !payload.contains(&0)
+        && core::str::from_utf8(payload).is_ok()
+}
+
+/// Q225 (CLAUDE.md §1.7): a cell of a durable control content whose row is not in the store waits.
+fn row_missing(controls: &BTreeMap<u64, ControlEntry>, owner: &Owner) -> bool {
+    matches!(owner, Owner::Control(c) if controls.get(&c.id).is_some_and(|e| e.durable && e.ord.is_none()))
+}
+
+/// Q248 (CLAUDE.md §1.7): a cell of a durable `KeyChange` waits while no marker names the send queue `marking` (the
+/// current one, when its `sid` is known) it would be sealed for.
+fn unmarked(
+    controls: &BTreeMap<u64, ControlEntry>,
+    owner: &Owner,
+    marking: Option<QueueId>,
+) -> bool {
+    matches!(owner, Owner::Control(c) if controls.get(&c.id).is_some_and(|e| {
+        e.durable
+            && is_key_change(&e.row)
+            && marking.is_some_and(|q| !e.markers.iter().any(|m| m.queue == Some(q)))
+    }))
+}
+
+/// The largest number of ids in one receipt: `2 + 16·n ≤ 1689` (spec §7.6).
+const RECEIPT_IDS_MAX: usize = 100;
+
+/// The ratchet state of a new session in its parts, as the session's rows hold them (CS-3.7): the accept transaction of an
+/// invitation writes them through the `sessions` functions of the store (B-3, F-M7). The only `RatchetState` call outside
+/// a conversation.
+///
+/// # Errors
+/// [`PersistError`] if the state does not serialise.
+pub fn initial_parts(state: &RatchetState) -> Result<RatchetParts, PersistError> {
+    state.to_parts().map_err(|_| PersistError)
+}
+
+/// The shortest `T_RS`: 24 h in ms.
+pub const T_RS_MIN_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// `T_RS` (spec §10.4; OPEN-M7-07, a reading that is not normative; Q159, D-B4): after how long a relayed message without
+/// a receipt is reported as not confirmed — `max(24 h, 2 · QUEUE_CAPACITY · P_q)` from the `OK_SEND`, a function of the
+/// send period `P_q` of the queue in ms. Once per `msg_id`; only for contacts that send receipts.
+#[must_use]
+pub fn receipt_timeout_ms(period_ms: u64) -> u64 {
+    let queue = u64::try_from(secmp_proto::link::QUEUE_CAPACITY).unwrap_or(u64::MAX);
+    T_RS_MIN_MS.max(queue.saturating_mul(2).saturating_mul(period_ms))
+}
+
+/// What a received cell told the session beyond its messages (taken with [`Conversation::take_events`], after the cell's
+/// commit): the host applies it to the contact (routes, key change, removal, reset) and to the user interface.
+pub enum SessionEvent {
+    /// A `RouteUpdate`: the routes of a known kind (0x01), already persisted with the receive commit.
+    Routes(Vec<RouteDescriptor>),
+    /// A verified `KeyChange` (spec §7.7): the peer's new identity; the trust is now `KeyChanged` and real sends are held.
+    KeyChanged(Box<IksPublic>),
+    /// An unverifiable `KeyChange`: the session is frozen.
+    KeyChangeInvalid,
+    /// `Control{ContactRemoved}` without an argument (ADR-054 item 4).
+    ContactRemoved,
+    /// `Control{SessionResetRequest}` without an argument (spec §7.6 code 2; ADR-054 item 4, EXTB2-2).
+    ResetRequested,
+    /// A message was relayed and no receipt came within `T_RS` (spec §10.4; OPEN-M7-07 A): not re-sent.
+    NotConfirmed(MsgId),
+    /// ADR-060 (6), Q246: an identity succession towards this contact has been pending for [`SUCCESSION_WARN_MS`], or two
+    /// or more are pending; raised once until no `KeyChange` is left. It changes nothing: no timeout, no skip, no
+    /// re-invitation (owner-reserved, ADR-060 (7)).
+    SuccessionPending,
+    /// The last cell of a real message had its `OK_SEND` (M7-C2): the relay holds it.
+    Relayed(MsgId),
+    /// A `Receipt{delivered}` for a message of ours was committed (M7-C2).
+    Delivered(MsgId),
+    /// The `OK_SEND` that settles the `KeyChange` content towards this contact (M7-C2, Q222 (2)).
+    KeyChangeSent,
+}
+
+/// Why real content is refused at the one send entry ([`Conversation::may_send_real`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The trust forbids it (`KeyChanged`, `Frozen`).
+    Trust,
+    /// The peer removed us.
+    Removed,
+    /// A session reset was asked for (either side).
+    Reset,
+    /// An initiator holds real content until the first reply of the responder is decrypted (spec §6.5; IN-15).
+    AwaitingReply,
+}
+
+/// The block byte of the session's trust row for `block` (0 none, 1 `Removed`, 2 `Reset`; Q210 b): `None` for a refusal
+/// that is not a block.
+#[must_use]
+pub const fn block_code(block: Refusal) -> Option<u8> {
+    match block {
+        Refusal::Removed => Some(1),
+        Refusal::Reset => Some(2),
+        Refusal::Trust | Refusal::AwaitingReply => None,
+    }
+}
+
+/// The block of a stored block byte (`Some(None)`: none); `None` for an unknown byte.
+#[must_use]
+pub const fn block_of(code: u8) -> Option<Option<Refusal>> {
+    match code {
+        0 => Some(None),
+        1 => Some(Some(Refusal::Removed)),
+        2 => Some(Some(Refusal::Reset)),
+        _ => None,
+    }
+}
+
+/// One conversation (see the module documentation).
+pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
+    state: Option<RatchetState>,
+    durable: Zeroizing<Vec<u8>>,
+    send_queue: Option<QueueId>,
+    recv_queue: Option<QueueId>,
+    /// The queues we sent to before the peer's `RouteUpdate` moved us to a new one: they carry dummies only until they are
+    /// dropped (spec §10.6 (4)).
+    overlap_send: Vec<QueueId>,
+    /// The queues we receive on besides the current one: the ones in overlap, fetched until their `QUEUE_DEL`.
+    overlap_recv: Vec<QueueId>,
+    outbox: O,
+    persist: P,
+    source: S,
+    plan: VecDeque<Planned>,
+    /// The control contents until their last `OK_SEND` (Q222), by their conversation-local id.
+    controls: BTreeMap<u64, ControlEntry>,
+    next_control: u64,
+    inflight: BTreeMap<u64, Sent>,
+    by_cell: BTreeMap<u64, Sent>,
+    relayed_cells: BTreeMap<MsgId, u16>,
+    next_token: u64,
+    next_seq: u64,
+    unix_base: u64,
+    /// The latest `now_ms` of a preparation (the time a delivered message is stamped with, V1-F4).
+    last_now_ms: u64,
+    inbox: Inbox,
+    trust: Trust,
+    peer: HybridVerifyingKey,
+    /// The identity the contact row holds (`IK_sig` of it is `peer`), when the host knows it (ADR-058).
+    peer_iks: Option<IksPublic>,
+    /// The `IK_sig` before the last accepted `KeyChange`: a repeat of that `KeyChange` verifies under it (ADR-058).
+    prev_peer: Option<HybridVerifyingKey>,
+    seen: BTreeSet<MsgId>,
+    received: Vec<Received>,
+    receipts_due: Vec<MsgId>,
+    send_receipts: bool,
+    discarded: u64,
+    block: Option<Refusal>,
+    /// An initiator's three handshake cells still to send (byte-identical to the persisted ones, §6.5), and whether the
+    /// first reply is still awaited (Q150).
+    handshake_out: VecDeque<Vec<u8>>,
+    awaiting_first_reply: bool,
+    events: Vec<SessionEvent>,
+    /// When (monotonic ms) each relayed message was relayed, until its receipt (SE-13b).
+    relayed_at: BTreeMap<MsgId, u64>,
+    notified: BTreeSet<MsgId>,
+    /// `T_RS` in ms; 0: no confirmation timeout (the host sets it from the queue's period).
+    receipt_timeout_ms: u64,
+    /// ADR-054 items 1 and 3 at delivery (EXTB2-3): on in every constructor; off only through the test kit's
+    /// `raw_app_payloads_kat`.
+    app_rules: bool,
+    /// Q246: while a `KeyChange` of this conversation is live — the first preparation (monotonic ms) that saw one since
+    /// none was left, and whether [`SessionEvent::SuccessionPending`] was raised since.
+    succession: Option<(u64, bool)>,
+    /// Q248: the physical queue (`sid`) of the latest send queue the host registered, with that queue.
+    send_sid: Option<(QueueId, Id)>,
+    /// Q248: marker rows read at open that name no live `KeyChange`: deleted at the next preparation; also the rows of
+    /// dropped overlaps whose delete failed (Q252).
+    orphans: Vec<i64>,
+    /// Q252: the send queues in overlap whose end is durable, and the overlap rows read at open.
+    overlaps: Vec<Overlap>,
+    /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
+    #[cfg(feature = "kat")]
+    mk_digests: Vec<[u8; 32]>,
+}
+
+impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+    /// A conversation over `state`; `peer` is the contact's `IK_sig` (key changes), `unix_base` the Unix time at
+    /// monotonic 0 (the `ts` field of a Content).
+    ///
+    /// # Panics
+    /// Never; a state that does not serialise starts with an empty durable copy.
+    #[must_use]
+    pub fn new(
+        state: RatchetState,
+        outbox: O,
+        persist: P,
+        source: S,
+        peer: HybridVerifyingKey,
+        unix_base: u64,
+    ) -> Self {
+        let durable = state
+            .to_bytes()
+            .unwrap_or_else(|_| Zeroizing::new(Vec::new()));
+        Self {
+            state: Some(state),
+            durable,
+            send_queue: None,
+            recv_queue: None,
+            overlap_send: Vec::new(),
+            overlap_recv: Vec::new(),
+            outbox,
+            persist,
+            source,
+            plan: VecDeque::new(),
+            controls: BTreeMap::new(),
+            next_control: 0,
+            inflight: BTreeMap::new(),
+            by_cell: BTreeMap::new(),
+            relayed_cells: BTreeMap::new(),
+            next_token: 0,
+            next_seq: 1,
+            unix_base,
+            last_now_ms: 0,
+            inbox: Inbox::new(),
+            trust: Trust::Verified,
+            peer,
+            peer_iks: None,
+            prev_peer: None,
+            seen: BTreeSet::new(),
+            received: Vec::new(),
+            receipts_due: Vec::new(),
+            send_receipts: true,
+            discarded: 0,
+            block: None,
+            handshake_out: VecDeque::new(),
+            awaiting_first_reply: false,
+            events: Vec::new(),
+            relayed_at: BTreeMap::new(),
+            notified: BTreeSet::new(),
+            receipt_timeout_ms: 0,
+            app_rules: true,
+            succession: None,
+            send_sid: None,
+            orphans: Vec::new(),
+            overlaps: Vec::new(),
+            #[cfg(feature = "kat")]
+            mk_digests: Vec::new(),
+        }
+    }
+
+    /// A conversation over the durable state `parts` (a session's rows, CS-3.7): the ratchet state is rebuilt from them,
+    /// the reassembly state and the trust restored. `RatchetState::from_parts` is called here only (SE-18).
+    ///
+    /// # Errors
+    /// [`SourceError`] if the parts are not a ratchet state or the inbox does not decode.
+    pub fn from_parts(
+        parts: &RatchetParts,
+        inbox: Option<&[u8]>,
+        trust: Trust,
+        (outbox, persist, source): (O, P, S),
+        peer: HybridVerifyingKey,
+        unix_base: u64,
+    ) -> Result<Self, SourceError> {
+        let state = RatchetState::from_parts(parts).map_err(|_| SourceError)?;
+        let mut conversation = Self::new(state, outbox, persist, source, peer, unix_base);
+        conversation.trust = trust;
+        if let Some(bytes) = inbox {
+            conversation.inbox = Inbox::from_bytes(bytes).map_err(|_| SourceError)?;
+        }
+        Ok(conversation)
+    }
+
+    /// Plan a control content of the session (not a user message) as one cell of `owner`: it is sealed on a coming slot
+    /// like every cell, through the same path; it is not held by the trust or by a reset (a reset request is sent from
+    /// `Frozen`, SE-15), but it waits for the first reply of an initiator (IN-15, Q210 e).
+    fn plan_control(&mut self, body: ContentBody, owner: Owner) {
+        let seq = self.take_seq();
+        let ts = self.ts(self.last_now_ms);
+        self.plan.push_back(Planned {
+            content: Content { seq, ts, body },
+            owner,
+            total: 1,
+        });
+    }
+
+    /// Announce `routes` to the peer (`RouteUpdate`, spec §9.8, §10.6 (5)), in memory only — test kit (Q226); the
+    /// product's `RouteUpdate`s are durable ([`Conversation::queue_pending`]). A body that does not encode is not planned.
+    #[cfg(any(test, feature = "kat"))]
+    pub fn queue_route_update(&mut self, routes: Vec<RouteDescriptor>) {
+        self.add_control(PendingControl::Routes(RouteUpdateBody { routes }), None)
+            .ok();
+    }
+
+    /// Send `Control{code}` without an argument (spec §7.6 codes 1 and 2; ADR-054 item 4), in memory only (see
+    /// [`Conversation::queue_pending`]). A body that does not encode is not planned.
+    pub fn queue_control(&mut self, code: ControlCode) {
+        self.add_control(PendingControl::Control(code), None).ok();
+    }
+
+    /// Announce a new identity (`KeyChange`, spec §7.7): 5390 bytes, always fragmented, signed by the old `IK_sig`; in
+    /// memory only and outside the succession chain — test kit (Q245, as Q226); the product's `KeyChange`s are durable
+    /// ([`Conversation::queue_pending`]) and chained (Q244).
+    ///
+    /// # Errors
+    /// [`SourceError`] without randomness for the message id or if the body does not encode.
+    #[cfg(any(test, feature = "kat"))]
+    pub fn queue_key_change(&mut self, body: KeyChangeBody) -> Result<(), SourceError> {
+        self.add_control(PendingControl::KeyChange(body), None)
+    }
+
+    /// Plan the pending control content stored at `ord` (Q210 c, Q222): planned as a `RouteUpdate`,
+    /// [`Conversation::queue_control`] or `queue_key_change` plan it; its row lives until the last cell's `OK_SEND` and
+    /// goes at the next preparation. The host calls this after the commit that wrote the row, and on open for every row; a
+    /// `KeyChange` behind a live one waits for it (Q244).
+    ///
+    /// # Errors
+    /// [`SourceError`] if the body does not encode (a failed plan keeps a durable content, Q240).
+    pub fn queue_pending(&mut self, ord: i64, content: PendingControl) -> Result<(), SourceError> {
+        self.add_control(content, Some(ord))
+    }
+
+    /// The marker row at `ord` (Q248), read at open after the rows before it: it joins the `KeyChange` read from the row
+    /// at `key_change`; it holds that `KeyChange` until the host registers a send queue of `sid` (Q249, Q253). A marker
+    /// that names no live `KeyChange` row is deleted at the next preparation.
+    pub fn restore_marker(&mut self, ord: i64, key_change: i64, sid: Id) {
+        match self
+            .controls
+            .values_mut()
+            .find(|e| e.ord == Some(key_change) && is_key_change(&e.row))
+        {
+            Some(e) => e.markers.push(Marker {
+                sid,
+                ord: Some(ord),
+                queue: None,
+            }),
+            None => self.orphans.push(ord),
+        }
+    }
+
+    /// The send queue `queue` the host registers next is the physical queue `sid` (Q248); called before
+    /// [`Conversation::set_send_queue`] or [`Conversation::switch_send_queue`]. At every registration (Q253, not only the
+    /// first of the process as Q249 had it) a marker read at open that names `sid` belongs to `queue`: a copy that was
+    /// stored there before the restart has a lower id than every cell sent now, so it takes, as a cell of unknown outcome,
+    /// the id of the first `OK_SEND` there of a later cell (Q249); every other marker read at open keeps holding its
+    /// `KeyChange`.
+    pub fn set_send_sid(&mut self, queue: QueueId, sid: Id) {
+        self.adopt(queue, sid, 0, true);
+        self.send_sid = Some((queue, sid));
+    }
+
+    /// Q249, Q253, Q254: every marker read at open that names `sid` belongs to the queue `queue` the host registers for
+    /// `sid` now; its `KeyChange` is marked on `queue` with the copies that may be there: one of id up to `newest` (> 0)
+    /// as stranded, one of unknown id (`unknown`) as of unknown outcome, which takes the id of the first later `OK_SEND`
+    /// there (Q241, Q250).
+    fn adopt(&mut self, queue: QueueId, sid: Id, newest: u64, unknown: bool) {
+        for e in self.controls.values_mut() {
+            let mut adopted = false;
+            for m in e
+                .markers
+                .iter_mut()
+                .filter(|m| m.queue.is_none() && m.sid == sid)
+            {
+                m.queue = Some(queue);
+                adopted = true;
+            }
+            if adopted {
+                if newest > 0 {
+                    e.stranded.push((queue, newest));
+                }
+                if unknown {
+                    e.unknown.push((queue, 0));
+                }
+            }
+        }
+    }
+
+    /// Q252 (B17b-3, OPEN-M7-B-27): the host switched away from the send queue `old` — the physical queue `sid` with the
+    /// sender seed `seed` and the period `period` — and keeps it in overlap until `until_ms` (Unix ms, drawn at the
+    /// switch). The overlap is written as a CONTROL row now, before the first preparation for the new queue, so that a
+    /// restart registers `old` again until that end (Q253); a failed write is tried again at every preparation. The row
+    /// also names the newest id of a `KeyChange` copy that may be on `old` and whether one of unknown id may be there
+    /// (Q254) — the state at the switch: no `KeyChange` cell goes to `old` after it, and a cell on its way counts as one
+    /// of unknown id.
+    pub fn keep_overlap(
+        &mut self,
+        old: QueueId,
+        sid: Id,
+        seed: SecretBytes<32>,
+        period: Period,
+        until_ms: u64,
+    ) {
+        let (newest, unknown) = self.copies_on(old);
+        self.overlaps.push(Overlap {
+            route: OverlapRoute {
+                sid,
+                seed,
+                period,
+                until_ms,
+                newest,
+                unknown,
+            },
+            queue: Some(old),
+            ord: None,
+            unwritten: true,
+        });
+        self.write_overlaps();
+    }
+
+    /// RJ (Q254, Q280): the copies the overlap row of the current send queue `old` names when the host switches away from
+    /// it now — [`Conversation::copies_on`] after [`Conversation::switch_send_queue`] would mark the `KeyChange` cells
+    /// among `old`'s last `QUEUE_CAPACITY` cells stranded (Q241), computed before the switch so that the row is durable
+    /// before anything changes (CLAUDE.md §1.7).
+    #[must_use]
+    pub fn copies_at_switch(&self, old: QueueId) -> (u64, bool) {
+        let (mut newest, unknown) = self.copies_on(old);
+        if self.send_queue == Some(old) {
+            for (cell_id, sent) in self.by_cell.range(self.switch_floor()..) {
+                if let Owner::Control(c) = sent.owner
+                    && self
+                        .controls
+                        .get(&c.id)
+                        .is_some_and(|e| is_key_change(&e.row))
+                {
+                    newest = newest.max(*cell_id);
+                }
+            }
+        }
+        (newest, unknown)
+    }
+
+    /// RJ (Q280): the host switched away from the send queue `old` and wrote its overlap row at `ord` itself, in one store
+    /// transaction with the new current route and the journal entry's delete, before the switch: the overlap is kept as
+    /// written (no retry, no second row).
+    pub fn overlap_written(&mut self, old: QueueId, route: OverlapRoute, ord: i64) {
+        self.overlaps.push(Overlap {
+            route,
+            queue: Some(old),
+            ord: Some(ord),
+            unwritten: false,
+        });
+    }
+
+    /// The first cell id of the current send queue whose cell may still wait there after a switch: the newest minus
+    /// `QUEUE_CAPACITY − 1` (Q241, Q238).
+    fn switch_floor(&self) -> u64 {
+        let newest = self.by_cell.keys().next_back().copied().unwrap_or(0);
+        newest.saturating_sub(
+            u64::try_from(secmp_proto::link::QUEUE_CAPACITY.saturating_sub(1)).unwrap_or(0),
+        )
+    }
+
+    /// Q254: the newest id on `queue` that a `KeyChange` copy may have (its stranded marks), and whether a copy of unknown
+    /// id may be there (a mark of unknown outcome, or a `KeyChange` cell still on its way to `queue`).
+    fn copies_on(&self, queue: QueueId) -> (u64, bool) {
+        let mut newest = 0;
+        let mut unknown = false;
+        for (id, e) in &self.controls {
+            for (q, n) in &e.stranded {
+                if *q == queue {
+                    newest = newest.max(*n);
+                }
+            }
+            let on_its_way = self.inflight.values().any(|s| {
+                s.queue == Some(queue) && matches!(s.owner, Owner::Control(c) if c.id == *id)
+            });
+            if e.unknown.iter().any(|(q, _)| *q == queue) || (is_key_change(&e.row) && on_its_way) {
+                unknown = true;
+            }
+        }
+        (newest, unknown)
+    }
+
+    /// Q252: write the overlap rows not written yet; a failed write stays for the next preparation.
+    fn write_overlaps(&mut self) {
+        for o in self.overlaps.iter_mut().filter(|o| o.unwritten) {
+            if let Ok(ord) = self.persist.control_requeued(&o.route.row()) {
+                o.ord = ord;
+                o.unwritten = false;
+            }
+        }
+    }
+
+    /// B17c (Q265): the host lengthens the overlap of the old send queue `queue` to end at `until_ms` (Unix ms; its floor,
+    /// Q264). The row with the new end is written before the row it replaces goes — a crash between leaves both, and the
+    /// restart takes the later end of a `sid` (Q265); a failed delete is tried again at the next preparation. `None`: no
+    /// overlap of `queue` here; `Some(true)`: the end `until_ms` or a later one is durable (or kept in memory only, by a
+    /// persistence without rows); `Some(false)`: the write failed — the row and the end stay as they were, the host tries
+    /// again. An end is never shortened.
+    pub fn extend_overlap(&mut self, queue: QueueId, until_ms: u64) -> Option<bool> {
+        let o = self.overlaps.iter_mut().find(|o| o.queue == Some(queue))?;
+        if o.unwritten {
+            // not durable yet: the row is written with the later end (Q256)
+            o.route.until_ms = o.route.until_ms.max(until_ms);
+            self.write_overlaps();
+            return Some(
+                self.overlaps
+                    .iter()
+                    .any(|o| o.queue == Some(queue) && !o.unwritten),
+            );
+        }
+        if o.route.until_ms >= until_ms {
+            return Some(true);
+        }
+        let Ok(mut route) = o.route.copy() else {
+            return Some(false);
+        };
+        route.until_ms = until_ms;
+        let Ok(ord) = self.persist.control_requeued(&route.row()) else {
+            return Some(false);
+        };
+        if let Some(old) = core::mem::replace(&mut o.ord, ord)
+            && self.persist.control_relayed(old).is_err()
+        {
+            self.orphans.push(old);
+        }
+        o.route = route;
+        Some(true)
+    }
+
+    /// Q252: the overlap row at `ord`, read at open. The host registers its queue again while its end is ahead
+    /// ([`Conversation::resume_overlap`], Q253); a row it does not register goes at the next preparation.
+    pub fn restore_overlap(&mut self, ord: i64, route: OverlapRoute) {
+        self.overlaps.push(Overlap {
+            route,
+            queue: None,
+            ord: Some(ord),
+            unwritten: false,
+        });
+    }
+
+    /// Q253: the overlaps read at open and not registered again (copies, in `ord` order), for the host.
+    ///
+    /// # Errors
+    /// [`SourceError`] if a seed does not copy.
+    pub fn overlaps_read(&self) -> Result<Vec<OverlapRoute>, SourceError> {
+        self.overlaps
+            .iter()
+            .filter(|o| o.queue.is_none())
+            .map(|o| o.route.copy())
+            .collect()
+    }
+
+    /// Q253: the host registered `queue` again, in send overlap, for the overlap rows read at open that name `sid`: the
+    /// queue carries dummies until the host drops it (spec §10.6 (4)); a marker read at open that names `sid` belongs to it,
+    /// with the copies the rows name (Q254).
+    pub fn resume_overlap(&mut self, queue: QueueId, sid: Id) {
+        let mut newest = 0;
+        let mut unknown = false;
+        for o in self
+            .overlaps
+            .iter_mut()
+            .filter(|o| o.queue.is_none() && o.route.sid == sid)
+        {
+            o.queue = Some(queue);
+            newest = newest.max(o.route.newest);
+            unknown |= o.route.unknown;
+        }
+        self.overlap_send.push(queue);
+        self.adopt(queue, sid, newest, unknown);
+    }
+
+    /// The current send queue, when its `sid` is known (Q248).
+    fn marking(&self) -> Option<QueueId> {
+        self.send_sid
+            .and_then(|(q, _)| (Some(q) == self.send_queue).then_some(q))
+    }
+
+    /// Q248 (persist-before-send): before a cell of a durable `KeyChange` is sealed for the current send queue, a marker
+    /// row names that queue's `sid`; a failed write leaves the cell waiting ([`unmarked`]) and is tried again at the next
+    /// preparation.
+    fn write_markers(&mut self) {
+        let (Some(queue), Some((_, sid))) = (self.marking(), self.send_sid) else {
+            return;
+        };
+        let planned: BTreeSet<u64> = self
+            .plan
+            .iter()
+            .filter_map(|p| match p.owner {
+                Owner::Control(c) => Some(c.id),
+                _ => None,
+            })
+            .collect();
+        for id in planned {
+            let Some(e) = self.controls.get_mut(&id) else {
+                continue;
+            };
+            if !e.durable
+                || !is_key_change(&e.row)
+                || e.markers.iter().any(|m| m.queue == Some(queue))
+            {
+                continue;
+            }
+            // its own row first (Q225): the marker names it by its `ord`
+            let Some(key_change) = e.ord else {
+                continue;
+            };
+            if let Ok(ord) = self.persist.control_requeued(&marker_row(key_change, &sid)) {
+                e.markers.push(Marker {
+                    sid,
+                    ord,
+                    queue: Some(queue),
+                });
+            }
+        }
+    }
+
+    /// Whether a `KeyChange` of this conversation is live: unplanned, planned, on the way, relayed and still in the eviction
+    /// window of its cells, or possibly stranded on an old send queue (Q222, Q240, Q241, OPEN-M7-B-12). Its durable row
+    /// lives as long, so an open rebuilds this from the rows.
+    #[must_use]
+    pub fn key_change_in_flight(&self) -> bool {
+        self.controls.values().any(|e| is_key_change(&e.row))
+    }
+
+    /// How many `KeyChange`s of this conversation are live: the head of its succession chain and the links that wait behind
+    /// it (Q244, ADR-060 (4), (5)).
+    #[must_use]
+    pub fn successions_pending(&self) -> usize {
+        self.controls
+            .values()
+            .filter(|e| is_key_change(&e.row))
+            .count()
+    }
+
+    /// Keep `content` as a control content until its last `OK_SEND` and plan its first attempt (Q222 (1); spec §9.5,
+    /// §10.6). `ord` is its durable row.
+    fn add_control(
+        &mut self,
+        content: PendingControl,
+        ord: Option<i64>,
+    ) -> Result<(), SourceError> {
+        let row = content.encode()?;
+        if matches!(content, PendingControl::Routes(_)) {
+            self.retire_routes();
+        }
+        let id = self.next_control;
+        self.next_control = self.next_control.saturating_add(1);
+        self.controls.insert(
+            id,
+            ControlEntry {
+                row,
+                ord,
+                durable: ord.is_some(),
+                attempt: 0,
+                total: 0,
+                relayed: 0,
+                done: false,
+                retired: false,
+                stranded: Vec::new(),
+                unknown: Vec::new(),
+                markers: Vec::new(),
+            },
+        );
+        if !plannable(&self.controls, id) {
+            // Q244: a later link of the chain waits for the head (`settle_controls` plans it when the head is gone)
+            return Ok(());
+        }
+        match self.plan_content(ControlRef { id, attempt: 0 }, content) {
+            Ok(total) => {
+                if let Some(e) = self.controls.get_mut(&id) {
+                    e.total = total;
+                }
+                Ok(())
+            }
+            Err(_) if ord.is_some() => {
+                // Q240 (OPEN-M7-B-19): a durable content stays without cells (`total` 0; a `KeyChange` keeps the guard)
+                // and is planned at the next preparation
+                Ok(())
+            }
+            Err(e) => {
+                // an in-memory content that cannot be planned is not kept
+                self.controls.remove(&id);
+                Err(e)
+            }
+        }
+    }
+
+    /// Q240: plan the current attempt of the entry `id` that has no planned cells.
+    fn plan_unplanned(&mut self, id: u64) {
+        let Some(entry) = self.controls.get(&id) else {
+            return;
+        };
+        let r = ControlRef {
+            id,
+            attempt: entry.attempt,
+        };
+        if let Ok(total) = PendingControl::decode(&entry.row).and_then(|c| self.plan_content(r, c))
+            && let Some(e) = self.controls.get_mut(&id)
+        {
+            e.total = total;
+        }
+    }
+
+    /// Q224 (spec §7.6 docs/03:502, §10.6 (5)): a `RouteUpdate` replaces the routes by which the peer reaches us — every
+    /// Routes entry already kept is retired before the newer one is planned.
+    fn retire_routes(&mut self) {
+        let ids: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|(_, e)| e.row.first() == Some(&1))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.plan
+                .retain(|p| !matches!(p.owner, Owner::Control(c) if c.id == id));
+            let Some(e) = self.controls.get_mut(&id) else {
+                continue;
+            };
+            e.retired = true;
+            if let Some(o) = e.ord
+                && self.persist.control_relayed(o).is_ok()
+            {
+                e.ord = None;
+            }
+            if e.ord.is_none() {
+                self.controls.remove(&id);
+            }
+        }
+    }
+
+    /// Plan the cells of the attempt `r` of `content`; returns how many (a `RouteUpdate` and a `Control` take one cell).
+    fn plan_content(&mut self, r: ControlRef, content: PendingControl) -> Result<u16, SourceError> {
+        match content {
+            PendingControl::Routes(body) => {
+                self.plan_control(ContentBody::RouteUpdate(body), Owner::Control(r));
+                Ok(1)
+            }
+            PendingControl::Control(code) => {
+                self.plan_control(
+                    ContentBody::Control(secmp_proto::wire::cell::ControlBody {
+                        code,
+                        arg: Zeroizing::new(Vec::new()),
+                    }),
+                    Owner::Control(r),
+                );
+                Ok(1)
+            }
+            PendingControl::KeyChange(body) => self.plan_key_change(body, Owner::Control(r)),
+        }
+    }
+
+    /// Plan the attempt `r` of a control content once more (Q222 (3), spec §9.5, §10.6): an outcome of a superseded attempt
+    /// or of a retired `RouteUpdate` (Q224) plans nothing; else every cell of the content is sealed anew under a new
+    /// attempt, and a durable content whose row went writes it again (its cells wait until it is written, Q225).
+    fn replan_control(&mut self, r: ControlRef) {
+        // a link that waits in its chain has nothing planned to plan again (Q244)
+        if !plannable(&self.controls, r.id) {
+            return;
+        }
+        let Some(entry) = self.controls.get_mut(&r.id) else {
+            return;
+        };
+        if entry.retired || entry.attempt != r.attempt {
+            return;
+        }
+        entry.attempt = entry.attempt.saturating_add(1);
+        entry.relayed = 0;
+        entry.done = false;
+        if entry.ord.is_none() && entry.durable {
+            match self.persist.control_requeued(&entry.row) {
+                Ok(Some(o)) => entry.ord = Some(o),
+                // this durability keeps no rows (MemPersist without mirror)
+                Ok(None) => entry.durable = false,
+                // retried at the next prepare; its cells wait (Q225)
+                Err(_) => {}
+            }
+        }
+        let attempt = entry.attempt;
+        let content = PendingControl::decode(&entry.row);
+        self.plan
+            .retain(|p| !matches!(p.owner, Owner::Control(c) if c.id == r.id));
+        // a content that does not plan is planned at the next preparation (Q240)
+        let planned = content.and_then(|c| self.plan_content(ControlRef { id: r.id, attempt }, c));
+        if let Some(e) = self.controls.get_mut(&r.id) {
+            match planned {
+                Ok(total) => e.total = total,
+                Err(_) => e.total = 0,
+            }
+        }
+    }
+
+    /// Settle the control contents before the next seal (Q222 (2); the scheduler reports an `OK_SEND` as `relayed`, then
+    /// the evictions it names, so a row goes only at the next preparation): a durable content planned again whose row
+    /// could not be written again writes it now; the row of a content whose cells all have their `OK_SEND` goes (a
+    /// failed delete is tried again at the next preparation); a settled content is dropped once no cell of its current
+    /// attempt is in the eviction window; the row of a retired `RouteUpdate` (Q224) goes the same way, and the entry is
+    /// dropped once its row is gone; the row of a newer `RouteUpdate` stays while a retired one still holds its row
+    /// (Q230: a crash in between must not leave the older row alone).
+    ///
+    /// A `KeyChange` keeps its row and its entry until no copy can reach the peer any more (Q240, Q241): every cell of its
+    /// current attempt has its `OK_SEND`, none of them is in the eviction window, and no copy is stranded on an old send
+    /// queue. Its row then goes, and the entry with it — so a restart before that re-reads the row (one more copy, a no-op at
+    /// the peer, ADR-058), and a restart after it re-sends nothing.
+    fn settle_controls(&mut self) {
+        let by_cell = &self.by_cell;
+        let windowed = |id: u64, e: &ControlEntry| {
+            by_cell.values().any(
+                |s| matches!(s.owner, Owner::Control(c) if c.id == id && c.attempt == e.attempt),
+            )
+        };
+        let held =
+            |id: u64, e: &ControlEntry| is_key_change(&e.row) && (windowed(id, e) || e.marked());
+        let retired_row = self.controls.values().any(|e| e.retired && e.ord.is_some());
+        let (inflight, send) = (&self.inflight, self.send_queue);
+        for (id, e) in &mut self.controls {
+            let id = *id;
+            // Q248: the marker of an old send queue goes once no copy of this content can be there: no mark on it and no
+            // cell on its way to it
+            let ControlEntry {
+                markers,
+                stranded,
+                unknown,
+                ..
+            } = &mut *e;
+            markers.retain(|m| {
+                let Some(q) = m.queue.filter(|q| Some(*q) != send) else {
+                    return true;
+                };
+                let gone = !stranded.iter().chain(unknown.iter()).any(|(s, _)| *s == q)
+                    && !inflight.values().any(|s| {
+                        s.queue == Some(q) && matches!(s.owner, Owner::Control(c) if c.id == id)
+                    });
+                !(gone
+                    && m.ord
+                        .is_none_or(|o| self.persist.control_relayed(o).is_ok()))
+            });
+            if !e.done && e.durable && e.ord.is_none() {
+                match self.persist.control_requeued(&e.row) {
+                    Ok(Some(o)) => e.ord = Some(o),
+                    // this durability keeps no rows (MemPersist without mirror)
+                    Ok(None) => e.durable = false,
+                    // retried at the next prepare; its cells wait (Q225)
+                    Err(_) => {}
+                }
+            }
+            if (e.retired
+                || (e.done && !held(id, e) && !(retired_row && e.row.first() == Some(&1))))
+                && let Some(o) = e.ord
+                && {
+                    // Q248: its markers before its row — a crash in between leaves no marker without its `KeyChange`
+                    e.markers.retain(|m| {
+                        m.ord
+                            .is_some_and(|o| self.persist.control_relayed(o).is_err())
+                    });
+                    e.markers.is_empty()
+                }
+                && self.persist.control_relayed(o).is_ok()
+            {
+                e.ord = None;
+            }
+        }
+        self.orphans
+            .retain(|o| self.persist.control_relayed(*o).is_err());
+        // Q253: an overlap read at open that the host did not register again has ended: its row goes (a failed delete is
+        // tried again at the next preparation)
+        self.overlaps.retain(|o| {
+            o.queue.is_some()
+                || o.ord
+                    .is_some_and(|ord| self.persist.control_relayed(ord).is_err())
+        });
+        self.controls.retain(|id, e| {
+            if e.retired {
+                e.ord.is_some()
+            } else {
+                !e.done || e.ord.is_some() || windowed(*id, e) || e.marked()
+            }
+        });
+        // after the drop above, so the next link of a chain whose head just went is planned for this very slot (Q244)
+        let unplanned: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|(id, e)| e.total == 0 && !e.retired && plannable(&self.controls, **id))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in unplanned {
+            self.plan_unplanned(id);
+        }
+    }
+
+    /// Q246 (ADR-060 (6)): raise [`SessionEvent::SuccessionPending`] once when a succession has been pending for
+    /// [`SUCCESSION_WARN_MS`] since the first preparation that saw it, or when two or more are pending; reset once no
+    /// `KeyChange` is left. Nothing else changes.
+    fn note_succession(&mut self, now_ms: u64) {
+        let pending = self.successions_pending();
+        if pending == 0 {
+            self.succession = None;
+            return;
+        }
+        let (since, warned) = self.succession.get_or_insert((now_ms, false));
+        if !*warned && (pending >= 2 || now_ms.saturating_sub(*since) >= SUCCESSION_WARN_MS) {
+            *warned = true;
+            self.events.push(SessionEvent::SuccessionPending);
+        }
+    }
+
+    fn plan_key_change(&mut self, body: KeyChangeBody, owner: Owner) -> Result<u16, SourceError> {
+        let id: MsgId = *self
+            .source
+            .entropy()
+            .secret::<16>()
+            .map_err(|_| SourceError)?
+            .expose_secret();
+        let bytes = FragmentPayload::KeyChange(body)
+            .encode()
+            .map_err(|_| SourceError)?;
+        let chunks = split_chunks(&bytes);
+        let total = u16::try_from(chunks.len()).map_err(|_| SourceError)?;
+        let owners = core::iter::repeat_n(owner, chunks.len());
+        for ((idx, chunk), owner) in chunks.into_iter().enumerate().zip(owners) {
+            let seq = self.take_seq();
+            let ts = self.ts(self.last_now_ms);
+            self.plan.push_back(Planned {
+                content: Content {
+                    seq,
+                    ts,
+                    body: ContentBody::Fragment(Fragment {
+                        msg_id: id,
+                        idx: u16::try_from(idx).map_err(|_| SourceError)?,
+                        total,
+                        chunk: Zeroizing::new(chunk.to_vec()),
+                    }),
+                },
+                owner,
+                total,
+            });
+        }
+        Ok(total)
+    }
+
+    /// This conversation is an initiator's that has not heard from the responder yet: the three handshake cells go out
+    /// first, on the slots of the invitation queue, byte for byte as persisted (§6.5, IN-14); until the first reply is
+    /// decrypted every other cell is a dummy (IN-15).
+    pub fn queue_handshake(&mut self, cells: &[Cell; 3]) {
+        self.handshake_out = cells.iter().map(|c| c.as_bytes().to_vec()).collect();
+        self.awaiting_first_reply = true;
+    }
+
+    /// Whether the first reply of the responder is still awaited.
+    #[must_use]
+    pub const fn awaiting_first_reply(&self) -> bool {
+        self.awaiting_first_reply
+    }
+
+    /// The trust changed outside a received cell (the user verified the safety number, or a key change was re-verified).
+    ///
+    /// A frozen session stays frozen (spec §7.7, §7.8): only a new invitation helps, no call here un-freezes it.
+    pub fn set_trust(&mut self, trust: Trust) {
+        if self.trust != Trust::Frozen {
+            self.trust = trust;
+        }
+    }
+
+    /// Test kit only: this conversation delivers the M6/M7 harness payloads ADR-054 items 1 and 3 drop (binary, NUL,
+    /// empty, over 16 KiB, kinds 2, 4, 5, 6); not in a product build (ADR-054, CLAUDE.md §1.5).
+    #[cfg(any(test, feature = "kat"))]
+    pub const fn raw_app_payloads_kat(&mut self) {
+        self.app_rules = false;
+    }
+
+    /// The identity the contact row holds (`current`, whose `IK_sig` is the conversation's peer key) and the `IK_sig` the
+    /// contact had before its last accepted `KeyChange` (`previous`): a `KeyChange` naming `current` and signed by
+    /// `previous` is the accepted succession again and changes nothing (ADR-058, spec §7.7).
+    pub fn set_peer_identity(&mut self, current: IksPublic, previous: Option<HybridVerifyingKey>) {
+        self.peer_iks = Some(current);
+        self.prev_peer = previous;
+    }
+
+    /// `T_RS` of this conversation in ms (0: none).
+    pub const fn set_receipt_timeout_ms(&mut self, ms: u64) {
+        self.receipt_timeout_ms = ms;
+    }
+
+    /// The session was reset or the contact removed us: real content is refused (dummies go on).
+    pub const fn mark_removed(&mut self) {
+        self.block = Some(Refusal::Removed);
+    }
+
+    /// A session reset was asked for.
+    pub const fn mark_reset(&mut self) {
+        self.block = Some(Refusal::Reset);
+    }
+
+    /// The block of this session (`Removed`, `Reset`), restored from its trust row or set by a request.
+    pub const fn restore_block(&mut self, block: Option<Refusal>) {
+        if block.is_some() {
+            self.block = block;
+        }
+    }
+
+    /// The one entry through which real content (a message, a fragment, a receipt) reaches a cell: `Ok` if it may be
+    /// sealed now. SE-17 (F29): everything that is not a dummy asks here, and [`Conversation::seal`] is the only seal.
+    ///
+    /// # Errors
+    /// [`Refusal`] naming why not.
+    pub const fn may_send_real(&self) -> Result<(), Refusal> {
+        if let Some(why) = self.block {
+            Err(why)
+        } else if !self.trust.may_send_real() {
+            Err(Refusal::Trust)
+        } else if self.awaiting_first_reply {
+            Err(Refusal::AwaitingReply)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The events of the cells received since the last call (see [`SessionEvent`]).
+    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+        core::mem::take(&mut self.events)
+    }
+
+    /// The process died and restarted from `durable` (a serialised ratchet state, e.g. `MemPersist::durable`): what was in
+    /// flight — planned cells, tokens, the cell-id map — is gone, a message that was being sent is waiting again
+    /// ([`Outbox::restart`]); the outbox, the delivered messages, the queues and the trust survive.
+    ///
+    /// # Errors
+    /// [`SourceError`] if `durable` is not a ratchet state.
+    pub fn restart_from(mut self, durable: &[u8]) -> Result<Self, SourceError> {
+        let state = RatchetState::from_bytes(durable).map_err(|_| SourceError)?;
+        self.outbox.restart();
+        self.state = Some(state);
+        self.durable = Zeroizing::new(durable.to_vec());
+        self.plan.clear();
+        self.controls.clear();
+        self.inflight.clear();
+        self.by_cell.clear();
+        self.relayed_cells.clear();
+        Ok(self)
+    }
+
+    /// The messages already delivered by an earlier run (the history of the store): the dedup set after a restart.
+    pub fn seed_seen(&mut self, ids: impl IntoIterator<Item = MsgId>) {
+        self.seen.extend(ids);
+    }
+
+    /// The scheduler queues of this conversation.
+    pub const fn bind(&mut self, send: QueueId, recv: QueueId) {
+        self.send_queue = Some(send);
+        self.recv_queue = Some(recv);
+    }
+
+    /// Replace the queue we send to (the same queue re-created, or a route update).
+    pub const fn set_send_queue(&mut self, send: QueueId) {
+        self.send_queue = Some(send);
+    }
+
+    /// Replace the queue we receive on.
+    pub const fn set_recv_queue(&mut self, recv: QueueId) {
+        self.recv_queue = Some(recv);
+    }
+
+    /// A rotation made `new` the queue we receive on; the previous one stays in overlap, its cells are this conversation's
+    /// until [`Conversation::drop_recv_queue`] (spec §10.6 (4)).
+    pub fn rotate_recv_queue(&mut self, new: QueueId) {
+        if let Some(old) = self.recv_queue.replace(new)
+            && old != new
+            && !self.overlap_recv.contains(&old)
+        {
+            self.overlap_recv.push(old);
+        }
+    }
+
+    /// The overlap queue `queue` is gone (its `QUEUE_DEL` ran).
+    pub fn drop_recv_queue(&mut self, queue: QueueId) {
+        self.overlap_recv.retain(|q| *q != queue);
+        if self.recv_queue == Some(queue) {
+            self.recv_queue = None;
+        }
+    }
+
+    /// The peer's `RouteUpdate` moved us to the queue `new` (spec §10.6 (4)): the old queue carries dummies only from now on
+    /// ([`Conversations`] prepares those), and every real message among the last `QUEUE_CAPACITY` cells sent on it goes
+    /// back to the outbox, to be sent again on the new queue — the receiver deduplicates by `msg_id` — and every control
+    /// content that is not retired and either has a cell of its current attempt without `OK_SEND` or one among those last
+    /// `QUEUE_CAPACITY` cells (settled, but stranded on the old queue) is planned again for the new queue (Q222 (3), Q-5,
+    /// Q238): a row that went is written again before its cells are sealed (Q225), a repeated `KeyChange` is a no-op at the
+    /// peer (ADR-058), a repeated `RouteUpdate` registers nothing there (Q222, Q236).
+    /// Returns how many messages were requeued.
+    pub fn switch_send_queue(&mut self, new: QueueId) -> usize {
+        let previous = self.send_queue.replace(new);
+        if let Some(old) = previous
+            && old != new
+            && !self.overlap_send.contains(&old)
+        {
+            self.overlap_send.push(old);
+        }
+        let floor = self.switch_floor();
+        let ids: BTreeSet<MsgId> = self
+            .by_cell
+            .range(floor..)
+            .filter_map(|(_, sent)| match &sent.owner {
+                Owner::Message(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let stranded: Vec<ControlRef> = self
+            .by_cell
+            .range(floor..)
+            .filter_map(|(_, sent)| match sent.owner {
+                Owner::Control(c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        // Q241 (D-B72): a `KeyChange` cell among the old queue's last QUEUE_CAPACITY cells may still be fetched from there
+        if let Some(old) = previous.filter(|old| *old != new) {
+            let cells: Vec<(u64, u64)> = self
+                .by_cell
+                .range(floor..)
+                .filter_map(|(cell_id, sent)| match sent.owner {
+                    Owner::Control(c) => Some((c.id, *cell_id)),
+                    _ => None,
+                })
+                .collect();
+            for (id, cell_id) in cells {
+                self.mark_stranded(id, old, cell_id);
+            }
+        }
+        for id in &ids {
+            self.outbox.requeue(id);
+        }
+        // a cell still in flight on the old queue only drops its token (overlap branch): without this re-plan an
+        // unsettled control content would never settle (§10.6 (4), Q222 (3)); a settled one whose cells are among the old
+        // queue's last QUEUE_CAPACITY cells is not known to be fetched, and the old queue's evictions are not reported
+        // back (Q238)
+        let open: Vec<ControlRef> = self
+            .controls
+            .iter()
+            .map(|(id, e)| {
+                let r = ControlRef {
+                    id: *id,
+                    attempt: e.attempt,
+                };
+                // a retired `RouteUpdate` is not planned again (`replan_control`, Q224)
+                (r, !e.done || stranded.contains(&r))
+            })
+            .filter_map(|(r, again)| again.then_some(r))
+            .collect();
+        for r in open {
+            self.replan_control(r);
+        }
+        // the new queue numbers its cells from 1
+        self.by_cell.clear();
+        ids.len()
+    }
+
+    /// Q241: the `KeyChange` entry `id` may have its cell `cell_id` waiting on the old send queue `queue`.
+    fn mark_stranded(&mut self, id: u64, queue: QueueId, cell_id: u64) {
+        if let Some(e) = self.controls.get_mut(&id)
+            && is_key_change(&e.row)
+        {
+            e.stranded.push((queue, cell_id));
+        }
+    }
+
+    /// `OK_SEND` of the cell `cell_id` on `queue`, a queue in send overlap (Q241): a `KeyChange` cell that was on the way
+    /// there at the switch is marked stranded; a stranded cell `QUEUE_CAPACITY` or more ids older has left that queue
+    /// (fetched or evicted, spec §9.5).
+    fn on_overlap_relayed(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
+        if let Some(Sent {
+            owner: Owner::Control(c),
+            ..
+        }) = self.inflight.remove(&token.0)
+        {
+            self.mark_stranded(c.id, queue, cell_id);
+        }
+        self.count_stranded(queue, token, cell_id);
+    }
+
+    /// An `OK_SEND` of `cell_id` for the cell of `token` on `queue` (Q241): a cell of unknown outcome (see
+    /// [`Conversation::on_unknown_send`]) prepared before this one takes this id — it was written to `queue` earlier, and
+    /// the relay numbers a queue's cells in the order they arrive, so if it was stored it has a lower one (an answer to a
+    /// cell prepared before it, handed over after the failure, names no id for it); a mark `QUEUE_CAPACITY` or more ids
+    /// older has left the queue (fetched or evicted, spec §9.5).
+    fn count_stranded(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
+        let capacity = u64::try_from(secmp_proto::link::QUEUE_CAPACITY).unwrap_or(u64::MAX);
+        for e in self.controls.values_mut() {
+            let before = e.unknown.len();
+            e.unknown.retain(|(q, t)| *q != queue || *t >= token.0);
+            if e.unknown.len() < before {
+                // Q250: a `SEND` still on its way on a dropped link may arrive after this one
+                e.stranded
+                    .push((queue, cell_id.saturating_add(IN_FLIGHT_MARGIN)));
+            }
+            e.stranded
+                .retain(|(q, stranded)| *q != queue || cell_id < stranded.saturating_add(capacity));
+        }
+    }
+
+    /// The `SEND` of `token` on `queue` ended without an answer (`SendFailure::Unknown`: the link went down first): the
+    /// relay may have stored the cell under an id not known here, so a `KeyChange` cell is marked on `queue` until an
+    /// `OK_SEND` there of a cell prepared after it names an id for it (Q241).
+    fn on_unknown_send(&mut self, queue: QueueId, token: CellToken) {
+        if let Some(Sent {
+            owner: Owner::Control(c),
+            ..
+        }) = self.inflight.get(&token.0)
+            && let Some(e) = self.controls.get_mut(&c.id)
+            && is_key_change(&e.row)
+        {
+            e.unknown.push((queue, token.0));
+        }
+    }
+
+    /// The queue `queue` (in send overlap, or the current one) is gone at the relay (`ERR_NOQUEUE`): no copy waits there
+    /// any more (Q241).
+    fn on_overlap_lost(&mut self, queue: QueueId) {
+        for e in self.controls.values_mut() {
+            e.stranded.retain(|(q, _)| *q != queue);
+            e.unknown.retain(|(q, _)| *q != queue);
+        }
+    }
+
+    /// The old queue `queue` is no longer sent to. A `KeyChange` copy marked stranded there stays marked (Q241): nothing
+    /// shows that it has left the queue. A `KeyChange` cell still on its way there gets no answer any more: it is marked
+    /// as of unknown outcome, for good (Q250). Its overlap row goes (Q252; a failed delete is tried again at the next
+    /// preparation).
+    pub fn drop_send_queue(&mut self, queue: QueueId) {
+        self.overlap_send.retain(|q| *q != queue);
+        for o in self.overlaps.iter().filter(|o| o.queue == Some(queue)) {
+            if let Some(ord) = o.ord
+                && self.persist.control_relayed(ord).is_err()
+            {
+                self.orphans.push(ord);
+            }
+        }
+        self.overlaps.retain(|o| o.queue != Some(queue));
+        let open: Vec<(u64, u64)> = self
+            .inflight
+            .iter()
+            .filter_map(|(token, s)| match s.owner {
+                Owner::Control(c) if s.queue == Some(queue) => Some((*token, c.id)),
+                _ => None,
+            })
+            .collect();
+        for (token, id) in open {
+            if let Some(e) = self.controls.get_mut(&id)
+                && is_key_change(&e.row)
+            {
+                e.unknown.push((queue, token));
+            }
+        }
+    }
+
+    /// The queue we receive on and the ones in overlap (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn recv_queues_kat(&self) -> (Option<QueueId>, Vec<QueueId>) {
+        (self.recv_queue, self.overlap_recv.clone())
+    }
+
+    /// `T_RS` of this conversation in ms (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub const fn receipt_timeout_ms_kat(&self) -> u64 {
+        self.receipt_timeout_ms
+    }
+
+    /// The queue we send to and the ones in send overlap (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn send_queues_kat(&self) -> (Option<QueueId>, Vec<QueueId>) {
+        (self.send_queue, self.overlap_send.clone())
+    }
+
+    /// Whether receipts are sent (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub const fn send_receipts_kat(&self) -> bool {
+        self.send_receipts
+    }
+
+    /// Receipts on or off (on by default for verified contacts, spec §10.4).
+    pub const fn set_send_receipts(&mut self, on: bool) {
+        self.send_receipts = on;
+    }
+
+    /// The outbox.
+    #[must_use]
+    pub const fn outbox(&self) -> &O {
+        &self.outbox
+    }
+
+    /// The outbox, mutable (the application enqueues here).
+    pub const fn outbox_mut(&mut self) -> &mut O {
+        &mut self.outbox
+    }
+
+    /// The durability.
+    #[must_use]
+    pub const fn persist(&self) -> &P {
+        &self.persist
+    }
+
+    /// The durability, mutable (failure injection).
+    pub const fn persist_mut(&mut self) -> &mut P {
+        &mut self.persist
+    }
+
+    /// The randomness.
+    pub const fn source_mut(&mut self) -> &mut S {
+        &mut self.source
+    }
+
+    /// The messages delivered to the application, in order.
+    #[must_use]
+    pub fn received(&self) -> &[Received] {
+        &self.received
+    }
+
+    /// The messages delivered to the application since the last call; the application stores them (the `Api` writes the
+    /// history, or holds a view-once in memory).
+    pub fn take_received(&mut self) -> Vec<Received> {
+        core::mem::take(&mut self.received)
+    }
+
+    /// The trust in the contact's identity (a key change moves it).
+    #[must_use]
+    pub const fn trust(&self) -> Trust {
+        self.trust
+    }
+
+    /// Messages in reassembly (fragments received, message not complete).
+    #[must_use]
+    pub fn partials(&self) -> usize {
+        self.inbox.partials()
+    }
+
+    /// Cells discarded because they did not decrypt.
+    #[must_use]
+    pub const fn discarded(&self) -> u64 {
+        self.discarded
+    }
+
+    /// Receipts waiting for a slot.
+    #[must_use]
+    pub fn receipts_due(&self) -> usize {
+        self.receipts_due.len()
+    }
+
+    /// Whether something real waits for a slot: a planned cell, a queued message, a receipt (a control cell held for its
+    /// durable row, Q225, counts as waiting).
+    #[must_use]
+    pub fn has_pending_real(&self) -> bool {
+        !self.plan.is_empty()
+            || self.outbox.waiting() > 0
+            || (self.send_receipts && !self.receipts_due.is_empty())
+    }
+
+    /// How many cell ids are mapped to what they carried (S-32).
+    #[must_use]
+    pub fn mapped_cells(&self) -> usize {
+        self.by_cell.len()
+    }
+
+    /// SHA-256 of the message key of every cell this conversation sealed — real, dummy, receipt, including cells that
+    /// were never written — in sealing order (feature `kat`): the sender's side of the H-12 method (no key used twice).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn message_key_digests_kat(&self) -> &[[u8; 32]] {
+        &self.mk_digests
+    }
+
+    /// The last durable ratchet state.
+    #[must_use]
+    pub fn durable(&self) -> &[u8] {
+        &self.durable
+    }
+
+    fn ts(&self, now_ms: u64) -> u64 {
+        self.unix_base
+            .saturating_add(now_ms.checked_div(1000).unwrap_or(0))
+    }
+
+    fn take_seq(&mut self) -> u64 {
+        let s = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        s
+    }
+
+    /// Break a message into the contents of its cells: one Batch if it fits a Content, else Fragments of the Batch
+    /// (spec §7.6).
+    fn plan_message(&mut self, message: &OutMessage, now_ms: u64) {
+        let id = message.msg_id;
+        let batch = BatchBody {
+            messages: vec![AppMessage {
+                msg_id: message.msg_id,
+                kind: message.kind,
+                expire_after: message.expire_after,
+                payload: Zeroizing::new(message.payload.to_vec()),
+            }],
+        };
+        let ts = self.ts(now_ms);
+        let fits = batch
+            .encode()
+            .is_ok_and(|b| b.len() <= secmp_proto::sizes::CONTENT_BODY_MAX);
+        if fits {
+            let seq = self.take_seq();
+            self.plan.push_back(Planned {
+                content: Content {
+                    seq,
+                    ts,
+                    body: ContentBody::Batch(batch),
+                },
+                owner: Owner::Message(id),
+                total: 1,
+            });
+            return;
+        }
+        let Ok(bytes) = FragmentPayload::Batch(batch).encode() else {
+            self.outbox.relayed(&id, 0);
+            return;
+        };
+        let chunks = split_chunks(&bytes);
+        let total = u16::try_from(chunks.len()).unwrap_or(u16::MAX);
+        for (idx, chunk) in chunks.into_iter().enumerate() {
+            let seq = self.take_seq();
+            self.plan.push_back(Planned {
+                content: Content {
+                    seq,
+                    ts,
+                    body: ContentBody::Fragment(Fragment {
+                        msg_id: id,
+                        idx: u16::try_from(idx).unwrap_or(u16::MAX),
+                        total,
+                        chunk: Zeroizing::new(chunk.to_vec()),
+                    }),
+                },
+                owner: Owner::Message(id),
+                total,
+            });
+        }
+    }
+
+    fn plan_receipt(&mut self, now_ms: u64) {
+        let take = self.receipts_due.len().min(RECEIPT_IDS_MAX);
+        let ids: Vec<MsgId> = self.receipts_due.drain(..take).collect();
+        let seq = self.take_seq();
+        let ts = self.ts(now_ms);
+        self.plan.push_back(Planned {
+            content: Content {
+                seq,
+                ts,
+                body: ContentBody::Receipt(ReceiptBody {
+                    kind: ReceiptKind::Delivered,
+                    msg_ids: ids.clone(),
+                }),
+            },
+            owner: Owner::Receipt(ids),
+            total: 1,
+        });
+    }
+
+    /// The one place a cell is sealed: `encrypt`, then persist-before-send. `Err` leaves the durable state as it was.
+    fn seal(&mut self, content: &Content) -> Result<Cell, SourceError> {
+        let state = match self.state.take() {
+            Some(s) => s,
+            None => RatchetState::from_bytes(&self.durable).map_err(|_| SourceError)?,
+        };
+        counters::note_encrypt("Conversation::seal");
+        let sealed = match state.encrypt_with(content, self.source.entropy()) {
+            Ok(sealed) => sealed,
+            Err(refused) => {
+                self.state = Some(refused.into_state());
+                return Err(SourceError);
+            }
+        };
+        #[cfg(feature = "kat")]
+        let digest = sealed.message_key_digest_kat();
+        let new_durable = &mut self.durable;
+        let persist = &mut self.persist;
+        let result = sealed.persist(|bytes| {
+            counters::note_persist();
+            let ratchet = RatchetParts::split(bytes).map_err(|_| PersistError)?;
+            persist.commit_parts(
+                PersistKind::Send,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: None,
+                    trust: None,
+                    block: None,
+                    identity: None,
+                    previous_identity: None,
+                    delivered: &[],
+                    receipted: &[],
+                    routes: None,
+                    clear_handshake: false,
+                },
+            )?;
+            *new_durable = Zeroizing::new(bytes.to_vec());
+            Ok::<(), PersistError>(())
+        });
+        if let Ok((state, cell)) = result {
+            // a key counts as used once its state is durable: a cell that was never persisted was never released
+            #[cfg(feature = "kat")]
+            self.mk_digests.push(digest);
+            self.state = Some(state);
+            Ok(cell)
+        } else {
+            // the new state was dropped: the durable one is the truth
+            self.state = RatchetState::from_bytes(&self.durable).ok();
+            Err(SourceError)
+        }
+    }
+
+    /// Put an owner back where it came from (a cell that did not make it).
+    fn restore(&mut self, owner: &Owner) {
+        match owner {
+            Owner::Message(id) => {
+                self.relayed_cells.remove(id);
+                // the rest of the message has no use alone
+                self.plan
+                    .retain(|p| !matches!(&p.owner, Owner::Message(m) if m == id));
+                self.outbox.requeue(id);
+            }
+            Owner::Receipt(ids) => {
+                for id in ids.iter().rev() {
+                    self.receipts_due.insert(0, *id);
+                }
+            }
+            Owner::Dummy => {}
+            Owner::Handshake(bytes) => self.handshake_out.push_front(bytes.clone()),
+            // the whole content again (Q222 (3))
+            Owner::Control(r) => self.replan_control(*r),
+        }
+    }
+}
+
+impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+    /// Build the next cell of this conversation (what the scheduler's cell source does for the send queue), for
+    /// callers that drive a conversation by hand.
+    ///
+    /// # Errors
+    /// [`SourceError`] if the new state could not be persisted: no cell leaves.
+    pub fn prepare_direct(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        self.prepare(now_ms)
+    }
+
+    /// Decide a received cell of this conversation (what the scheduler's `deliver` does), for callers that drive a
+    /// conversation by hand: decrypted, processed, committed — then it counts as decided.
+    ///
+    /// # Errors
+    /// [`SourceError`] if the new state could not be committed: nothing is decided, the cell comes again.
+    pub fn deliver_direct(&mut self, cell: &Cell) -> Result<(), SourceError> {
+        self.on_deliver(cell)
+    }
+
+    /// `OK_SEND` for the cell of `token` (what the scheduler's `relayed` does), for callers that drive a conversation by
+    /// hand.
+    pub fn relayed_direct(&mut self, token: CellToken, cell_id: u64) {
+        self.on_relayed(token, cell_id);
+    }
+
+    /// Plan `body` as session content without a durable row (tests only: a content the product never plans).
+    #[cfg(test)]
+    pub(crate) fn queue_raw_content_test(&mut self, body: ContentBody) {
+        self.plan_control(body, Owner::Dummy);
+    }
+
+    /// The relay evicted the cell `cell_id` (what the scheduler's `evicted` does; tests only).
+    #[cfg(test)]
+    pub(crate) fn evicted_direct(&mut self, cell_id: u64) {
+        self.on_evicted(cell_id);
+    }
+
+    /// The queue we send to was lost (what the scheduler's `queue_lost` does; tests only).
+    #[cfg(test)]
+    pub(crate) fn lost_direct(&mut self) {
+        self.on_lost();
+    }
+
+    /// How many control contents are kept (tests only).
+    #[cfg(test)]
+    pub(crate) fn live_controls_test(&self) -> usize {
+        self.controls.len()
+    }
+
+    /// The `SEND` of the cell of `token` failed or was discarded (what the scheduler's `send_failed` and `discard` do;
+    /// tests only).
+    #[cfg(test)]
+    pub(crate) fn failed_direct(&mut self, token: CellToken) {
+        self.on_failed(token);
+    }
+
+    /// A dummy for a queue in send overlap: sealed by the same path as every cell, never real content and never a handshake
+    /// cell (spec §10.6 (4): "only dummies on the old queue").
+    fn prepare_overlap(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        self.last_now_ms = self.last_now_ms.max(now_ms);
+        let cell = self.seal(&dummy())?;
+        let token = self.next_token;
+        self.next_token = self.next_token.saturating_add(1);
+        self.inflight.insert(
+            token,
+            Sent {
+                owner: Owner::Dummy,
+                total: 1,
+                queue: None,
+            },
+        );
+        Ok(PreparedCell::committed(cell, CellToken(token)))
+    }
+
+    fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        // the rows of control contents whose cells all have their `OK_SEND` go before the next seal (Q222 (2))
+        self.settle_controls();
+        self.write_overlaps(); // Q252: an overlap row whose write failed, before the next seal
+        self.last_now_ms = self.last_now_ms.max(now_ms);
+        self.outbox.expire(now_ms);
+        self.note_unconfirmed(now_ms);
+        self.note_succession(now_ms);
+        self.write_markers();
+        let marking = self.marking();
+        // an initiator's handshake cells go first, as persisted (they are already sealed and durable, §6.5)
+        if let Some(bytes) = self.handshake_out.pop_front() {
+            let cell = Cell::from_bytes(&bytes).map_err(|_| SourceError)?;
+            let token = self.next_token;
+            self.next_token = self.next_token.saturating_add(1);
+            self.inflight.insert(
+                token,
+                Sent {
+                    owner: Owner::Handshake(bytes),
+                    total: 1,
+                    queue: self.send_queue,
+                },
+            );
+            return Ok(PreparedCell::committed(cell, CellToken(token)));
+        }
+        // SE-17 per cell (Q210 e): planned real content — a message's fragments, a receipt — is sealed only while real
+        // sends are allowed; a trust or a block that changed since it was planned holds it again
+        if matches!(
+            self.may_send_real(),
+            Err(Refusal::Trust | Refusal::Removed | Refusal::Reset)
+        ) {
+            self.hold_planned_real();
+        }
+        let sendable = self.plan.iter().position(|p| {
+            !row_missing(&self.controls, &p.owner) && !unmarked(&self.controls, &p.owner, marking)
+        });
+        if sendable.is_none() && self.may_send_real().is_ok() {
+            if self.send_receipts && !self.receipts_due.is_empty() {
+                self.plan_receipt(now_ms);
+            } else if let Some(message) = self.outbox.take_next() {
+                self.plan_message(&message, now_ms);
+            }
+        }
+        // until the first reply of the responder only dummies: control content waits too (IN-15)
+        let next = if self.awaiting_first_reply {
+            None
+        } else {
+            self.plan
+                .iter()
+                .position(|p| {
+                    !row_missing(&self.controls, &p.owner)
+                        && !unmarked(&self.controls, &p.owner, marking)
+                })
+                .and_then(|i| self.plan.remove(i))
+        };
+        let from_plan = next.is_some();
+        let planned = next.unwrap_or(Planned {
+            content: dummy(),
+            owner: Owner::Dummy,
+            total: 1,
+        });
+        match self.seal(&planned.content) {
+            Ok(cell) => {
+                let token = self.next_token;
+                self.next_token = self.next_token.saturating_add(1);
+                self.inflight.insert(
+                    token,
+                    Sent {
+                        owner: planned.owner,
+                        total: planned.total,
+                        queue: self.send_queue,
+                    },
+                );
+                Ok(PreparedCell::committed(cell, CellToken(token)))
+            }
+            Err(e) => {
+                // control content goes back to the front; a message or a receipt to where it came from
+                if from_plan && matches!(planned.owner, Owner::Control(_) | Owner::Dummy) {
+                    self.plan.push_front(planned);
+                } else {
+                    self.restore(&planned.owner);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// The planned messages and receipts go back to the outbox and the due receipts (held while real sends are refused,
+    /// Q210 e); control content stays planned.
+    fn hold_planned_real(&mut self) {
+        let mut held: Vec<Owner> = Vec::new();
+        for p in &self.plan {
+            let seen = match &p.owner {
+                Owner::Message(id) => held
+                    .iter()
+                    .any(|o| matches!(o, Owner::Message(m) if m == id)),
+                Owner::Receipt(_) => false,
+                Owner::Dummy | Owner::Handshake(_) | Owner::Control(_) => true,
+            };
+            if !seen {
+                held.push(p.owner.clone());
+            }
+        }
+        self.plan.retain(|p| {
+            matches!(
+                p.owner,
+                Owner::Dummy | Owner::Handshake(_) | Owner::Control(_)
+            )
+        });
+        for owner in held.iter().rev() {
+            self.restore(owner);
+        }
+    }
+}
+
+impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+    fn on_relayed(&mut self, token: CellToken, cell_id: u64) {
+        let Some(sent) = self.inflight.remove(&token.0) else {
+            return;
+        };
+        if let Owner::Message(id) = &sent.owner {
+            let done = self.relayed_cells.entry(*id).or_insert(0);
+            *done = done.saturating_add(1);
+            if *done >= sent.total {
+                self.relayed_cells.remove(id);
+                self.outbox.relayed(id, cell_id);
+                self.relayed_at.insert(*id, self.last_now_ms);
+                self.events.push(SessionEvent::Relayed(*id));
+            }
+        }
+        // a cell of the current attempt of a control content: done once all its cells have their `OK_SEND` (Q222 (2));
+        // a superseded attempt counts nothing
+        let mut key_change_settled = false;
+        if let Owner::Control(r) = &sent.owner
+            && let Some(e) = self.controls.get_mut(&r.id)
+            && e.attempt == r.attempt
+        {
+            e.relayed = e.relayed.saturating_add(1);
+            if e.relayed >= e.total && !e.done {
+                e.done = true;
+                // the row is `tag ‖ body`; tag 3 is a `KeyChange` (see `PendingControl`)
+                key_change_settled = e.row.first() == Some(&3);
+            }
+        }
+        if key_change_settled {
+            self.events.push(SessionEvent::KeyChangeSent);
+        }
+        self.by_cell.insert(cell_id, sent);
+        // an evicted id is always among the newest `QUEUE_CAPACITY`: older entries are dead weight
+        let floor = cell_id.saturating_sub(256);
+        self.by_cell = self.by_cell.split_off(&floor);
+        if let Some(queue) = self.send_queue {
+            self.count_stranded(queue, token, cell_id);
+        }
+    }
+
+    fn on_evicted(&mut self, cell_id: u64) {
+        if let Some(sent) = self.by_cell.remove(&cell_id) {
+            self.restore(&sent.owner);
+        }
+    }
+
+    fn on_failed(&mut self, token: CellToken) {
+        if let Some(sent) = self.inflight.remove(&token.0) {
+            self.restore(&sent.owner);
+        }
+    }
+
+    fn on_lost(&mut self) {
+        self.by_cell.clear();
+        self.outbox.requeue_unreceipted();
+        let planned: Vec<Planned> = self.plan.drain(..).collect();
+        for p in planned {
+            if !matches!(p.owner, Owner::Control(_)) {
+                self.restore(&p.owner);
+            }
+        }
+        self.relayed_cells.clear();
+        // every control content again, sealed or not, in id order (spec §10.4, Q222 (3)); a retired `RouteUpdate` stays
+        // retired (Q224)
+        let all: Vec<ControlRef> = self
+            .controls
+            .iter()
+            .map(|(id, e)| ControlRef {
+                id: *id,
+                attempt: e.attempt,
+            })
+            .collect();
+        for r in all {
+            self.replan_control(r);
+        }
+    }
+
+    fn on_deliver(&mut self, cell: &Cell) -> Result<(), SourceError> {
+        let state = match self.state.take() {
+            Some(s) => s,
+            None => RatchetState::from_bytes(&self.durable).map_err(|_| SourceError)?,
+        };
+        let opened = match state.decrypt_with(cell.as_bytes(), self.source.entropy()) {
+            Ok(opened) => opened,
+            Err(refused) => {
+                let (state, error) = refused.into_parts();
+                self.state = Some(state);
+                if error == secmp_proto::Error::Unavailable {
+                    return Err(SourceError);
+                }
+                // not a cell of this conversation: decided (discarded), acknowledged
+                self.discarded = self.discarded.saturating_add(1);
+                return Ok(());
+            }
+        };
+        // the cell's effect on the reassembly and on the trust is staged on copies: it is kept only once the commit of
+        // the new ratchet state succeeded (persist-before-ack: a failed commit leaves everything as it was and the cell
+        // comes again)
+        let mut inbox = self.inbox.clone();
+        let mut trust = self.trust;
+        // a repeat of the accepted key change, signed by the previous `IK_sig`, changes nothing (ADR-058)
+        let delivery = inbox.receive_known(
+            opened.plaintext(),
+            &self.peer,
+            self.peer_iks.as_ref(),
+            self.prev_peer.as_ref(),
+            &mut trust,
+        );
+        // a verified key change whose new `IK_sig` cannot be loaded is unverifiable: the session freezes (spec §7.7)
+        let (delivery, new_peer) = admit_key_change(delivery, &mut trust);
+        // the identity an admitted key change replaces is durable with it (ADR-058); one that does not encode fails the
+        // commit, as the new identity does
+        let previous_identity = replaced_identity(&delivery, self.peer_iks.as_ref());
+        // the messages this cell delivers for the first time are durable with the state that consumed it
+        let received_ms = self
+            .unix_base
+            .saturating_mul(1000)
+            .saturating_add(self.last_now_ms);
+        let fresh = self.fresh_messages(&delivery, received_ms);
+        // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
+        let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
+        let trust_changed = (trust != self.trust).then_some(trust_code(trust));
+        let Effects {
+            block,
+            receipted,
+            routes,
+            identity,
+        } = effects(&delivery);
+        // the first decrypted reply of an initiator: its stored handshake cells go with this commit (Q150)
+        let clear_handshake = self.awaiting_first_reply;
+        let durable = &mut self.durable;
+        let persist = &mut self.persist;
+        let staged = &inbox;
+        let committed = opened.commit(|bytes| {
+            counters::note_persist();
+            let ratchet = RatchetParts::split(bytes).map_err(|_| PersistError)?;
+            let inbox_bytes = if inbox_changed {
+                Some(staged.to_bytes().map_err(|_| PersistError)?)
+            } else {
+                None
+            };
+            persist.commit_parts(
+                PersistKind::Receive,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: inbox_bytes.as_ref().map(|b| b.as_slice()),
+                    trust: trust_changed,
+                    block,
+                    identity: identity
+                        .as_ref()
+                        .map_err(|e| *e)?
+                        .as_ref()
+                        .map(|(iks, fp)| (iks.as_slice(), fp.as_slice())),
+                    delivered: &fresh,
+                    receipted: &receipted,
+                    routes: routes.as_ref().map(|r| r.as_slice()),
+                    clear_handshake,
+                    previous_identity: previous_identity
+                        .as_ref()
+                        .map_err(|e| *e)?
+                        .as_ref()
+                        .map(|b| b.as_slice()),
+                },
+            )?;
+            *durable = Zeroizing::new(bytes.to_vec());
+            Ok::<(), PersistError>(())
+        });
+        drop(fresh);
+        if let Ok((state, _plaintext)) = committed {
+            self.state = Some(state);
+            self.inbox = inbox;
+            self.trust = trust;
+            if clear_handshake {
+                self.awaiting_first_reply = false;
+                self.handshake_out.clear();
+            }
+        } else {
+            self.state = RatchetState::from_bytes(&self.durable).ok();
+            return Err(SourceError);
+        }
+        self.apply_delivery(delivery, new_peer);
+        Ok(())
+    }
+
+    /// The messages of `delivery` the history does not hold yet, stamped `received_ms`: durable with the state that
+    /// consumed their cell. ADR-054 items 1 and 3 (EXTB2-3): an invalid message is dropped, the cell is still committed
+    /// and acknowledged.
+    fn fresh_messages<'d>(
+        &self,
+        delivery: &'d Delivery,
+        received_ms: u64,
+    ) -> Vec<DeliveredMessage<'d>> {
+        match delivery {
+            Delivery::Messages(messages) => messages
+                .iter()
+                .filter(|m| !self.app_rules || app_payload_ok(m.kind, &m.payload))
+                .filter(|m| !self.seen.contains(&m.msg_id))
+                .map(|m| DeliveredMessage {
+                    msg_id: m.msg_id,
+                    kind: m.kind.byte(),
+                    payload: m.payload.as_slice(),
+                    expire_after: m.expire_after,
+                    received_ms,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What a committed cell tells the session: messages for the application, receipts, the events for the host.
+    fn apply_delivery(&mut self, delivery: Delivery, new_peer: Option<HybridVerifyingKey>) {
+        match delivery {
+            Delivery::Messages(messages) => {
+                for m in messages {
+                    // ADR-054 items 1 and 3 first: a dropped message is not taken into the dedup set (EXTB2-3)
+                    if (!self.app_rules || app_payload_ok(m.kind, &m.payload))
+                        && self.seen.insert(m.msg_id)
+                    {
+                        self.receipts_due.push(m.msg_id);
+                        self.received.push(Received {
+                            msg_id: m.msg_id,
+                            kind: m.kind,
+                            payload: m.payload,
+                        });
+                    }
+                }
+            }
+            Delivery::Receipt(body) => {
+                // durable already (in the receive commit); only the in-memory view follows
+                for id in &body.msg_ids {
+                    // a message of ours that was not delivered yet: once (a repeated receipt, a stranger's id: nothing)
+                    let ours = matches!(
+                        self.outbox.state(id),
+                        Some(
+                            crate::scheduler::outbox::MsgState::Queued
+                                | crate::scheduler::outbox::MsgState::Relayed(_)
+                        )
+                    );
+                    self.outbox.delivered_committed(id);
+                    self.relayed_at.remove(id);
+                    if ours {
+                        self.events.push(SessionEvent::Delivered(*id));
+                    }
+                }
+            }
+            Delivery::Routes(rs) => {
+                let known: Vec<RouteDescriptor> = rs
+                    .into_iter()
+                    .filter(|r| matches!(r, RouteDescriptor::RelayQueue(_)))
+                    .collect();
+                if !known.is_empty() {
+                    self.events.push(SessionEvent::Routes(known));
+                }
+            }
+            Delivery::KeyChange(iks) => {
+                // the contact row holds the new identity already (the receive commit); later key changes verify under it
+                // the replaced key verifies a repeat of this change (ADR-058)
+                if let Some(peer) = new_peer {
+                    self.prev_peer = Some(core::mem::replace(&mut self.peer, peer));
+                }
+                self.peer_iks = Some(iks.clone());
+                self.events.push(SessionEvent::KeyChanged(Box::new(iks)));
+            }
+            Delivery::KeyChangeRefused => self.events.push(SessionEvent::KeyChangeInvalid),
+            Delivery::Control(body) => match body.code {
+                ControlCode::ContactRemoved if body.arg.is_empty() => {
+                    self.block = Some(Refusal::Removed);
+                    self.events.push(SessionEvent::ContactRemoved);
+                }
+                // EXTB2-2: a reset request carries no argument (ADR-054 item 4); one with an argument is ignored
+                ControlCode::SessionResetRequest if body.arg.is_empty() => {
+                    self.block = Some(Refusal::Reset);
+                    self.events.push(SessionEvent::ResetRequested);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// SE-13b (spec §10.4, OPEN-M7-07 A): a message relayed `T_RS` ago with no receipt is reported once, never re-sent —
+    /// for a verified contact only: receipts are sent only to verified contacts (SE-12), and our verification of the
+    /// contact is the proxy for its verification of us (Q159, Q210 d).
+    fn note_unconfirmed(&mut self, now_ms: u64) {
+        if self.receipt_timeout_ms == 0 || !matches!(self.trust, Trust::Verified) {
+            return;
+        }
+        let due: Vec<MsgId> = self
+            .relayed_at
+            .iter()
+            .filter(|(id, at)| {
+                now_ms.saturating_sub(**at) >= self.receipt_timeout_ms
+                    && !self.notified.contains(*id)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in due {
+            self.notified.insert(id);
+            self.relayed_at.remove(&id);
+            self.events.push(SessionEvent::NotConfirmed(id));
+        }
+    }
+}
+
+/// `contacts.routes` / `RouteUpdate` bytes of the routes of a known kind: `count u8 ‖ RouteDescriptor × count`; `None`
+/// if there is none.
+fn routes_bytes(routes: &[RouteDescriptor]) -> Option<Zeroizing<Vec<u8>>> {
+    let known: Vec<&RouteDescriptor> = routes
+        .iter()
+        .filter(|r| matches!(r, RouteDescriptor::RelayQueue(_)))
+        .collect();
+    let mut out = Zeroizing::new(vec![u8::try_from(known.len()).ok()?]);
+    if known.is_empty() {
+        return None;
+    }
+    for r in known {
+        out.extend_from_slice(&r.encode().ok()?);
+    }
+    Some(out)
+}
+
+/// The identity an admitted `KeyChange` replaces (`current`, encoded), durable with the new one (ADR-058); `None` for
+/// any other delivery or when the conversation does not know the identity. One that does not encode fails the commit, as
+/// the new identity does.
+fn replaced_identity(
+    delivery: &Delivery,
+    current: Option<&IksPublic>,
+) -> Result<Option<Zeroizing<Vec<u8>>>, PersistError> {
+    match (delivery, current) {
+        (Delivery::KeyChange(_), Some(cur)) => cur.encode().map(Some).map_err(|_| PersistError),
+        _ => Ok(None),
+    }
+}
+
+/// The peer's new identity of a verified `KeyChange`: the encoded `IksPublic` and its fingerprint.
+type NewIdentity = (Zeroizing<Vec<u8>>, [u8; 32]);
+
+/// What a received cell's delivery makes durable besides the ratchet, the reassembly state and the trust (the receive
+/// commit, persist-before-ack).
+struct Effects {
+    /// A `Control{1}` or `Control{2}`, each without an argument: real sends are blocked durably (Q210 b; EXTB2-2).
+    block: Option<u8>,
+    /// The messages a `Receipt{delivered}` confirms: `Delivered` (SE-21, F9b).
+    receipted: Vec<MsgId>,
+    /// The routes of a `RouteUpdate`, of the kind this version knows (spec §9.8; an unknown kind is ignored).
+    routes: Option<Zeroizing<Vec<u8>>>,
+    /// A verified key change's new identity (Q210 a, spec §7.7); one that does not encode fails the commit — nothing is
+    /// decided, the cell comes again.
+    identity: Result<Option<NewIdentity>, PersistError>,
+}
+
+/// A verified key change (spec §7.7) is admitted only if its new `IK_sig` loads (`tr::content::ik_sig`): the key that later
+/// key changes verify under is returned with it. Otherwise the change is unverifiable — the session freezes (`trust` becomes
+/// `Frozen`), the delivery becomes `KeyChangeRefused` (no identity is committed, the event is `KeyChangeInvalid`) and the
+/// peer key stays. Any other delivery passes unchanged.
+fn admit_key_change(
+    delivery: Delivery,
+    trust: &mut Trust,
+) -> (Delivery, Option<HybridVerifyingKey>) {
+    admit_key_change_with(delivery, trust, secmp_proto::tr::content::ik_sig)
+}
+
+/// [`admit_key_change`] with the loader of the `IK_sig` given.
+fn admit_key_change_with(
+    delivery: Delivery,
+    trust: &mut Trust,
+    verify: impl FnOnce(&IksPublic) -> Result<HybridVerifyingKey, secmp_proto::Error>,
+) -> (Delivery, Option<HybridVerifyingKey>) {
+    let Delivery::KeyChange(iks) = delivery else {
+        return (delivery, None);
+    };
+    if let Ok(key) = verify(&iks) {
+        return (Delivery::KeyChange(iks), Some(key));
+    }
+    *trust = Trust::Frozen;
+    (Delivery::KeyChangeRefused, None)
+}
+
+fn effects(delivery: &Delivery) -> Effects {
+    let block = match delivery {
+        Delivery::Control(body) => match body.code {
+            ControlCode::ContactRemoved if body.arg.is_empty() => block_code(Refusal::Removed),
+            ControlCode::SessionResetRequest if body.arg.is_empty() => block_code(Refusal::Reset),
+            _ => None,
+        },
+        _ => None,
+    };
+    let receipted = match delivery {
+        Delivery::Receipt(body) => body.msg_ids.clone(),
+        _ => Vec::new(),
+    };
+    let routes = match delivery {
+        Delivery::Routes(rs) => routes_bytes(rs),
+        _ => None,
+    };
+    let identity = match delivery {
+        Delivery::KeyChange(iks) => match (iks.encode(), secmp_proto::prekeys::fingerprint_of(iks))
+        {
+            (Ok(bytes), Ok(fp)) => Ok(Some((bytes, fp))),
+            _ => Err(PersistError),
+        },
+        _ => Ok(None),
+    };
+    Effects {
+        block,
+        receipted,
+        routes,
+        identity,
+    }
+}
+
+/// The conversations of a client, as the scheduler's cell source: a cell is routed by the queue it is for.
+pub struct Conversations<O: Outbox, P: Persist, S: EntropySource> {
+    items: Vec<Conversation<O, P, S>>,
+}
+
+impl<O: Outbox, P: Persist, S: EntropySource> Default for Conversations<O, P, S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<O: Outbox, P: Persist, S: EntropySource> Conversations<O, P, S> {
+    /// No conversation.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    /// The process holding conversation `index` died and restarted from `durable`
+    /// ([`Conversation::restart_from`]).
+    ///
+    /// # Errors
+    /// [`SourceError`] if `durable` is not a ratchet state or there is no such conversation.
+    pub fn restart(&mut self, index: usize, durable: &[u8]) -> Result<(), SourceError> {
+        if index >= self.items.len() {
+            return Err(SourceError);
+        }
+        let old = self.items.remove(index);
+        let restarted = old.restart_from(durable)?;
+        self.items.insert(index, restarted);
+        Ok(())
+    }
+
+    /// Add a conversation (bound to its queues); returns its index.
+    pub fn add(&mut self, conversation: Conversation<O, P, S>) -> usize {
+        self.items.push(conversation);
+        self.items.len().saturating_sub(1)
+    }
+
+    /// The conversation at `index`.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&Conversation<O, P, S>> {
+        self.items.get(index)
+    }
+
+    /// The conversation at `index`, mutable.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut Conversation<O, P, S>> {
+        self.items.get_mut(index)
+    }
+
+    /// Whether the conversation that sends on `queue` has something real waiting for a slot (a planned cell, a queued
+    /// message, a receipt): the next cell it prepares for `queue` is then a real one, not a dummy (a control cell held
+    /// for its durable row, Q225, counts as waiting). For the cost models of the test drivers; the scheduler never asks.
+    pub fn pending_real(&mut self, queue: QueueId) -> bool {
+        self.by_send(queue).is_some_and(|c| c.has_pending_real())
+    }
+
+    fn by_send(&mut self, q: QueueId) -> Option<&mut Conversation<O, P, S>> {
+        self.items.iter_mut().find(|c| c.send_queue == Some(q))
+    }
+
+    /// The conversation for which `q` is a queue in send overlap (dummies only).
+    fn by_overlap_send(&mut self, q: QueueId) -> Option<&mut Conversation<O, P, S>> {
+        self.items.iter_mut().find(|c| c.overlap_send.contains(&q))
+    }
+
+    fn by_recv(&mut self, q: QueueId) -> Option<&mut Conversation<O, P, S>> {
+        self.items
+            .iter_mut()
+            .find(|c| c.recv_queue == Some(q) || c.overlap_recv.contains(&q))
+    }
+}
+
+impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P, S> {
+    fn prepare_cell(
+        &mut self,
+        queue: QueueId,
+        now: u64,
+    ) -> Result<Option<PreparedCell>, SourceError> {
+        if let Some(c) = self.by_send(queue) {
+            return c.prepare(now).map(Some);
+        }
+        // a queue in send overlap carries dummies, from the same ratchet (spec §10.6 (4))
+        match self.by_overlap_send(queue) {
+            Some(c) => c.prepare_overlap(now).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn relayed(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
+        if let Some(c) = self.by_send(queue) {
+            c.on_relayed(token, cell_id);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.on_overlap_relayed(queue, token, cell_id);
+        }
+    }
+
+    fn evicted(&mut self, queue: QueueId, cell_id: u64) {
+        if let Some(c) = self.by_send(queue) {
+            c.on_evicted(cell_id);
+        }
+    }
+
+    fn send_failed(&mut self, queue: QueueId, token: CellToken, why: SendFailure) {
+        let unknown = matches!(why, SendFailure::Unknown);
+        if let Some(c) = self.by_send(queue) {
+            if unknown {
+                c.on_unknown_send(queue, token);
+            }
+            c.on_failed(token);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            if unknown {
+                c.on_unknown_send(queue, token);
+            }
+            c.inflight.remove(&token.0);
+        }
+    }
+
+    fn discard(&mut self, queue: QueueId, token: CellToken) {
+        if let Some(c) = self.by_send(queue) {
+            c.on_failed(token);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.inflight.remove(&token.0);
+        }
+    }
+
+    fn queue_lost(&mut self, queue: QueueId) {
+        if let Some(c) = self.by_send(queue) {
+            c.on_lost();
+            c.on_overlap_lost(queue);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.on_overlap_lost(queue);
+        }
+    }
+
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        _generation: u64,
+        _cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
+        match self.by_recv(queue) {
+            // decided and committed before it returns
+            Some(c) => c.on_deliver(cell).map(|()| Delivered::Committed),
+            // a queue without a conversation (a spare of the pool): nothing to decrypt, the cell is discarded
+            None => Ok(Delivered::Committed),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // The module is plain `cfg(test)`; the bodies that need the `kat` accessors are gated inside (a module under
+    // `cfg(all(test, feature))` is compiled out of the mutation gate's first run). The tests return `Result`: an in-crate
+    // test module has no `unwrap` allowance (only whole files under `tests/` do).
+
+    /// The failure of a step of the fixture.
+    #[cfg(feature = "kat")]
+    type Fail = &'static str;
+
+    /// A deterministic byte stream for `FixedEntropy` (a counter pushed through a multiplicative mix; not random, not secret).
+    #[cfg(feature = "kat")]
+    fn stream(seed: u64, len: usize) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x = x.wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(23) ^ 0x5851_f42d;
+                x.to_be_bytes().first().copied().unwrap_or(0)
+            })
+            .collect()
+    }
+
+    /// The entropy source of a test conversation: a fixed stream.
+    #[cfg(feature = "kat")]
+    struct Fixed(secmp_proto::tr::FixedEntropy);
+
+    #[cfg(feature = "kat")]
+    impl super::EntropySource for Fixed {
+        type E = secmp_proto::tr::FixedEntropy;
+
+        fn entropy(&mut self) -> &mut Self::E {
+            &mut self.0
+        }
+    }
+
+    /// The initiator's ratchet state of a session from one shared secret.
+    #[cfg(feature = "kat")]
+    fn initiator_state() -> Result<secmp_proto::tr::RatchetState, Fail> {
+        use secmp_crypto::SecretBytes;
+        use secmp_proto::keys::{MlKem768Ek, X25519Pk};
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = X25519Pk::from_bytes(spk_dh.public_key().as_bytes()).map_err(|_| "spk")?;
+        let ek =
+            MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes()).map_err(|_| "ek")?;
+        let sk = SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+            .map_err(|_| "initiator")
+    }
+
+    #[cfg(feature = "kat")]
+    type TestConversation = super::Conversation<
+        crate::scheduler::outbox::MemOutbox,
+        crate::scheduler::outbox::MemPersist,
+        Fixed,
+    >;
+
+    #[cfg(feature = "kat")]
+    fn conversation(
+        state: secmp_proto::tr::RatchetState,
+        persist: crate::scheduler::outbox::MemPersist,
+    ) -> Result<TestConversation, Fail> {
+        use secmp_proto::tr::{Entropy as _, FixedEntropy};
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        Ok(super::Conversation::new(
+            state,
+            crate::scheduler::outbox::MemOutbox::new(),
+            persist,
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer,
+            0,
+        ))
+    }
+
+    /// Run `encrypt_with` of the same dummy content on a twin of the initial state with the same entropy: the digests of
+    /// the message keys the conversation must have recorded, in order.
+    #[cfg(feature = "kat")]
+    fn expected_digests(
+        initial: &secmp_proto::tr::RatchetState,
+        n: usize,
+    ) -> Result<Vec<[u8; 32]>, Fail> {
+        use secmp_proto::tr::{FixedEntropy, RatchetState};
+        let bytes = initial.to_bytes().map_err(|_| "to_bytes")?;
+        let mut state = RatchetState::from_bytes(&bytes).map_err(|_| "from_bytes")?;
+        let mut entropy = FixedEntropy::new(&stream(4, 1 << 20));
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let sealed = state
+                .encrypt_with(&secmp_proto::tr::content::dummy(), &mut entropy)
+                .map_err(|_| "encrypt")?;
+            out.push(sealed.message_key_digest_kat());
+            let (next, _cell) = sealed
+                .persist(|_| Ok::<(), ()>(()))
+                .map_err(|()| "persist")?;
+            state = next;
+        }
+        Ok(out)
+    }
+
+    /// Run #176 of the mutation gate: `message_key_digests_kat` mutated to an empty or a constant slice survived, because
+    /// its only consumers are the simulations (on the skip list of the per-mutant run). It records, in sealing order, the
+    /// digest of the message key of every cell the conversation sealed: three seals give three digests, pairwise distinct,
+    /// neither of the constants the mutants return, and each the digest of the key of the cell sealed at that position
+    /// (`Sealed::message_key_digest_kat` of a twin run of the same seals; dummies, because the content of a dummy is fixed).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn message_key_digests_track_each_seal() -> Result<(), Fail> {
+        let state = initiator_state()?;
+        let want = expected_digests(&state, 3)?;
+        let mut conv = conversation(state, crate::scheduler::outbox::MemPersist::new())?;
+        assert!(conv.message_key_digests_kat().is_empty());
+        for _ in 0..3 {
+            conv.prepare_direct(0).map_err(|_| "seal")?;
+        }
+        let got = conv.message_key_digests_kat();
+        assert_eq!(got.len(), 3);
+        for (i, a) in got.iter().enumerate() {
+            assert_ne!(*a, [0_u8; 32]);
+            assert_ne!(*a, [1_u8; 32]);
+            for b in got.iter().skip(i.saturating_add(1)) {
+                assert_ne!(a, b, "a message key used twice");
+            }
+        }
+        assert_eq!(
+            got,
+            want.as_slice(),
+            "the digests of the keys, in sealing order"
+        );
+        Ok(())
+    }
+
+    /// A digest is recorded only once its state is durable (a cell whose persist failed was never released): a failing
+    /// `Persist` makes the seal an `Err` and the list keeps its length; the next seal after the store recovers records
+    /// one digest.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn message_key_digest_not_recorded_when_persist_fails() -> Result<(), Fail> {
+        let mut persist = crate::scheduler::outbox::MemPersist::new();
+        persist.set_failing(true);
+        let mut conv = conversation(initiator_state()?, persist)?;
+        assert!(conv.prepare_direct(0).is_err());
+        assert!(conv.message_key_digests_kat().is_empty());
+        conv.persist_mut().set_failing(false);
+        conv.prepare_direct(0).map_err(|_| "seal")?;
+        assert_eq!(conv.message_key_digests_kat().len(), 1);
+        Ok(())
+    }
+
+    /// The `received_ms` of every delivered message a `Persist` was handed.
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Stamps(Vec<u64>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Stamps {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.0.extend(parts.delivered.iter().map(|m| m.received_ms));
+            Ok(())
+        }
+
+        fn control_relayed(
+            &mut self,
+            _ord: i64,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn control_requeued(
+            &mut self,
+            _row: &[u8],
+        ) -> Result<Option<i64>, crate::scheduler::outbox::PersistError> {
+            Ok(None)
+        }
+    }
+
+    /// V1-F4 (extra test): a delivered message carries the Unix ms of the latest slot preparation — `unix_base`·1000 +
+    /// the `now_ms` of `prepare`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn delivered_carries_unix_ms() -> Result<(), Fail> {
+        use crate::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
+        use crate::scheduler::types::{CellSource, QueueId};
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        use secmp_proto::wire::cell::AppKind;
+        // the two ends of one session (as `initiator_state`, with the responder kept)
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = secmp_proto::keys::X25519Pk::from_bytes(spk_dh.public_key().as_bytes())
+            .map_err(|_| "spk")?;
+        let ek = secmp_proto::keys::MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes())
+            .map_err(|_| "ek")?;
+        let sk = secmp_crypto::SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        let a_state =
+            RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+                .map_err(|_| "initiator")?;
+        let b_state = RatchetState::init_responder(&sk, &[9_u8; 32], spk_dh, rpk_kem)
+            .map_err(|_| "responder")?;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let mut a = super::Conversation::new(
+            a_state,
+            MemOutbox::new(),
+            MemPersist::new(),
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer.clone(),
+            0,
+        );
+        a.outbox_mut().enqueue(
+            OutMessage {
+                msg_id: [5; 16],
+                kind: AppKind::Text,
+                expire_after: 0,
+                payload: secmp_crypto::Zeroizing::new(vec![1; 8]),
+            },
+            0,
+        );
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        let mut b = super::Conversation::new(
+            b_state,
+            MemOutbox::new(),
+            Stamps::default(),
+            Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
+            peer,
+            1_700_000_000,
+        );
+        // the responder's first preparation fails (no sending chain yet) but stamps the time
+        let _ = b.prepare_direct(5_000);
+        b.bind(QueueId(2), QueueId(1));
+        let mut convs = super::Conversations::new();
+        convs.add(b);
+        convs
+            .deliver(QueueId(1), 0, 1, &cell)
+            .map_err(|_| "deliver")?;
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.received().len(), 1, "the text was delivered");
+        assert_eq!(b.persist().0, vec![1_700_000_005_000]);
+        Ok(())
+    }
+
+    /// What a recording `Persist` saw of each receive commit: the reassembly state present, the trust code.
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Commits(Vec<(bool, Option<u8>)>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Commits {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            if kind == crate::scheduler::outbox::PersistKind::Receive {
+                self.0.push((parts.inbox.is_some(), parts.trust));
+            }
+            Ok(())
+        }
+
+        fn control_relayed(
+            &mut self,
+            _ord: i64,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn control_requeued(
+            &mut self,
+            _row: &[u8],
+        ) -> Result<Option<i64>, crate::scheduler::outbox::PersistError> {
+            Ok(None)
+        }
+    }
+
+    /// Two conversations of one session: the initiator (`MemPersist`) and the responder with `persist`, its receive queue
+    /// bound to 1, inside a `Conversations`.
+    #[cfg(feature = "kat")]
+    type Session<P> = (
+        TestConversation,
+        super::Conversations<crate::scheduler::outbox::MemOutbox, P, Fixed>,
+    );
+
+    /// Two conversations of one session with their own durabilities: the initiator (`pa`) and the responder (`pb`), its
+    /// receive queue bound to 1, inside a `Conversations`.
+    #[cfg(feature = "kat")]
+    type Pair<PA, PB> = (
+        super::Conversation<crate::scheduler::outbox::MemOutbox, PA, Fixed>,
+        super::Conversations<crate::scheduler::outbox::MemOutbox, PB, Fixed>,
+    );
+
+    #[cfg(feature = "kat")]
+    fn session<P: crate::scheduler::outbox::Persist>(persist: P) -> Result<Session<P>, Fail> {
+        pair(crate::scheduler::outbox::MemPersist::new(), persist)
+    }
+
+    #[cfg(feature = "kat")]
+    fn pair<PA: crate::scheduler::outbox::Persist, PB: crate::scheduler::outbox::Persist>(
+        pa: PA,
+        pb: PB,
+    ) -> Result<Pair<PA, PB>, Fail> {
+        use crate::scheduler::outbox::MemOutbox;
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = secmp_proto::keys::X25519Pk::from_bytes(spk_dh.public_key().as_bytes())
+            .map_err(|_| "spk")?;
+        let ek = secmp_proto::keys::MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes())
+            .map_err(|_| "ek")?;
+        let sk = secmp_crypto::SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        let a_state =
+            RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+                .map_err(|_| "initiator")?;
+        let b_state = RatchetState::init_responder(&sk, &[9_u8; 32], spk_dh, rpk_kem)
+            .map_err(|_| "responder")?;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let a = super::Conversation::new(
+            a_state,
+            MemOutbox::new(),
+            pa,
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer.clone(),
+            0,
+        );
+        let mut b = super::Conversation::new(
+            b_state,
+            MemOutbox::new(),
+            pb,
+            Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
+            peer,
+            0,
+        );
+        b.bind(QueueId(2), QueueId(1));
+        let mut convs = super::Conversations::new();
+        convs.add(b);
+        Ok((a, convs))
+    }
+
+    /// A text message `n` of `len` bytes.
+    #[cfg(feature = "kat")]
+    fn text_message(n: u8, len: usize) -> crate::scheduler::outbox::OutMessage {
+        crate::scheduler::outbox::OutMessage {
+            msg_id: [n; 16],
+            kind: secmp_proto::wire::cell::AppKind::Text,
+            expire_after: 0,
+            payload: secmp_crypto::Zeroizing::new(vec![n; len]),
+        }
+    }
+
+    /// V2-1 (killers, `conversation.rs:644`, `:645`): a receive commit carries the reassembly state while a message is in
+    /// fragments (also the commit that completes it), not for a one-cell message, and no trust when the trust did not
+    /// change.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn receive_commit_carries_inbox_only_while_fragmented() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(Commits::default())?;
+        a.outbox_mut().enqueue(text_message(1, 3_000), 0);
+        let first = a.prepare_direct(0).map_err(|_| "seal 1")?.cell;
+        let second = a.prepare_direct(0).map_err(|_| "seal 2")?.cell;
+        a.outbox_mut().enqueue(text_message(2, 10), 0);
+        let third = a.prepare_direct(0).map_err(|_| "seal 3")?.cell;
+        for (id, cell) in [(1, &first), (2, &second), (3, &third)] {
+            convs
+                .deliver(QueueId(1), 0, id, cell)
+                .map_err(|_| "deliver")?;
+        }
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.received().len(), 2, "the long and the short message");
+        assert_eq!(
+            b.persist().0,
+            vec![(true, None), (true, None), (false, None)],
+            "fragment, completing fragment, one-cell message"
+        );
+        Ok(())
+    }
+
+    /// What a recording `Persist` saw of each receive commit's block (Q210 b).
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Blocks(Vec<Option<u8>>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Blocks {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            if kind == crate::scheduler::outbox::PersistKind::Receive {
+                self.0.push(parts.block);
+            }
+            Ok(())
+        }
+
+        fn control_relayed(
+            &mut self,
+            _ord: i64,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn control_requeued(
+            &mut self,
+            _row: &[u8],
+        ) -> Result<Option<i64>, crate::scheduler::outbox::PersistError> {
+            Ok(None)
+        }
+    }
+
+    /// B-4c killers (`effects`, Q210 b): the receive commit of a `Control{ContactRemoved}` carries the block `Removed` only
+    /// without an argument, of a `Control{SessionResetRequest}` the block `Reset`; another content carries none.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn receive_commit_carries_the_block() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        use secmp_proto::wire::cell::{ContentBody, ControlBody, ControlCode};
+        let (mut a, mut convs) = session(Blocks::default())?;
+        for (id, (code, arg)) in (1_u64..).zip([
+            (ControlCode::ContactRemoved, vec![1_u8]),
+            (ControlCode::ContactRemoved, Vec::new()),
+            (ControlCode::SessionResetRequest, Vec::new()),
+        ]) {
+            a.plan_control(
+                ContentBody::Control(ControlBody {
+                    code,
+                    arg: secmp_crypto::Zeroizing::new(arg),
+                }),
+                super::Owner::Dummy,
+            );
+            let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+            convs
+                .deliver(QueueId(1), 0, id, &cell)
+                .map_err(|_| "deliver")?;
+        }
+        let dummy = a.prepare_direct(0).map_err(|_| "dummy")?.cell;
+        convs
+            .deliver(QueueId(1), 0, 4, &dummy)
+            .map_err(|_| "deliver")?;
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.persist().0, vec![None, Some(1), Some(2), None]);
+        Ok(())
+    }
+
+    /// B-4c killer (`prepare`, Q210 c): a cell that is not sealed (the persist refuses) puts back only what it carried —
+    /// a dummy nothing, a control content to the front of the plan, where the next slot finds it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn failed_seal_keeps_only_control_content() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.persist_mut().set_failing(true);
+        assert!(a.prepare_direct(0).is_err());
+        assert!(!a.has_pending_real(), "a dummy leaves nothing planned");
+        a.queue_control(secmp_proto::wire::cell::ControlCode::ContactRemoved);
+        assert!(a.prepare_direct(0).is_err());
+        assert!(a.has_pending_real(), "the control content stays planned");
+        a.persist_mut().set_failing(false);
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        convs
+            .deliver(QueueId(1), 0, 1, &cell)
+            .map_err(|_| "deliver")?;
+        assert!(matches!(
+            convs
+                .get_mut(0)
+                .ok_or("conversation")?
+                .take_events()
+                .as_slice(),
+            [super::SessionEvent::ContactRemoved]
+        ));
+        assert!(!a.has_pending_real());
+        Ok(())
+    }
+
+    /// A Batch of text messages `(id byte, payload)`.
+    #[cfg(feature = "kat")]
+    fn text_batch(messages: &[(u8, &[u8])]) -> secmp_proto::wire::cell::ContentBody {
+        use secmp_proto::wire::cell::{AppKind, AppMessage, BatchBody, ContentBody};
+        ContentBody::Batch(BatchBody {
+            messages: messages
+                .iter()
+                .map(|(n, payload)| AppMessage {
+                    msg_id: [*n; 16],
+                    kind: AppKind::Text,
+                    expire_after: 0,
+                    payload: secmp_crypto::Zeroizing::new(payload.to_vec()),
+                })
+                .collect(),
+        })
+    }
+
+    /// SE-36 (EXTB2-3; ADR-054 items 1, 3; CLAUDE.md §1.5): a conversation built by `Conversation::new` applies the
+    /// receive rules without being asked — of a Batch with a text containing U+0000 and a valid one only the valid one is
+    /// delivered and receipted; only the test kit's switch lets the harness payloads through.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn adr054_receive_rules_on_without_the_switch() -> Result<(), Fail> {
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_raw_content_test(text_batch(&[(50, b"a\0b"), (51, b"ok")]));
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&cell).map_err(|_| "deliver")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(ids, [[51; 16]]);
+        assert_eq!(b.receipts_due(), 1);
+        b.raw_app_payloads_kat();
+        a.queue_raw_content_test(text_batch(&[(52, b"a\0b")]));
+        let cell = a.prepare_direct(1_000).map_err(|_| "seal")?.cell;
+        b.deliver_direct(&cell).map_err(|_| "deliver")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(ids, [[52; 16]], "the test kit's switch");
+        Ok(())
+    }
+
+    /// SE-26 (EXTB2-1; Q222 (3)): a control content whose `SEND` failed (`send_failed`, `discard`) is planned again and
+    /// reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn extb2_failed_control_send_remains_retryable() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let prepared = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.on_failed(prepared.token);
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        for i in 1..5 {
+            b.deliver_direct(&a.prepare_direct(i * 1_000).map_err(|_| "retry")?.cell)
+                .map_err(|_| "delivery")?;
+        }
+        assert!(
+            matches!(
+                b.take_events().as_slice(),
+                [super::SessionEvent::ResetRequested]
+            ),
+            "a failed SEND lost the reset notification"
+        );
+        Ok(())
+    }
+
+    /// A durability whose first row delete fails; it logs the `ord` of every delete.
+    #[cfg(feature = "kat")]
+    struct FlakyDelete {
+        inner: crate::scheduler::outbox::MemPersist,
+        deletes: Vec<i64>,
+    }
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for FlakyDelete {
+        fn commit(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.inner.commit(kind, state)
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.inner.commit_parts(kind, parts)
+        }
+
+        fn control_relayed(
+            &mut self,
+            ord: i64,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.deletes.push(ord);
+            if self.deletes.len() == 1 {
+                Err(crate::scheduler::outbox::PersistError)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn control_requeued(
+            &mut self,
+            _row: &[u8],
+        ) -> Result<Option<i64>, crate::scheduler::outbox::PersistError> {
+            Ok(None)
+        }
+    }
+
+    /// SE-40 (Q222 (2)): a row delete that fails after the last `OK_SEND` is tried again at the next preparation, and
+    /// only until it succeeds.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn settle_retries_a_failed_row_delete() -> Result<(), Fail> {
+        use secmp_proto::tr::{Entropy as _, FixedEntropy};
+        use secmp_proto::wire::cell::ControlCode;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let mut a = super::Conversation::new(
+            initiator_state()?,
+            crate::scheduler::outbox::MemOutbox::new(),
+            FlakyDelete {
+                inner: crate::scheduler::outbox::MemPersist::new(),
+                deletes: Vec::new(),
+            },
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer,
+            0,
+        );
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(a.persist().deletes, [4, 4], "failed once, tried again");
+        a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(a.persist().deletes, [4, 4], "deleted: not tried again");
+        Ok(())
+    }
+
+    /// A durability that logs its control row calls and fails the first `fail_relayed` deletes and the first
+    /// `fail_requeued` re-writes (Q224, Q225).
+    #[cfg(feature = "kat")]
+    struct Script {
+        inner: crate::scheduler::outbox::MemPersist,
+        log: Vec<(&'static str, i64)>,
+        fail_relayed: u32,
+        fail_requeued: u32,
+        next_ord: i64,
+    }
+
+    #[cfg(feature = "kat")]
+    fn script(fail_relayed: u32, fail_requeued: u32) -> Script {
+        Script {
+            inner: crate::scheduler::outbox::MemPersist::new(),
+            log: Vec::new(),
+            fail_relayed,
+            fail_requeued,
+            next_ord: 100,
+        }
+    }
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Script {
+        fn commit(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.inner.commit(kind, state)
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.inner.commit_parts(kind, parts)
+        }
+
+        fn control_relayed(
+            &mut self,
+            ord: i64,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.log.push(("relayed", ord));
+            if self.fail_relayed > 0 {
+                self.fail_relayed = self.fail_relayed.saturating_sub(1);
+                Err(crate::scheduler::outbox::PersistError)
+            } else {
+                Ok(())
+            }
+        }
+
+        fn control_requeued(
+            &mut self,
+            _row: &[u8],
+        ) -> Result<Option<i64>, crate::scheduler::outbox::PersistError> {
+            self.log.push(("requeued", self.next_ord));
+            if self.fail_requeued > 0 {
+                self.fail_requeued = self.fail_requeued.saturating_sub(1);
+                Err(crate::scheduler::outbox::PersistError)
+            } else {
+                let o = self.next_ord;
+                self.next_ord = self.next_ord.saturating_add(1);
+                Ok(Some(o))
+            }
+        }
+    }
+
+    /// A `RouteUpdate` of the relay queue `n` as pending control content.
+    #[cfg(feature = "kat")]
+    fn routes(n: u8) -> Result<super::PendingControl, Fail> {
+        use secmp_proto::wire::cell::{RelayQueue, RouteDescriptor, RouteUpdateBody};
+        Ok(super::PendingControl::Routes(RouteUpdateBody {
+            routes: vec![RouteDescriptor::RelayQueue(RelayQueue {
+                relay: crate::testutil::relay_ref(),
+                sid: [n; 16],
+                send_seed: secmp_crypto::SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?,
+                period_s: secmp_proto::wire::Period::S20,
+            })],
+        }))
+    }
+
+    /// The `sid`s of the relay-queue routes of the `Routes` events `b` raised since the last call.
+    #[cfg(feature = "kat")]
+    fn sids<
+        O: crate::scheduler::outbox::Outbox,
+        P: crate::scheduler::outbox::Persist,
+        S: super::EntropySource,
+    >(
+        b: &mut super::Conversation<O, P, S>,
+    ) -> Vec<[u8; 16]> {
+        use secmp_proto::wire::cell::RouteDescriptor;
+        let mut out = Vec::new();
+        for e in b.take_events() {
+            if let super::SessionEvent::Routes(r) = e {
+                for d in &r {
+                    if let RouteDescriptor::RelayQueue(q) = d {
+                        out.push(q.sid);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// How many `ResetRequested` events `b` raised since the last call.
+    #[cfg(feature = "kat")]
+    fn resets<
+        O: crate::scheduler::outbox::Outbox,
+        P: crate::scheduler::outbox::Persist,
+        S: super::EntropySource,
+    >(
+        b: &mut super::Conversation<O, P, S>,
+    ) -> usize {
+        b.take_events()
+            .iter()
+            .filter(|e| matches!(e, super::SessionEvent::ResetRequested))
+            .count()
+    }
+
+    /// SE-49 (Q225, CLAUDE.md §1.7): a control content planned again after an eviction whose row could not be written
+    /// again waits — its cell is not sealed — until the row is back; then it is sent once.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn control_cell_waits_for_its_row() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = pair(script(0, 2), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        let p2 = a.prepare(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        assert_eq!(
+            resets(b),
+            0,
+            "Q225: a control cell waits for its durable row"
+        );
+        let p3 = a.prepare(3_000).map_err(|_| "seal")?;
+        b.deliver_direct(&p3.cell).map_err(|_| "delivery")?;
+        assert_eq!(resets(b), 1, "sent once the row is back");
+        let p4 = a.prepare(4_000).map_err(|_| "seal")?;
+        b.deliver_direct(&p4.cell).map_err(|_| "delivery")?;
+        assert_eq!(resets(b), 0, "sent once");
+        assert_eq!(
+            a.persist()
+                .log
+                .iter()
+                .filter(|(k, _)| *k == "requeued")
+                .count(),
+            3
+        );
+        Ok(())
+    }
+
+    /// SE-50 (Q225): a durability that keeps no rows (`control_requeued` is `Ok(None)`) holds no control cell.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn durability_without_rows_holds_nothing() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        let p2 = a.prepare(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        assert_eq!(
+            resets(b),
+            1,
+            "Q225: a durability that keeps no rows holds nothing"
+        );
+        Ok(())
+    }
+
+    /// SE-35 (spec §10.6 (4), Q-5): a send-queue switch plans control content whose current attempt has a cell without
+    /// `OK_SEND` again for the new queue; the old queue's outcome only drops its token; the content settles on the new
+    /// queue and reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_replans_unsettled_control_content() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        assert_eq!(a.switch_send_queue(QueueId(9)), 0);
+        assert!(
+            a.has_pending_real(),
+            "Q-5: unsettled control content is planned again for the new queue"
+        );
+        let mut mine = super::Conversations::new();
+        let i = mine.add(a);
+        // the old queue's OK_SEND: its token is dropped
+        mine.relayed(QueueId(1), p0.token, 1);
+        let a = mine.get_mut(i).ok_or("conversation")?;
+        let p1 = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        a.relayed_direct(p1.token, 1);
+        let p2 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        a.relayed_direct(p2.token, 300);
+        a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(a.live_controls_test(), 0, "settled and collected");
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p1.cell).map_err(|_| "delivery")?;
+        assert!(matches!(
+            b.take_events().as_slice(),
+            [super::SessionEvent::ResetRequested]
+        ));
+        Ok(())
+    }
+
+    /// SE-60 (Q238, EXT2c-2; spec §10.6 (4)): a control content whose cells all have their `OK_SEND` on the old queue
+    /// and are among its last `QUEUE_CAPACITY` cells (row gone, entry kept for the eviction window) is planned again for
+    /// the new queue after a send-queue switch and reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_resends_settled_control_in_window() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p0.token, 1);
+        // settles: done, the row goes; the entry stays while its cell is in the window
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(a.live_controls_test(), 1);
+        a.switch_send_queue(QueueId(9));
+        assert!(
+            a.has_pending_real(),
+            "Q238: settled control content stranded on the old queue is planned again"
+        );
+        let p1 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p1.cell).map_err(|_| "delivery")?;
+        assert_eq!(resets(b), 1, "the new queue's copy reaches the peer");
+        Ok(())
+    }
+
+    /// SE-61 (Q238, negative control): a settled control content whose cell is no longer among the old queue's last
+    /// `QUEUE_CAPACITY` cells (128 later cells had their `OK_SEND` without its eviction: it was fetched) is not planned
+    /// again by a switch.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_leaves_control_content_outside_the_window() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, _convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p0.token, 1);
+        let d = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        // cell 1 is outside the last 128 (73..=200) but still held by the 256-cell eviction map
+        a.relayed_direct(d.token, 200);
+        assert_eq!(a.live_controls_test(), 1);
+        a.switch_send_queue(QueueId(9));
+        assert!(!a.has_pending_real(), "fetched content is not sent again");
+        Ok(())
+    }
+
+    /// SE-32 (spec §10.1, CLAUDE.md §1.4): planning control content again — after a failed `SEND`, an eviction, a lost
+    /// queue — seals nothing outside a slot: every seal is one preparation's.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn replanning_control_seals_nothing_outside_a_slot() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            0,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let e = super::counters::tr_encrypt_calls();
+        let p0 = a.prepare_direct(0).map_err(|_| "seal")?;
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 1);
+        a.on_failed(p0.token);
+        assert_eq!(
+            super::counters::tr_encrypt_calls() - e,
+            1,
+            "after on_failed"
+        );
+        let p1 = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 2);
+        a.relayed_direct(p1.token, 1);
+        a.on_evicted(1);
+        assert_eq!(
+            super::counters::tr_encrypt_calls() - e,
+            2,
+            "after on_evicted"
+        );
+        let p2 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 3);
+        a.on_lost();
+        assert_eq!(super::counters::tr_encrypt_calls() - e, 3, "after on_lost");
+        let mut cells = vec![p1.cell, p2.cell];
+        for k in 3..=6_u64 {
+            cells.push(a.prepare_direct(k * 1_000).map_err(|_| "seal")?.cell);
+            assert_eq!(
+                super::counters::tr_encrypt_calls() - e,
+                k + 1,
+                "prepare {k}"
+            );
+        }
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        for cell in &cells {
+            b.deliver_direct(cell).map_err(|_| "delivery")?;
+        }
+        let events = b.take_events();
+        assert!(!events.is_empty());
+        assert!(
+            events
+                .iter()
+                .all(|e| matches!(e, super::SessionEvent::ResetRequested)),
+            "no other event"
+        );
+        Ok(())
+    }
+
+    /// SE-53 (Q230, Q224): the row of a done newer `RouteUpdate` stays while a retired older one still holds its row
+    /// (its deletes failed) — a crash in between cannot leave the older row alone; it goes once the older row is gone.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn newer_routes_row_outlives_a_retired_one() -> Result<(), Fail> {
+        let (mut a, _convs) = pair(script(3, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(4, routes(3)?).map_err(|_| "queue")?;
+        a.queue_pending(5, routes(4)?).map_err(|_| "queue")?;
+        let p = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4); 3],
+            "Q230: the newer row stays while the retired older row is kept"
+        );
+        a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4); 4],
+            "the older row goes first"
+        );
+        a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [
+                ("relayed", 4),
+                ("relayed", 4),
+                ("relayed", 4),
+                ("relayed", 4),
+                ("relayed", 5)
+            ],
+            "then the newer row goes"
+        );
+        assert_eq!(a.live_controls_test(), 1, "the newer entry, settled");
+        Ok(())
+    }
+
+    /// B-4f killer (`prepare`, `actor.rs:1314:27`; Q225): a control cell held for its row does not hold the slot — a
+    /// queued message is planned and sealed in it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn held_control_cell_lets_a_message_through() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = pair(script(0, 2), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        a.outbox_mut().enqueue(text_message(7, 10), 0);
+        let p2 = a.prepare(2_000).map_err(|_| "seal")?;
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(
+            ids,
+            [[7; 16]],
+            "the held control cell does not take the slot"
+        );
+        assert_eq!(resets(b), 0, "and is not sealed");
+        Ok(())
+    }
+
+    /// B-4f killer (`on_lost`, `actor.rs:1438:16`; Q222 (3)): a lost queue plans each control content once — a planned cell
+    /// is not restored on its own before the re-plan of every content (one re-write attempt of a missing row, not two).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn lost_queue_replans_each_control_content_once() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, _convs) = pair(script(0, 9), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(
+            4,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        let p = a.prepare(0).map_err(|_| "seal")?;
+        a.relayed_direct(p.token, 1);
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        let requeued = |a: &super::Conversation<_, Script, _>| {
+            a.persist()
+                .log
+                .iter()
+                .filter(|(k, _)| *k == "requeued")
+                .count()
+        };
+        assert_eq!(requeued(&a), 1, "the eviction's re-write (fails)");
+        a.on_lost();
+        assert_eq!(requeued(&a), 2, "one re-plan per content on a lost queue");
+        Ok(())
+    }
+
+    /// SE-46 (Q224, Option R): adding a newer `RouteUpdate` deletes the older one's row at once; a failed delete is
+    /// retried at the next preparation and only until it succeeds; the outcomes of the older one's cells plan nothing,
+    /// and only the newer one reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn superseded_route_row_delete_is_retried() -> Result<(), Fail> {
+        let (mut a, mut convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(4, routes(3)?).map_err(|_| "queue")?;
+        let p1 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.queue_pending(5, routes(4)?).map_err(|_| "queue")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4)],
+            "Q224: the older row goes when the newer is added"
+        );
+        a.on_failed(p1.token);
+        let p2 = a.prepare_direct(1_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist().log,
+            [("relayed", 4), ("relayed", 4)],
+            "a failed delete is retried at the next settle"
+        );
+        let p3 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        assert_eq!(a.persist().log.len(), 2, "deleted: not tried again");
+        assert_eq!(a.live_controls_test(), 1, "only the newer entry");
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        b.deliver_direct(&p3.cell).map_err(|_| "delivery")?;
+        assert_eq!(sids(b), [[4; 16]], "only the newer RouteUpdate");
+        Ok(())
+    }
+
+    /// SE-47 (Q224): an evicted older `RouteUpdate` whose row is being re-written is retired by a newer one: its row is
+    /// never written again, and only the newer one reaches the peer.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn superseded_routes_row_is_not_rewritten() -> Result<(), Fail> {
+        let (mut a, mut convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(4, routes(3)?).map_err(|_| "queue")?;
+        let p1 = a.prepare_direct(0).map_err(|_| "seal")?;
+        a.relayed_direct(p1.token, 1);
+        a.prepare_direct(1_000).map_err(|_| "seal")?;
+        a.on_evicted(1);
+        a.queue_pending(6, routes(4)?).map_err(|_| "queue")?;
+        let p2 = a.prepare_direct(2_000).map_err(|_| "seal")?;
+        let p3 = a.prepare_direct(3_000).map_err(|_| "seal")?;
+        assert_eq!(
+            a.persist()
+                .log
+                .iter()
+                .filter(|(k, _)| *k == "requeued")
+                .count(),
+            1,
+            "Q224: a retired entry's row is never written again"
+        );
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&p2.cell).map_err(|_| "delivery")?;
+        b.deliver_direct(&p3.cell).map_err(|_| "delivery")?;
+        assert_eq!(sids(b), [[4; 16]], "only the newer RouteUpdate");
+        Ok(())
+    }
+
+    /// V2-1 (killer, `conversation.rs:254`): the delivered ids of an earlier run suppress a redelivery.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn seed_seen_suppresses_redelivery() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.outbox_mut().enqueue(text_message(5, 10), 0);
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        convs
+            .get_mut(0)
+            .ok_or("conversation")?
+            .seed_seen([[5_u8; 16]]);
+        convs
+            .deliver(QueueId(1), 0, 1, &cell)
+            .map_err(|_| "deliver")?;
+        assert!(convs.get(0).ok_or("conversation")?.received().is_empty());
+        Ok(())
+    }
+
+    /// B-4 killers (`rotate_recv_queue`, `drop_recv_queue`): the queue a rotation leaves joins the overlap once and never
+    /// twice; rotating onto the current queue moves nothing; a dropped queue leaves the overlap, and dropping the current
+    /// one clears it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn recv_overlap_follows_rotations_and_drops() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId as Q;
+        let mut conv = conversation(
+            initiator_state()?,
+            crate::scheduler::outbox::MemPersist::new(),
+        )?;
+        conv.rotate_recv_queue(Q(1));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(1)), vec![]));
+        conv.rotate_recv_queue(Q(2));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(2)), vec![Q(1)]));
+        conv.rotate_recv_queue(Q(2));
+        assert_eq!(
+            conv.recv_queues_kat(),
+            (Some(Q(2)), vec![Q(1)]),
+            "the same queue again"
+        );
+        conv.rotate_recv_queue(Q(1));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(1)), vec![Q(1), Q(2)]));
+        conv.drop_recv_queue(Q(2));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(1)), vec![Q(1)]));
+        conv.drop_recv_queue(Q(9));
+        assert_eq!(
+            conv.recv_queues_kat(),
+            (Some(Q(1)), vec![Q(1)]),
+            "an unknown queue"
+        );
+        conv.drop_recv_queue(Q(1));
+        assert_eq!(conv.recv_queues_kat(), (None, vec![]));
+        Ok(())
+    }
+
+    /// B-4 killers (`switch_send_queue`, `drop_send_queue`, SE-02): the queue we leave stays as a dummy-only queue until it
+    /// is dropped; every real message among the last 128 cells sent on it goes back to the outbox — the ones before them do
+    /// not, nor does a message that was delivered.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_requeues_the_real_messages_of_the_last_128_cells() -> Result<(), Fail> {
+        use crate::scheduler::outbox::{MemPersist, MsgState, Outbox as _};
+        use crate::scheduler::types::QueueId as Q;
+        let mut conv = conversation(initiator_state()?, MemPersist::new())?;
+        conv.bind(Q(1), Q(2));
+        let mut cell_id = 0_u64;
+        let mut send = |conv: &mut TestConversation, message: Option<u8>| -> Result<(), Fail> {
+            if let Some(n) = message {
+                conv.outbox_mut().enqueue(text_message(n, 5), 0);
+            }
+            let prepared = conv.prepare_direct(0).map_err(|_| "seal")?;
+            cell_id = cell_id.saturating_add(1);
+            conv.relayed_direct(prepared.token, cell_id);
+            Ok(())
+        };
+        // two early messages (cells 1, 2), 130 dummies (3…132), three late messages (133…135), one of them delivered later
+        send(&mut conv, Some(1))?;
+        send(&mut conv, Some(2))?;
+        for _ in 0..130 {
+            send(&mut conv, None)?;
+        }
+        for n in [11, 12, 13] {
+            send(&mut conv, Some(n))?;
+        }
+        conv.outbox_mut().delivered(&[13; 16]);
+        assert_eq!(
+            conv.switch_send_queue(Q(9)),
+            3,
+            "11, 12 and 13 are in the window"
+        );
+        assert_eq!(conv.outbox().state(&[11; 16]), Some(MsgState::Queued));
+        assert_eq!(conv.outbox().state(&[12; 16]), Some(MsgState::Queued));
+        assert_eq!(conv.outbox().state(&[13; 16]), Some(MsgState::Delivered));
+        assert!(matches!(
+            conv.outbox().state(&[1; 16]),
+            Some(MsgState::Relayed(_))
+        ));
+        assert!(matches!(
+            conv.outbox().state(&[2; 16]),
+            Some(MsgState::Relayed(_))
+        ));
+        assert_eq!(conv.send_queues_kat(), (Some(Q(9)), vec![Q(1)]));
+        // a second switch onto the same queue leaves the overlap as it was
+        assert_eq!(conv.switch_send_queue(Q(9)), 0);
+        assert_eq!(conv.send_queues_kat(), (Some(Q(9)), vec![Q(1)]));
+        conv.drop_send_queue(Q(7));
+        assert_eq!(
+            conv.send_queues_kat(),
+            (Some(Q(9)), vec![Q(1)]),
+            "an unknown queue"
+        );
+        conv.drop_send_queue(Q(1));
+        assert_eq!(conv.send_queues_kat(), (Some(Q(9)), vec![]));
+        Ok(())
+    }
+
+    /// B-4 killer (`mark_removed`): a removed contact takes no real content.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn marked_removed_refuses_real_content() -> Result<(), Fail> {
+        let mut conv = conversation(
+            initiator_state()?,
+            crate::scheduler::outbox::MemPersist::new(),
+        )?;
+        assert_eq!(conv.may_send_real(), Ok(()));
+        conv.mark_removed();
+        assert_eq!(conv.may_send_real(), Err(super::Refusal::Removed));
+        Ok(())
+    }
+
+    /// B-4 killer (the guard of the `ContactRemoved` arm of `apply_delivery`, ADR-054 item 4): `Control{ContactRemoved}`
+    /// without an argument removes the contact; with an argument it does nothing.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn contact_removed_needs_an_empty_argument() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        use secmp_crypto::Zeroizing;
+        use secmp_proto::wire::cell::{ContentBody, ControlBody, ControlCode};
+        for (arg, removed) in [(vec![1_u8], false), (Vec::new(), true)] {
+            let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+            a.plan_control(
+                ContentBody::Control(ControlBody {
+                    code: ControlCode::ContactRemoved,
+                    arg: Zeroizing::new(arg),
+                }),
+                super::Owner::Dummy,
+            );
+            let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+            convs
+                .deliver(QueueId(1), 0, 1, &cell)
+                .map_err(|_| "deliver")?;
+            let events = convs.get_mut(0).ok_or("conversation")?.take_events();
+            assert_eq!(
+                matches!(events.as_slice(), [super::SessionEvent::ContactRemoved]),
+                removed
+            );
+            assert_eq!(
+                convs.get(0).ok_or("conversation")?.may_send_real().is_err(),
+                removed
+            );
+        }
+        Ok(())
+    }
+
+    /// C1-4 c (spec §7.7: "Unsigned/unverifiable changes freeze the session with a warning"): a verified `KeyChange`
+    /// whose new `IK_sig` cannot be loaded freezes the session — the delivery becomes `KeyChangeRefused`, the trust
+    /// `Frozen`, no key is taken. With a loader that works, the change is admitted with its key and the trust is left as
+    /// it was. (No such `IksPublic` can be built through `secmp-proto`: `Ed25519Pk` decodes strictly and the ML-DSA key
+    /// decode cannot fail, hence the injected loader.)
+    #[cfg(feature = "kat")]
+    #[test]
+    fn unloadable_new_ik_sig_freezes() -> Result<(), Fail> {
+        use super::Delivery;
+        use secmp_proto::prekeys::IdentityKeys;
+        use secmp_proto::tr::FixedEntropy;
+        use secmp_proto::tr::content::{Trust, ik_sig};
+
+        let keys = IdentityKeys::generate(&mut FixedEntropy::new(&stream(907, 1 << 20)))
+            .map_err(|_| "keys")?;
+        let iks = keys.public().clone();
+
+        let mut trust = Trust::KeyChanged;
+        let (delivery, key) =
+            super::admit_key_change_with(Delivery::KeyChange(iks.clone()), &mut trust, |_| {
+                Err(secmp_proto::Error::Rejected)
+            });
+        assert!(matches!(delivery, Delivery::KeyChangeRefused));
+        assert_eq!(trust, Trust::Frozen);
+        assert!(key.is_none());
+
+        let mut trust = Trust::KeyChanged;
+        let (delivery, key) =
+            super::admit_key_change_with(Delivery::KeyChange(iks.clone()), &mut trust, |i| {
+                ik_sig(i)
+            });
+        assert!(matches!(delivery, Delivery::KeyChange(_)));
+        assert_eq!(trust, Trust::KeyChanged);
+        assert_eq!(key, Some(ik_sig(&iks).map_err(|_| "ik_sig")?));
+        Ok(())
+    }
+
+    /// A `KeyChange` body for the Q248 tests: a fresh identity signed by a fixed key (never verified here).
+    #[cfg(feature = "kat")]
+    fn kc_body() -> Result<super::KeyChangeBody, Fail> {
+        use secmp_proto::prekeys::IdentityKeys;
+        use secmp_proto::tr::{Entropy as _, FixedEntropy};
+        let old = FixedEntropy::new(&stream(931, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "key")?;
+        let new = IdentityKeys::generate(&mut FixedEntropy::new(&stream(932, 1 << 20)))
+            .map_err(|_| "keys")?;
+        secmp_proto::tr::content::key_change_body(&old, new.public()).map_err(|_| "body")
+    }
+
+    /// How many control rows `a`'s durability was asked to write (`requeued`) or to delete (`relayed`, their `ord`s).
+    #[cfg(feature = "kat")]
+    fn row_calls(a: &Script) -> (usize, Vec<i64>) {
+        let writes = a.log.iter().filter(|(k, _)| *k == "requeued").count();
+        let deletes = a
+            .log
+            .iter()
+            .filter(|(k, _)| *k == "relayed")
+            .map(|(_, o)| *o)
+            .collect();
+        (writes, deletes)
+    }
+
+    /// SE-92 (Q248, CLAUDE.md §1.7): with the send queue's `sid` known, a cell of a durable `KeyChange` is sealed only
+    /// after a marker row for that queue was written: a failed write lets a queued message take the slot and is tried
+    /// again at the next preparation; one marker per queue and none for another control content; after a switch the new
+    /// queue's marker comes before its first cell.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn key_change_cell_waits_for_its_marker() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::wire::cell::ControlCode;
+        let (mut a, mut convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(QueueId(1), [1; 16]);
+        a.bind(QueueId(1), QueueId(2));
+        a.outbox_mut().enqueue(text_message(7, 10), 0);
+        let b = convs.get_mut(0).ok_or("conversation")?;
+        b.deliver_direct(&a.prepare(0).map_err(|_| "seal")?.cell)
+            .map_err(|_| "deliver")?;
+        let ids: Vec<super::MsgId> = b.take_received().iter().map(|r| r.msg_id).collect();
+        assert_eq!(
+            (ids, b.partials(), row_calls(a.persist()).0),
+            (vec![[7; 16]], 0, 1),
+            "Q248: no KeyChange cell before its marker is durable; the message takes the slot"
+        );
+        for (now, want) in [(1_000, (1, 2)), (2_000, (1, 2))] {
+            b.deliver_direct(&a.prepare(now).map_err(|_| "seal")?.cell)
+                .map_err(|_| "deliver")?;
+            assert_eq!(
+                (b.partials(), row_calls(a.persist()).0),
+                want,
+                "the marker written once, then the cells"
+            );
+        }
+        a.queue_pending(
+            8,
+            super::PendingControl::Control(ControlCode::SessionResetRequest),
+        )
+        .map_err(|_| "queue")?;
+        b.deliver_direct(&a.prepare(3_000).map_err(|_| "seal")?.cell)
+            .map_err(|_| "deliver")?;
+        assert_eq!(
+            row_calls(a.persist()).0,
+            2,
+            "no marker for a content that is not a KeyChange"
+        );
+        a.set_send_sid(QueueId(9), [9; 16]);
+        a.switch_send_queue(QueueId(9));
+        b.deliver_direct(&a.prepare(4_000).map_err(|_| "seal")?.cell)
+            .map_err(|_| "deliver")?;
+        assert_eq!(
+            (b.partials(), row_calls(a.persist()).0),
+            (2, 3),
+            "the new queue's marker, then the new attempt's first cell"
+        );
+        Ok(())
+    }
+
+    /// SE-93 (Q248): a released `KeyChange` deletes its markers before its row, and a failed delete is tried again at
+    /// the next preparation — while a marker is left the row stays; so is the failed delete of a marker that names no
+    /// `KeyChange` (an orphan, as read at open).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn markers_go_before_their_key_change() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(2, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(QueueId(1), [1; 16]);
+        a.bind(QueueId(1), QueueId(2));
+        for (i, id) in [1_u64, 2, 3, 4, 261].into_iter().enumerate() {
+            let p = a
+                .prepare(u64::try_from(i).map_err(|_| "index")? * 1_000)
+                .map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.restore_marker(50, 99, [5; 16]);
+        a.prepare(10_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![100, 50]),
+            "Q248: the marker first; its failed delete keeps the KeyChange row"
+        );
+        assert!(a.key_change_in_flight());
+        a.prepare(11_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![100, 50, 100, 7, 50]),
+            "each failed delete tried again"
+        );
+        assert!(!a.key_change_in_flight());
+        Ok(())
+    }
+
+    /// SE-94 (Q248, Q250): the marker of an old send queue goes once no copy can be there — no mark on it and no
+    /// `KeyChange` cell on its way to it — while the `KeyChange` still waits for the new queue (a cell on its way there);
+    /// a failed delete is tried again; the row stays. The end of the old queue's overlap then marks nothing for a cell on its way to the current queue:
+    /// the new queue's window releases the `KeyChange`, its marker first.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn old_queue_marker_goes_when_nothing_can_be_there() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (old, new) = (QueueId(1), QueueId(9));
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(old, [1; 16]);
+        a.bind(old, QueueId(2));
+        for id in 1..4_u64 {
+            let p = a.prepare(id * 1_000).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        let last = a.prepare(4_000).map_err(|_| "seal")?;
+        a.set_send_sid(new, [9; 16]);
+        a.switch_send_queue(new);
+        for id in 1..4_u64 {
+            let p = a.prepare(10_000 + id).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        let fourth = a.prepare(15_000).map_err(|_| "seal")?;
+        let dummy = a.prepare_overlap(20_000).map_err(|_| "seal")?;
+        a.on_overlap_relayed(old, dummy.token, 131);
+        a.prepare(21_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![]),
+            "Q248: a KeyChange cell on its way to the old queue keeps its marker"
+        );
+        a.on_overlap_relayed(old, last.token, 4);
+        let dummy = a.prepare_overlap(22_000).map_err(|_| "seal")?;
+        a.on_overlap_relayed(old, dummy.token, 132);
+        a.prepare(23_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100]),
+            "the old queue's marker is deleted; the first attempt fails"
+        );
+        a.prepare(23_500).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100, 100]),
+            "tried again; the KeyChange row stays"
+        );
+        assert!(a.key_change_in_flight());
+        a.drop_send_queue(old);
+        a.relayed_direct(fourth.token, 4);
+        for (i, id) in [261_u64, 262].into_iter().enumerate() {
+            let p = a
+                .prepare(24_000 + u64::try_from(i).map_err(|_| "index")?)
+                .map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.prepare(30_000).map_err(|_| "seal")?;
+        assert!(
+            !a.key_change_in_flight(),
+            "Q250: the end of the old queue marks no cell on its way to the current one"
+        );
+        assert_eq!(row_calls(a.persist()), (2, vec![100, 100, 101, 7]));
+        Ok(())
+    }
+
+    /// SE-100 (Q250, B17a-delta D-03): a `KeyChange` cell still on its way to an old send queue when the sender drops that
+    /// queue gets no answer any more (`relayed` and `send_failed` no longer reach the conversation): it is marked for good,
+    /// so neither the new queue's window nor more `OK_SEND`s there release the `KeyChange`, and its marker stays.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_queue_with_a_key_change_cell_on_its_way_holds() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (old, new) = (QueueId(1), QueueId(9));
+        let (mut a, _convs) = pair(script(0, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(old, [1; 16]);
+        a.bind(old, QueueId(2));
+        for id in 1..4_u64 {
+            let p = a.prepare(id * 1_000).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.prepare(4_000).map_err(|_| "seal")?;
+        a.set_send_sid(new, [9; 16]);
+        a.switch_send_queue(new);
+        let dummy = a.prepare_overlap(5_000).map_err(|_| "seal")?;
+        a.on_overlap_relayed(old, dummy.token, 131);
+        a.drop_send_queue(old);
+        for (i, id) in [1_u64, 2, 3, 4, 261, 262, 400].into_iter().enumerate() {
+            let p = a
+                .prepare(10_000 + u64::try_from(i).map_err(|_| "index")?)
+                .map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.prepare(20_000).map_err(|_| "seal")?;
+        assert!(
+            a.key_change_in_flight(),
+            "Q250: the copy may reach the dropped queue after its end"
+        );
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![]),
+            "no marker and no row goes"
+        );
+        Ok(())
+    }
+
+    /// An overlap route of `sid` `[n; 16]` (seed `[n; 32]`, period 20 s) until `until_ms`, naming no copy (Q252).
+    #[cfg(feature = "kat")]
+    fn overlap(n: u8, until_ms: u64) -> Result<super::OverlapRoute, Fail> {
+        Ok(super::OverlapRoute {
+            sid: [n; 16],
+            seed: secmp_crypto::SecretBytes::from_slice(&[n; 32]).map_err(|_| "seed")?,
+            period: secmp_proto::wire::Period::S20,
+            until_ms,
+            newest: 0,
+            unknown: false,
+        })
+    }
+
+    /// `keep_overlap` of `old` with [`overlap`] `n`.
+    #[cfg(feature = "kat")]
+    fn keep(
+        a: &mut super::Conversation<crate::scheduler::outbox::MemOutbox, Script, Fixed>,
+        old: u32,
+        n: u8,
+    ) -> Result<(), Fail> {
+        let o = overlap(n, 5_000)?;
+        a.keep_overlap(
+            crate::scheduler::types::QueueId(old),
+            o.sid,
+            o.seed,
+            o.period,
+            o.until_ms,
+        );
+        Ok(())
+    }
+
+    /// SE-105 (Q252): the host's switch writes the old queue's overlap row at once, before any preparation for the new
+    /// queue; a failed write is tried again at the next preparation, and a written row is not written again.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn overlap_row_is_written_at_the_switch() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        assert_eq!(
+            row_calls(a.persist()).0,
+            1,
+            "Q252: written at the switch (this write fails)"
+        );
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()).0,
+            2,
+            "tried again at the next preparation"
+        );
+        a.prepare(1_000).map_err(|_| "seal")?;
+        assert_eq!(row_calls(a.persist()), (2, vec![]), "written once");
+        Ok(())
+    }
+
+    /// SE-147 (Q265; CLAUDE.md §1.7): `extend_overlap` writes the row with the later end before it deletes the row it
+    /// replaces (a failed delete is an orphan, tried again at the next preparation), names the new `ord` at the drop, and
+    /// writes nothing for an end that is not later; a failed write keeps the row, its `ord` and its end and answers
+    /// `Some(false)`; a row not written yet is written with the later end; no overlap of the queue: `None`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn extend_overlap_writes_before_it_deletes() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let ends = |a: &super::Conversation<crate::scheduler::outbox::MemOutbox, Script, Fixed>| {
+            a.overlaps
+                .iter()
+                .map(|o| (o.route.until_ms, o.ord, o.unwritten))
+                .collect::<Vec<_>>()
+        };
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        assert_eq!(a.extend_overlap(QueueId(5), 9_000), None, "no overlap of 5");
+        assert_eq!(a.extend_overlap(QueueId(1), 5_000), Some(true), "not later");
+        assert_eq!(a.extend_overlap(QueueId(1), 4_000), Some(true), "earlier");
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![]),
+            "nothing written for them"
+        );
+        assert_eq!(a.extend_overlap(QueueId(1), 9_000), Some(true), "later");
+        assert_eq!(
+            a.persist().log,
+            vec![("requeued", 100), ("requeued", 101), ("relayed", 100)],
+            "Q265: the new row, then the delete of the old one"
+        );
+        assert_eq!(ends(&a), vec![(9_000, Some(101), false)]);
+        assert_eq!(a.orphans, vec![100], "the failed delete is an orphan");
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()).1,
+            vec![100, 100],
+            "tried again at the preparation"
+        );
+        a.persist_mut().fail_requeued = 1;
+        assert_eq!(
+            a.extend_overlap(QueueId(1), 12_000),
+            Some(false),
+            "the write fails"
+        );
+        assert_eq!(
+            ends(&a),
+            vec![(9_000, Some(101), false)],
+            "row, ord and end stay"
+        );
+        assert_eq!(
+            row_calls(a.persist()),
+            (3, vec![100, 100]),
+            "and nothing is deleted"
+        );
+        a.drop_send_queue(QueueId(1));
+        assert_eq!(
+            row_calls(a.persist()).1,
+            vec![100, 100, 101],
+            "the drop deletes the new row"
+        );
+
+        let (mut b, _convs) = pair(script(0, 2), crate::scheduler::outbox::MemPersist::new())?;
+        b.bind(QueueId(1), QueueId(2));
+        b.switch_send_queue(QueueId(9));
+        keep(&mut b, 1, 1)?;
+        assert_eq!(
+            b.extend_overlap(QueueId(1), 9_000),
+            Some(false),
+            "not written, and this write fails"
+        );
+        assert_eq!(
+            ends(&b),
+            vec![(9_000, None, true)],
+            "the later end waits for its write"
+        );
+        assert_eq!(
+            b.extend_overlap(QueueId(1), 7_000),
+            Some(true),
+            "written, with 9 000"
+        );
+        assert_eq!(ends(&b), vec![(9_000, Some(100), false)]);
+        assert_eq!(row_calls(b.persist()), (3, vec![]));
+        Ok(())
+    }
+
+    /// SE-106 (Q252): dropping a send queue deletes its overlap row and no other; a failed delete is tried again at the
+    /// next preparation, once.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_overlap_deletes_its_row() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        a.switch_send_queue(QueueId(10));
+        keep(&mut a, 9, 9)?;
+        a.drop_send_queue(QueueId(5));
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![]),
+            "another queue: nothing"
+        );
+        a.drop_send_queue(QueueId(1));
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100]),
+            "Q252: the row of the dropped queue (this delete fails)"
+        );
+        a.prepare(0).map_err(|_| "seal")?;
+        a.prepare(1_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (2, vec![100, 100]),
+            "tried again, once"
+        );
+        a.drop_send_queue(QueueId(9));
+        assert_eq!(row_calls(a.persist()), (2, vec![100, 100, 101]));
+        assert_eq!(a.send_queues_kat(), (Some(QueueId(10)), vec![]));
+        Ok(())
+    }
+
+    /// SE-111 (Q253): overlap rows read at open that the host does not register again go at the first preparation (a
+    /// failed delete is tried again); the rows of a registered `sid` — both, if two name it — stay, and its queue carries
+    /// the overlap until it is dropped, which deletes them.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn overlap_rows_not_registered_again_go() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(1, 0), crate::scheduler::outbox::MemPersist::new())?;
+        for (ord, n) in [(50, 5), (51, 6), (52, 6)] {
+            a.restore_overlap(ord, overlap(n, 1)?);
+        }
+        let sids = |a: &super::Conversation<crate::scheduler::outbox::MemOutbox, Script, Fixed>| -> Result<Vec<secmp_proto::wire::Id>, Fail> {
+            Ok(a.overlaps_read().map_err(|_| "read")?.iter().map(|r| r.sid).collect())
+        };
+        assert_eq!(sids(&a)?, vec![[5; 16], [6; 16], [6; 16]]);
+        a.bind(QueueId(1), QueueId(2));
+        a.resume_overlap(QueueId(30), [6; 16]);
+        assert_eq!(sids(&a)?, vec![[5; 16]], "Q253: both rows of 6 taken");
+        assert_eq!(a.send_queues_kat(), (Some(QueueId(1)), vec![QueueId(30)]));
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (0, vec![50]),
+            "the unregistered row (this delete fails)"
+        );
+        a.prepare(1_000).map_err(|_| "seal")?;
+        a.prepare(2_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (0, vec![50, 50]),
+            "tried again, once; 6 stays"
+        );
+        a.drop_send_queue(QueueId(30));
+        assert_eq!(row_calls(a.persist()), (0, vec![50, 50, 51, 52]));
+        Ok(())
+    }
+
+    /// SE-118 (Q253; D-B92): a marker of a send queue dropped in this process is not taken over by a later registration of
+    /// its `sid` in the same process (only markers read at open are): when the peer's route moves the sender back to B
+    /// (`sid` 1, a new queue id) after B's overlap ended with B's copy marked, the new queue id gets a marker of its own
+    /// before the re-sent copy's first cell, B's dropped marker stays, and the guard holds.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_queue_marker_is_not_taken_over_in_the_same_process() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (old, new, back) = (QueueId(1), QueueId(9), QueueId(21));
+        let (mut a, _convs) = pair(script(0, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        a.set_send_sid(old, [1; 16]);
+        a.bind(old, QueueId(2));
+        for id in 1..5_u64 {
+            let p = a.prepare(id * 1_000).map_err(|_| "seal")?;
+            a.relayed_direct(p.token, id);
+        }
+        a.set_send_sid(new, [9; 16]);
+        a.switch_send_queue(new);
+        a.prepare(10_000).map_err(|_| "seal")?;
+        a.drop_send_queue(old);
+        a.set_send_sid(back, [1; 16]);
+        a.switch_send_queue(back);
+        a.prepare(20_000).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (3, vec![]),
+            "D-B92: the dropped queue's marker stays; the new queue id gets its own"
+        );
+        assert!(a.key_change_in_flight());
+        Ok(())
+    }
+
+    /// SE-123 (Q254; verification R1 of B17b-3): `copies_on` names, for one queue only, the highest stranded id of a
+    /// `KeyChange` there — whatever the order of its marks — and a copy of unknown id when a mark of unknown outcome is on
+    /// that queue or a cell of that `KeyChange` is on its way to it; marks and cells of other queues do not count.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn copies_on_names_the_highest_mark_of_that_queue() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (q1, q2, q3) = (QueueId(1), QueueId(2), QueueId(3));
+        let (mut a, _convs) = pair(script(0, 0), crate::scheduler::outbox::MemPersist::new())?;
+        a.queue_pending(7, super::PendingControl::KeyChange(kc_body()?))
+            .map_err(|_| "queue")?;
+        let (&id, e) = a.controls.iter_mut().next().ok_or("entry")?;
+        e.stranded = vec![(q1, 9), (q1, 5), (q2, 50)];
+        e.unknown = vec![(q2, 0)];
+        let attempt = e.attempt;
+        a.inflight.insert(
+            99,
+            super::Sent {
+                owner: super::Owner::Control(super::ControlRef { id, attempt }),
+                total: 1,
+                queue: Some(q3),
+            },
+        );
+        assert_eq!(
+            (
+                a.copies_on(q1),
+                a.copies_on(q2),
+                a.copies_on(q3),
+                a.copies_on(QueueId(4))
+            ),
+            ((9, false), (50, true), (0, true), (0, false)),
+            "Q254: per queue, the highest mark; unknown by a mark or by a cell on its way"
+        );
+        Ok(())
+    }
+
+    /// SE-124 (Q252; verification R1 of B17b-3): a queue dropped before its overlap row could be written leaves nothing to
+    /// write: the next preparation writes no late row for it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn dropped_overlap_writes_no_late_row() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId;
+        let (mut a, _convs) = pair(script(0, 1), crate::scheduler::outbox::MemPersist::new())?;
+        a.bind(QueueId(1), QueueId(2));
+        a.switch_send_queue(QueueId(9));
+        keep(&mut a, 1, 1)?;
+        a.drop_send_queue(QueueId(1));
+        a.prepare(0).map_err(|_| "seal")?;
+        assert_eq!(
+            row_calls(a.persist()),
+            (1, vec![]),
+            "Q252: no late write for a dropped queue"
+        );
+        Ok(())
+    }
+}

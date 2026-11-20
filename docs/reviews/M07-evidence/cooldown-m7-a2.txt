@@ -1,0 +1,13 @@
+# cargo xtask step cooldown, A-2 head (network: crates.io index pubtime)
+cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2))
+### gate `cooldown`
+
+| item | verdict |
+|---|---|
+| status | PASS (24 s) |
+| line 1 | 567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2) |
+| line 2 | youngest: rustls-webpki 0.103.16, 8 days |
+| line 3 | cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2)) |
+
+
+

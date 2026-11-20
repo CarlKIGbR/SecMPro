@@ -1,0 +1,35 @@
+head ab72776d22d5ac22720084a7d207725a32697ec2 (tree clean but for the ci-full-b4c logs); WEISUNG M7-B-4c7 §1 (4), §2; 2026-11-09 20:0x UTC
+scratch crate target/hmaccheck (git-ignored, outside the workspace, own [workspace]): rusqlite =0.39.0, default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] (the secmp-store line, Cargo.toml:72), the workspace Cargo.lock copied, the open sequence of secmp_store::open_connection (SQLITE_DBCONFIG_DEFENSIVE, PRAGMA cipher_memory_security = ON, PRAGMA key = "x'<64 hex>'", first read of sqlite_master); no secmp-store code and no lock/manifest of the workspace touched.
+
+$ cargo run --offline --manifest-path target/hmaccheck/Cargo.toml --target-dir target/hmaccheck/t
+PRAGMA cipher_version = Text("4.10.0 community")
+PRAGMA cipher_use_hmac = Text("1")
+PRAGMA cipher_page_size = Text("4096")
+PRAGMA cipher_hmac_algorithm = Text("HMAC_SHA512")
+PRAGMA cipher_plaintext_header_size = Text("0")
+file size 24576
+(after creating a table with a 20000-byte blob, a wal_checkpoint(TRUNCATE), closing, flipping ONE bit of byte 100 of page 3 in the file, reopening with the right key and reading the blob:)
+2026-11-09 20:09:24.395: ERROR CORE sqlcipher_page_cipher: hmac check failed for pgno=3
+2026-11-09 20:09:24.395: ERROR CORE sqlite3Codec: error decrypting page 3 data: 1
+2026-11-09 20:09:24.395: ERROR CORE sqlcipher_codec_ctx_set_error 1
+read after flipping one byte of page 3: Err(SqliteFailure(Error { code: DatabaseCorrupt, extended_code: 11 }, Some("database disk image is malformed")))
+
+(an earlier run of the same program that read `length(a)` instead of the blob returned Ok(20000): the length comes from the record header, page 3 is an overflow page that is not read; the run above reads the blob. Recorded so the two outputs are not confused.)
+
+$ cargo tree --offline --manifest-path target/hmaccheck/Cargo.toml -i libsqlite3-sys
+libsqlite3-sys v0.37.0
+└── rusqlite v0.39.0
+    └── hmaccheck v0.0.0 (/work/SecMPro/target/hmaccheck)
+
+$ cargo tree -i libsqlite3-sys        (workspace)
+libsqlite3-sys v0.37.0
+└── rusqlite v0.39.0
+    ├── secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store) ...   (one libsqlite3-sys, one rusqlite: v0.37.0 / v0.39.0)
+
+$ cargo tree -d -i libsqlite3-sys     (duplicates of libsqlite3-sys)
+warning: nothing to print.
+
+$ cargo tree -d --depth 0 | grep -ci 'sqlite\|openssl'
+0
+
+(`cargo tree -d --depth 0` lists crates present in more than one version — RustCrypto 0.10/0.11 generations, rand 0.8/0.9/0.10, syn 1/2/3, toml, thiserror and so on, all pre-existing; none of rusqlite, libsqlite3-sys, openssl-sys, openssl-src. The pin `rusqlite = "=0.39.0"` is "the version Arti resolves" (ADR-055, docs/08 Am. 7 table); a bump of ours alone would add a second rusqlite/libsqlite3-sys pair.)

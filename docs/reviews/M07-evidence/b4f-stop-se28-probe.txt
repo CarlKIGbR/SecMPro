@@ -1,0 +1,119 @@
+head 4251a0be1efa8ddac8fcbdf1b70d66fc57b8dbc9
+
+STOP (WEISUNG M7-B-4f §5 "any instruction that cannot be followed literally"; step 5, SE-28). Probe on the step-4 head
+above, not committed: the helper `lost_direct`, SE-28 written as dictated (its three expectations folded into one tuple
+assert so that one run shows all three numbers), and — second run — the dictated `on_lost` hunk of §2. The patch of the
+probe (both hunks) is below; it was reverted (`git checkout -- crates`, `git status` clean but this file).
+
+cmd: cargo nextest run -p secmp-client-core --features kat -E 'test(queue_lost_replans)'
+
+## run 1: step-4 tree + test + `lost_direct` (no on_lost hunk) — the dictated red "left: 2 right: 3" for the rows
+    thread '<unnamed>' (2301765) panicked at crates/secmp-client-core/src/sessions/tests.rs:2356:9:
+    assertion `left == right` failed: (rows after the lost queue, ResetRequested, Routes)
+      left: (2, 0, 1)
+     right: (3, 1, 3)
+
+## run 2: + the dictated `on_lost` hunk (drain the plan restoring every non-Control owner, then `replan_control` for every
+## entry in id order) — still red: the dictated `replan_control` supersession drops B (a newer Routes entry C exists) and
+## the in-memory Routes entry of `established`'s reply (two newer Routes entries exist)
+    thread '<unnamed>' (2302332) panicked at crates/secmp-client-core/src/sessions/tests.rs:2356:9:
+    assertion `left == right` failed: (rows after the lost queue, ResetRequested, Routes)
+      left: (2, 1, 1)
+     right: (3, 1, 3)
+
+## run 3: run 2 + the supersession branch of `replan_control` deleted (the SE-37 mutation) — green
+        PASS [   1.324s] (1/1) secmp-client-core sessions::tests::queue_lost_replans_unsealed_and_sealed_control_content
+
+Conclusion: SE-28's dictated expectations (rows == 3 "B, C, A re-written"; three Routes) hold only without the dictated
+supersession of §2 `replan_control` (Q222 (3) "an older RouteUpdate is not re-sent behind a newer one", §10.6 (5)),
+which SE-37 requires (its red is exactly that branch deleted). With both as dictated: rows == 2 (A re-written, C),
+one ResetRequested, one Routes (C). The two dictations contradict each other; the implementer does not choose.
+
+## probe patch (reverted)
+diff --git a/crates/secmp-client-core/src/sessions/actor.rs b/crates/secmp-client-core/src/sessions/actor.rs
+index f2ec85e..580183c 100644
+--- a/crates/secmp-client-core/src/sessions/actor.rs
++++ b/crates/secmp-client-core/src/sessions/actor.rs
+@@ -1189,6 +1189,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+         self.on_evicted(cell_id);
+     }
+ 
++    /// The queue we send to was lost (what the scheduler's `queue_lost` does; tests only).
++    #[cfg(test)]
++    pub(crate) fn lost_direct(&mut self) {
++        self.on_lost();
++    }
++
+     /// The `SEND` of the cell of `token` failed or was discarded (what the scheduler's `send_failed` and `discard` do;
+     /// tests only).
+     #[cfg(test)]
+@@ -1361,9 +1367,22 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+         self.outbox.requeue_unreceipted();
+         let planned: Vec<Planned> = self.plan.drain(..).collect();
+         for p in planned {
+-            self.restore(&p.owner);
++            if !matches!(p.owner, Owner::Control(_)) {
++                self.restore(&p.owner);
++            }
+         }
+         self.relayed_cells.clear();
++        let all: Vec<ControlRef> = self
++            .controls
++            .iter()
++            .map(|(id, e)| ControlRef {
++                id: *id,
++                attempt: e.attempt,
++            })
++            .collect();
++        for r in all {
++            self.replan_control(r);
++        }
+     }
+ 
+     fn on_deliver(&mut self, cell: &Cell) -> Result<(), SourceError> {
+diff --git a/crates/secmp-client-core/src/sessions/tests.rs b/crates/secmp-client-core/src/sessions/tests.rs
+index 0585f44..479deb7 100644
+--- a/crates/secmp-client-core/src/sessions/tests.rs
++++ b/crates/secmp-client-core/src/sessions/tests.rs
+@@ -2323,3 +2323,41 @@ fn late_eviction_rewrites_the_control_row() -> R {
+         Ok(())
+     })
+ }
++
++/// SE-28 (spec §10.4, Q222 (3)), as dictated by WEISUNG M7-B-4f step 5.
++#[cfg(feature = "kat")]
++#[test]
++fn queue_lost_replans_unsealed_and_sealed_control_content() -> R {
++    big(|| {
++        let mut w = established("q222-lost", 657)?;
++        let store = w.host.profile.store();
++        block_session(&store, &mut w.h, ContactId(1), Refusal::Reset)?;
++        let (ord, content) = pend(&store, &routes_of(3)?)?;
++        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
++        let p = w.h.prepare_direct(ms(10)).map_err(|_| "prepare")?;
++        w.h.relayed_direct(p.token, 1);
++        let q = w.h.prepare_direct(ms(11)).map_err(|_| "prepare")?;
++        let (ord, content) = pend(&store, &routes_of(4)?)?;
++        w.h.queue_pending(ord, content).map_err(|_| "queue")?;
++        w.h.lost_direct();
++        let rows_after_lost = control_rows(&store)?;
++        let (mut resets, mut routes) = (0, 0);
++        for i in 0..8_u64 {
++            deliver(&mut w.g, &next(&mut w.h, ms(12 + i))?)?;
++            for e in w.g.take_events() {
++                match e {
++                    SessionEvent::ResetRequested => resets += 1,
++                    SessionEvent::Routes(_) => routes += 1,
++                    _ => {}
++                }
++            }
++        }
++        drop(q);
++        assert_eq!(
++            (rows_after_lost, resets, routes),
++            (3, 1, 3),
++            "(rows after the lost queue, ResetRequested, Routes)"
++        );
++        Ok(())
++    })
++}

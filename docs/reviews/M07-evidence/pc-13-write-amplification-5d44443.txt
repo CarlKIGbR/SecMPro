@@ -1,0 +1,2 @@
+# measured by ci-fast at 5d44443 (A-4d2); the A-4 values (523 ms at c3c1dcf / 485 ms at bd9e240; 8 241 B at b014540) were overwritten under target/ and are not retained
+PC-13 write amplification (24 h virtual, Strict, one contact, P = 10 s, two profiles): WAL bytes/day = 142160600; db-file writes ≤ WAL bytes (automatic checkpoints off), commits/day = 34495, send slots/day = 17250, bytes/dummy slot = 8241 (sender + receiver commit), bound 2 × (fixed 3767 + outbox row 1782) = 11098

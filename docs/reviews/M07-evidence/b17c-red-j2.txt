@@ -1,0 +1,83 @@
+head 3bb0fc26431771a2e698a7c8af1f9f1261d03124
+diff --git a/crates/secmp-client-core/src/hub.rs b/crates/secmp-client-core/src/hub.rs
+index 3dbc5f6..79654ec 100644
+--- a/crates/secmp-client-core/src/hub.rs
++++ b/crates/secmp-client-core/src/hub.rs
+@@ -385,7 +385,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
+             let Some(left) = ends
+                 .get(&route.sid)
+                 .and_then(|until| until.checked_sub(now))
+-                .filter(|left| *left > 0 && *left <= MAX_SEND_OVERLAP_MS)
++                .filter(|left| *left > 0 && *left < MAX_SEND_OVERLAP_MS)
+             else {
+                 continue;
+             };
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.90s
+────────────
+ Nextest run ID 724876c0-b3bf-41db-9e76-469ae7a16824 with nextest profile: default
+    Starting 23 tests across 1 binary (284 tests skipped)
+        PASS [   0.007s] ( 1/23) secmp-client-core hub::tests::floor_end_is_capped
+        PASS [   0.007s] ( 2/23) secmp-client-core hub::tests::floor_end_keeps_the_draw_at_every_interval
+        PASS [   0.008s] ( 3/23) secmp-client-core hub::tests::cell_interval_follows_mode_period_and_queues
+        PASS [   0.159s] ( 4/23) secmp-client-core sessions::actor::tests::overlap_row_is_written_at_the_switch
+        PASS [   0.151s] ( 5/23) secmp-client-core sessions::actor::tests::dropped_overlap_deletes_its_row
+        PASS [   0.285s] ( 6/23) secmp-client-core sessions::actor::tests::extend_overlap_writes_before_it_deletes
+        PASS [   2.008s] ( 7/23) secmp-client-core hub::tests::switch_floor_comes_before_the_drop
+        PASS [   2.043s] ( 8/23) secmp-client-core hub::tests::floor_waits_for_its_row
+        PASS [   2.075s] ( 9/23) secmp-client-core hub::tests::switch_floor_shifts_the_drawn_end
+        PASS [   2.147s] (10/23) secmp-client-core hub::tests::restart_later_keeps_the_stored_end
+        PASS [   2.142s] (11/23) secmp-client-core hub::tests::switch_floor_counts_from_the_switch
+        PASS [   2.190s] (12/23) secmp-client-core hub::tests::restart_takes_the_latest_end_of_a_sid
+        PASS [   2.193s] (13/23) secmp-client-core hub::tests::restart_keeps_the_stored_ends
+        FAIL [   2.197s] (14/23) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 306 filtered out; finished in 2.18s
+
+  stderr ───
+
+    thread '<unnamed>' (331503) panicked at crates/secmp-client-core/src/hub.rs:2447:13:
+    assertion `left == right` failed: Q253: 22 and 23 only, and B once
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [133, 164, 182, 51, 97, 95, 45, 23, 150, 110, 255, 2, 193, 69, 150, 172], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [133, 164, 182, 51, 97, 95, 45, 23, 150, 110, 255, 2, 193, 69, 150, 172], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22], [23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.232s] (15/23) secmp-client-core hub::tests::restart_keeps_one_sender_per_physical_queue
+        FAIL [   2.275s] (16/23) secmp-client-core hub::tests::restart_keeps_an_end_beyond_a_day
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_keeps_an_end_beyond_a_day ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_keeps_an_end_beyond_a_day
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 306 filtered out; finished in 2.27s
+
+  stderr ───
+    Error: "registered"
+
+        PASS [   2.275s] (17/23) secmp-client-core hub::tests::restart_registers_the_old_send_queue_until_its_end
+        PASS [   2.481s] (18/23) secmp-client-core hub::tests::restarts_do_not_extend_an_old_queue
+        PASS [   2.585s] (19/23) secmp-client-core hub::tests::end_passed_while_down_holds
+        PASS [   2.609s] (20/23) secmp-client-core hub::tests::restart_in_overlap_counts_the_copy_away
+        PASS [   2.780s] (21/23) secmp-client-core hub::tests::overlap_end_before_the_count_holds
+        PASS [   3.463s] (22/23) secmp-client-core hub::tests::second_contact_gets_its_floor
+        PASS [   3.922s] (23/23) secmp-client-core hub::tests::floor_follows_the_mode_and_a_growing_link
+────────────
+     Summary [   3.923s] 23 tests run: 21 passed, 2 failed, 284 skipped
+        FAIL [   2.197s] (14/23) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+        FAIL [   2.275s] (16/23) secmp-client-core hub::tests::restart_keeps_an_end_beyond_a_day
+error: test run failed

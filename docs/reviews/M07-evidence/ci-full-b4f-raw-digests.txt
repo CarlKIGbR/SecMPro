@@ -1,0 +1,4 @@
+ci-full raw log of B-4f (Q218): kept outside the repository in target/fable/ci-full-raw/ (git-ignored); above the 2 MiB gate of ADR-052 (3192559 B), the committed file ci-full-b4f-2225414.txt is a B-4b-form excerpt of it
+head: HEAD of the code under test 22254146a115b01f2adeebb6ba574e7daa4acb3d (last code commit f51d603; 2225414 adds the step-8 evidence)
+# sha256  bytes  name
+66ff7979a15bcd40261bfc81645a209f2a10881c164919f1005095df1ca4af60  3192559  ci-full-b4f-2225414.txt

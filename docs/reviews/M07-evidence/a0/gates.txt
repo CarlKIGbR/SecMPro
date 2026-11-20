@@ -1,0 +1,90 @@
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling xtask v0.0.0 (/work/SecMPro/target/a0/ws/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.60s
+     Running `target/debug/xtask step deny vet audit cooldown`
+
+=== [3] deny ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo deny --locked check
+warning[license-exception-not-encountered]: license exception was not encountered
+   ┌─ /work/SecMPro/target/a0/ws/deny.toml:44:42
+   │
+44 │     { allow = ["GPL-3.0-only"], crate = "slint" },
+   │                                          ━━━━━ unmatched license exception
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ /work/SecMPro/target/a0/ws/deny.toml:34:6
+   │
+34 │     "Unicode-DFS-2016",
+   │      ━━━━━━━━━━━━━━━━ unmatched license allowance
+
+advisories ok, bans ok, licenses ok, sources ok
+### gate `deny`
+
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | advisories, bans, licenses, sources: ok |
+
+
+
+=== [3] vet ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo vet --locked
+Vetting Failed!
+
+6 unvetted dependencies:
+  argon2:0.6.0 missing ["safe-to-deploy"]
+  blake2:0.11.0 missing ["safe-to-deploy"]
+  openssl-src:300.6.1+3.6.3 missing ["safe-to-deploy"]
+  openssl-sys:0.9.117 missing ["safe-to-deploy"]
+  password-hash:0.6.1 missing ["safe-to-deploy"]
+  phc:0.6.1 missing ["safe-to-deploy"]
+FAIL [3] vet: `/work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo vet --locked` failed with exit status: 255
+### gate `vet`
+
+| item | verdict |
+|---|---|
+| status | FAIL (0 s) |
+| line 1 | `/work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo vet --locked` failed with exit status: 255 |
+
+
+
+=== [3] audit ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo audit --deny warnings --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2026-0387
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1380 security advisories (from /work/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (577 crate dependencies)
+### gate `audit`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | RustSec: no advisories (warnings denied) |
+| line 2 | ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141, RUSTSEC-2026-0387 |
+
+
+
+=== [3] cooldown ===
+cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2))
+### gate `cooldown`
+
+| item | verdict |
+|---|---|
+| status | PASS (26 s) |
+| line 1 | 567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2) |
+| line 2 | youngest: rustls-webpki 0.103.16, 7 days |
+| line 3 | cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2)) |
+
+
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: false) ===
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             FAIL          0s  `/work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo vet --locked` failed with exit status: 255
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141, RUSTSEC-2026-0387
+   3 cooldown        PASS         26s  567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: rustls-webpki 0.103.16, 7 days; cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2))
+xtask: error: step: 1 step(s) failed
+exit 1

@@ -25,11 +25,14 @@
 
 use std::collections::VecDeque;
 
-use secmp_crypto::{ConstantTimeEq, Fingerprint, HybridSignature, HybridVerifyingKey, Label};
+use secmp_crypto::{
+    ConstantTimeEq, Fingerprint, HybridSignature, HybridSigningKey, HybridVerifyingKey, Label,
+};
 
 // the encodings' zeroizing buffer (`secmp_crypto::Zeroizing`; a stand-in under Kani, see `codec`)
 use crate::codec::{Decode, Encode, Reader, Writer, Zeroizing};
 use crate::error::{Error, Result};
+use crate::keys::HybridSig;
 use crate::sizes::{
     CONTENT_BODY_MAX, FRAGMENT_HEADER_LEN, FRAGMENT_TOTAL_MAX, FRAGMENT_TOTAL_MIN, ID_LEN,
 };
@@ -137,6 +140,8 @@ pub enum Delivery {
     KeyChange(IksPublic),
     /// An unverifiable key change: the trust is now [`Trust::Frozen`] (warn the user).
     KeyChangeRefused,
+    /// An authenticated repeat of the `KeyChange` already accepted: nothing changes, ADR-058.
+    KeyChangeUnchanged,
     /// A fragment was stored; the message is not complete yet.
     Partial,
     /// Not a valid Content, or a fragmented message that is inconsistent or does not decode: discarded.
@@ -160,19 +165,48 @@ pub struct Inbox {
     partials: VecDeque<Partial>,
 }
 
+/// The `KeyChange` body announcing `new` (spec §7.6 `docs/03:503`, §7.7 `:513`): `new IKSPublic ‖ HybridSign(old
+/// IK_sig, "SecMP-TR/1 keychange", fingerprint(new))`, signed by the *old* identity key. It is sent fragmented, like
+/// every 5390-byte `KeyChange` (§7.6).
+///
+/// # Errors
+/// [`Error::Rejected`] if `new` has no encoding; [`Error::Unavailable`] without randomness for the hedged signature.
+pub fn key_change_body(old: &HybridSigningKey, new: &IksPublic) -> Result<KeyChangeBody> {
+    // spec §7.6: the signed message is fingerprint(new IKSPublic) under the label "SecMP-TR/1 keychange"
+    let fp = Fingerprint::of_encoded_iks(&new.encode()?)?;
+    let sig = old.sign(Label::TrKeychange, fp.as_bytes())?;
+    Ok(KeyChangeBody {
+        iks: new.clone(),
+        sig: HybridSig::from_bytes(sig.as_bytes())?,
+    })
+}
+
 /// `HybridVerify(old IK_sig, "SecMP-TR/1 keychange", fingerprint(new IKSPublic))` (spec §7.6, §7.7).
-fn key_change_verifies(kc: &KeyChangeBody, old: &HybridVerifyingKey) -> Result<()> {
+pub(crate) fn key_change_verifies(kc: &KeyChangeBody, old: &HybridVerifyingKey) -> Result<()> {
     let fp = Fingerprint::of_encoded_iks(&kc.iks.encode()?)?;
     let sig = HybridSignature::from_bytes(kc.sig.as_bytes())?;
     old.verify(Label::TrKeychange, fp.as_bytes(), &sig)?;
     Ok(())
 }
 
-/// A key change (§7.7): verified → `KeyChanged`, else `Frozen`; no accept path.
-fn key_change(kc: KeyChangeBody, old: &HybridVerifyingKey, trust: &mut Trust) -> Delivery {
+/// A key change (§7.7): verified under the current `IK_sig` → `KeyChanged`; else, if it names the identity the contact
+/// holds (`current`) and verifies under the `IK_sig` before the last accepted key change (`previous`), it is that
+/// succession again → unchanged (ADR-058); else `Frozen`. No accept path without a valid signature.
+fn key_change(
+    kc: KeyChangeBody,
+    old: &HybridVerifyingKey,
+    current: Option<&IksPublic>,
+    previous: Option<&HybridVerifyingKey>,
+    trust: &mut Trust,
+) -> Delivery {
     if key_change_verifies(&kc, old).is_ok() {
         *trust = Trust::KeyChanged;
         Delivery::KeyChange(kc.iks)
+    } else if current == Some(&kc.iks)
+        && previous.is_some_and(|p| key_change_verifies(&kc, p).is_ok())
+    {
+        // ADR-058: the already-accepted succession, signed by the previous key — the trust is not written
+        Delivery::KeyChangeUnchanged
     } else {
         *trust = Trust::Frozen;
         Delivery::KeyChangeRefused
@@ -204,11 +238,27 @@ impl Inbox {
     }
 
     /// Process the decrypted padded Content of one cell. `peer_ik_sig` is the contact's current (old) `IK_sig`;
-    /// `trust` is updated by a key change.
+    /// `trust` is updated by a key change. No repeat of an accepted key change is recognised (see
+    /// [`Inbox::receive_known`]).
     pub fn receive(
         &mut self,
         plaintext: &Plaintext,
         peer_ik_sig: &HybridVerifyingKey,
+        trust: &mut Trust,
+    ) -> Delivery {
+        self.receive_known(plaintext, peer_ik_sig, None, None, trust)
+    }
+
+    /// [`Inbox::receive`] for a contact whose identity is known: `current` is the identity the contact row holds,
+    /// `previous` the `IK_sig` before the last accepted `KeyChange`. A `KeyChange` that names `current` and verifies under
+    /// `previous` is [`Delivery::KeyChangeUnchanged`] (ADR-058); every other `KeyChange` that does not verify under
+    /// `peer_ik_sig` freezes.
+    pub fn receive_known(
+        &mut self,
+        plaintext: &Plaintext,
+        peer_ik_sig: &HybridVerifyingKey,
+        current: Option<&IksPublic>,
+        previous: Option<&HybridVerifyingKey>,
         trust: &mut Trust,
     ) -> Delivery {
         if *trust == Trust::Frozen {
@@ -224,7 +274,7 @@ impl Inbox {
             ContentBody::RouteUpdate(b) => Delivery::Routes(b.routes),
             ContentBody::Receipt(b) => Delivery::Receipt(b),
             ContentBody::Control(b) => Delivery::Control(b),
-            ContentBody::Fragment(f) => self.fragment(f, peer_ik_sig, trust),
+            ContentBody::Fragment(f) => self.fragment(f, peer_ik_sig, current, previous, trust),
         }
     }
 
@@ -233,6 +283,8 @@ impl Inbox {
         &mut self,
         f: Fragment,
         peer_ik_sig: &HybridVerifyingKey,
+        current: Option<&IksPublic>,
+        previous: Option<&HybridVerifyingKey>,
         trust: &mut Trust,
     ) -> Delivery {
         let idx = usize::from(f.idx);
@@ -297,7 +349,9 @@ impl Inbox {
             Ok(FragmentPayload::RouteUpdate(b)) => Delivery::Routes(b.routes),
             Ok(FragmentPayload::Receipt(b)) => Delivery::Receipt(b),
             Ok(FragmentPayload::Control(b)) => Delivery::Control(b),
-            Ok(FragmentPayload::KeyChange(kc)) => key_change(kc, peer_ik_sig, trust),
+            Ok(FragmentPayload::KeyChange(kc)) => {
+                key_change(kc, peer_ik_sig, current, previous, trust)
+            }
             // a reassembled KeyChange that does not decode as `IKSPublic ‖ HybridSig` (a bad length, an Ed25519 key or
             // signature refused by the §3.5 byte rules, a low-order `ik_dh`) cannot be verified: §7.7 "unverifiable
             // changes freeze the session" (M3 review C3, reading of SQ-26)

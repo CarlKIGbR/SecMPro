@@ -1,0 +1,7 @@
+head 9b511a24167e33861a0c9ca95e91e0c7700c83c5 (clean tree)
+$ cargo nextest run -p secmp-testkit --features harness --test harness -E 'test(/^m0_early::/)'
+────────────
+     Summary [   0.160s] 7 tests run: 7 passed, 285 skipped
+$ cargo nextest run -p xtask -E 'test(/win_|vm_up|vm_down|nasm|id_token|oidc|workflow|ondemand/)'
+────────────
+     Summary [   0.360s] 30 tests run: 30 passed, 276 skipped

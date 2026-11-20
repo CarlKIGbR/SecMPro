@@ -242,7 +242,8 @@ mod tests {
         }
     }
 
-    /// Exhaustive for up to 4 skipped header keys (the Kani harness `tr_header_selection` proves the same).
+    /// Exhaustive for up to 4 skipped header keys (the Kani harnesses `tr_header_selection_k0_2`,
+    /// `tr_header_selection_k3` and `tr_header_selection_k4` prove the same).
     #[test]
     fn constant_time_selection_equals_the_pseudocode() {
         for k in 0..=4_u32 {

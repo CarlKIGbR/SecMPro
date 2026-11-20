@@ -1,0 +1,42 @@
+head 86c292ff3a39b7fd690b58fd0a1417eecf4fb848
+git diff a1de559ca3e88752434849f5032b9c889741ec79 -- crates/secmp-client-core/src/hub.rs crates/secmp-client-core/src/persist.rs > target/m7-b22-mutants.diff
+timeout 7200 cargo mutants --no-shuffle -j 2 --output target/m7-b22-mutants --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --file crates/secmp-client-core/src/hub.rs --file crates/secmp-client-core/src/persist.rs --in-diff target/m7-b22-mutants.diff --test-tool nextest --timeout 900 > target/m7-b22-mutants.log 2>&1
+Found 16 mutants to test
+ok       Unmutated baseline in 107s build + 26s test
+caught   crates/secmp-client-core/src/hub.rs:320:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(()) in 3s build + 5s test
+caught   crates/secmp-client-core/src/hub.rs:379:9: replace Hub<C, S>::store_current_route -> Result<(), Error> with Ok(()) in 3s build + 12s test
+caught   crates/secmp-client-core/src/hub.rs:552:9: replace Hub<C, S>::pump -> Result<(), Error> with Ok(()) in 3s build + 15s test
+unviable crates/secmp-client-core/src/persist.rs:91:9: replace StorePersist::open -> Result<Self, PersistError> with Ok(Default::default()) in 2s build
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![] in 6s build + 10s test
+unviable crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new()] in 1s build
+unviable crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from_iter([vec![]])] in 1s build
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new(vec![])] in 2s build + 7s test
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from(vec![])] in 2s build + 6s test
+unviable crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from_iter([vec![0]])] in 1s build
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new(vec![0])] in 2s build + 15s test
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from(vec![0])] in 2s build + 5s test
+unviable crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from_iter([vec![1]])] in 1s build
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new(vec![1])] in 2s build + 14s test
+caught   crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from(vec![1])] in 2s build + 6s test
+caught   crates/secmp-client-core/src/persist.rs:189:9: replace <impl Persist for StorePersist>::commit_parts -> Result<(), PersistError> with Ok(()) in 3s build + 18s test
+16 mutants tested in 19m: 11 caught, 5 unviable
+== caught.txt ==
+crates/secmp-client-core/src/hub.rs:320:9: replace Hub<C, S>::register_route -> Result<(), Error> with Ok(())
+crates/secmp-client-core/src/hub.rs:379:9: replace Hub<C, S>::store_current_route -> Result<(), Error> with Ok(())
+crates/secmp-client-core/src/hub.rs:552:9: replace Hub<C, S>::pump -> Result<(), Error> with Ok(())
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new(vec![])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from(vec![])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new(vec![0])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from(vec![0])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new(vec![1])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from(vec![1])]
+crates/secmp-client-core/src/persist.rs:189:9: replace <impl Persist for StorePersist>::commit_parts -> Result<(), PersistError> with Ok(())
+== missed.txt ==
+== unviable.txt ==
+crates/secmp-client-core/src/persist.rs:91:9: replace StorePersist::open -> Result<Self, PersistError> with Ok(Default::default())
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::new()]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from_iter([vec![]])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from_iter([vec![0]])]
+crates/secmp-client-core/src/persist.rs:113:9: replace StorePersist::take_routes -> Vec<Zeroizing<Vec<u8>>> with vec![Zeroizing::from_iter([vec![1]])]
+== timeout.txt ==

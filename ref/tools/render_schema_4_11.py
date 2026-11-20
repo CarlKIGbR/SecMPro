@@ -12,7 +12,7 @@ import pathlib
 from secmp_ref import link_cases as lc
 from secmp_ref import relay
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "SCHEMA-4.11-link.md"
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.11-link.md"
 
 HEAD = """\
 ### 4.11 `link` — SecMP-LINK/SecMP-Q full run (spec §8, §9)

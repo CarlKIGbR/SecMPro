@@ -1,0 +1,226 @@
+=== create_publishes_without_replace exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.07s
+────────────
+ Nextest run ID 81a10162-0172-4fb3-a796-9ab95f87725e with nextest profile: default
+    Starting 1 test across 1 binary (74 tests skipped)
+        FAIL [   0.006s] (1/1) secmp-store wrap::tests::create_publishes_without_replace
+  stdout ───
+
+    running 1 test
+    test wrap::tests::create_publishes_without_replace ... FAILED
+
+    failures:
+
+    failures:
+        wrap::tests::create_publishes_without_replace
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'wrap::tests::create_publishes_without_replace' (1205714) panicked at crates/secmp-store/src/wrap.rs:391:9:
+    assertion `left == right` failed
+      left: 0
+     right: 1
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.007s] 1 test run: 0 passed, 1 failed, 74 skipped
+        FAIL [   0.006s] (1/1) secmp-store wrap::tests::create_publishes_without_replace
+error: test run failed
+
+=== concurrent_create_exactly_one_wins exit 100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+────────────
+ Nextest run ID 4ac74169-bd05-4802-bf47-19832b3c8ecc with nextest profile: default
+    Starting 1 test across 1 binary (74 tests skipped)
+        FAIL [   0.069s] (1/1) secmp-store wrap::tests::concurrent_create_exactly_one_wins
+  stdout ───
+
+    running 1 test
+    test wrap::tests::concurrent_create_exactly_one_wins ... FAILED
+
+    failures:
+
+    failures:
+        wrap::tests::concurrent_create_exactly_one_wins
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.06s
+
+  stderr ───
+
+    thread 'wrap::tests::concurrent_create_exactly_one_wins' (1205817) panicked at crates/secmp-store/src/wrap.rs:427:13:
+    assertion `left == right` failed
+      left: [55, 139, 179, 37, 35, 14, 106, 79, 113, 163, 127, 8, 20, 35, 175, 138, 27, 129, 4, 183, 171, 165, 160, 120, 21, 125, 194, 93, 193, 96, 156, 236]
+     right: [82, 196, 230, 155, 146, 75, 101, 209, 192, 205, 27, 90, 255, 198, 88, 54, 116, 161, 147, 144, 146, 240, 196, 54, 194, 228, 124, 94, 148, 61, 233, 185]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.070s] 1 test run: 0 passed, 1 failed, 74 skipped
+        FAIL [   0.069s] (1/1) secmp-store wrap::tests::concurrent_create_exactly_one_wins
+error: test run failed
+
+=== retention_round_trips exit 100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+────────────
+ Nextest run ID 0796273f-b43b-499e-9266-cf76a99d9387 with nextest profile: default
+    Starting 1 test across 1 binary (78 tests skipped)
+        FAIL [   0.084s] (1/1) secmp-store backup::tests::retention_round_trips_through_store_retention
+  stdout ───
+
+    running 1 test
+    test backup::tests::retention_round_trips_through_store_retention ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::retention_round_trips_through_store_retention
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.08s
+
+  stderr ───
+
+    thread 'backup::tests::retention_round_trips_through_store_retention' (1208260) panicked at crates/secmp-store/src/backup.rs:1515:9:
+    assertion `left == right` failed
+      left: Err(Unavailable)
+     right: Ok(())
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.085s] 1 test run: 0 passed, 1 failed, 78 skipped
+        FAIL [   0.084s] (1/1) secmp-store backup::tests::retention_round_trips_through_store_retention
+error: test run failed
+
+=== retention_wire_length exit 100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+────────────
+ Nextest run ID 1123afd2-d172-4dfa-b27c-e75b3cc29ef1 with nextest profile: default
+    Starting 1 test across 1 binary (78 tests skipped)
+        FAIL [   0.131s] (1/1) secmp-store backup::tests::retention_wire_length_other_than_4_rejected
+  stdout ───
+
+    running 1 test
+    test backup::tests::retention_wire_length_other_than_4_rejected ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::retention_wire_length_other_than_4_rejected
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'backup::tests::retention_wire_length_other_than_4_rejected' (1208363) panicked at crates/secmp-store/src/backup.rs:1529:13:
+    assertion `left == right` failed: 3
+      left: Ok(())
+     right: Err(Unlock)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.131s] 1 test run: 0 passed, 1 failed, 78 skipped
+        FAIL [   0.131s] (1/1) secmp-store backup::tests::retention_wire_length_other_than_4_rejected
+error: test run failed
+
+=== non_allowlisted exit 100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+────────────
+ Nextest run ID e40ab469-9b34-44ff-bac0-4396794e89a4 with nextest profile: default
+    Starting 1 test across 1 binary (78 tests skipped)
+        FAIL [   0.131s] (1/1) secmp-store backup::tests::import_refuses_non_allowlisted_setting
+  stdout ───
+
+    running 1 test
+    test backup::tests::import_refuses_non_allowlisted_setting ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::import_refuses_non_allowlisted_setting
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'backup::tests::import_refuses_non_allowlisted_setting' (1208466) panicked at crates/secmp-store/src/backup.rs:1545:9:
+    assertion `left == right` failed
+      left: Ok(())
+     right: Err(Unlock)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.132s] 1 test run: 0 passed, 1 failed, 78 skipped
+        FAIL [   0.131s] (1/1) secmp-store backup::tests::import_refuses_non_allowlisted_setting
+error: test run failed
+
+=== profile_with_settings exit 100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+────────────
+ Nextest run ID 4ec67e29-7881-4562-afcb-907f8950a17f with nextest profile: default
+    Starting 1 test across 1 binary (78 tests skipped)
+        FAIL [   0.134s] (1/1) secmp-store backup::tests::import_refuses_profile_with_settings
+  stdout ───
+
+    running 1 test
+    test backup::tests::import_refuses_profile_with_settings ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::import_refuses_profile_with_settings
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 78 filtered out; finished in 0.13s
+
+  stderr ───
+
+    thread 'backup::tests::import_refuses_profile_with_settings' (1208569) panicked at crates/secmp-store/src/backup.rs:1564:9:
+    assertion `left == right` failed
+      left: Ok(())
+     right: Err(Unavailable)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.135s] 1 test run: 0 passed, 1 failed, 78 skipped
+        FAIL [   0.134s] (1/1) secmp-store backup::tests::import_refuses_profile_with_settings
+error: test run failed
+
+=== even_seed_old_assertion exit 100
+   Compiling secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.59s
+────────────
+ Nextest run ID 6b94ae58-75d6-4a52-8b72-6ed7b1fde9b0 with nextest profile: default
+    Starting 1 test across 1 binary (79 tests skipped)
+        FAIL [   0.007s] (1/1) secmp-store seal::tests::authentic_even_seed_opens
+  stdout ───
+
+    running 1 test
+    test seal::tests::authentic_even_seed_opens ... FAILED
+
+    failures:
+
+    failures:
+        seal::tests::authentic_even_seed_opens
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 79 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'seal::tests::authentic_even_seed_opens' (1211505) panicked at crates/secmp-store/src/seal.rs:441:9:
+    assertion `left == right` failed
+      left: None
+     right: Some(Unavailable)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.008s] 1 test run: 0 passed, 1 failed, 79 skipped
+        FAIL [   0.007s] (1/1) secmp-store seal::tests::authentic_even_seed_opens
+error: test run failed
+

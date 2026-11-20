@@ -4,8 +4,8 @@
 //! run is reproducible), the operating system's on every real transport (keys of a run that talks to a real relay are
 //! never a function of a name).
 
-use secmp_client_core::scheduler::conversation::{EntropySource, OsSource};
 use secmp_client_core::scheduler::run::{HandshakeEntropy, OsHandshakes};
+use secmp_client_core::sessions::actor::{EntropySource, OsSource};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::SecretBytes;
 

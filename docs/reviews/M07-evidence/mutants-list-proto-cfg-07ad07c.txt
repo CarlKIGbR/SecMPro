@@ -1,0 +1,540 @@
+07ad07c09de9103a079860cccede76cab3c0604f
+== before (START 07ad07c)
+crates/secmp-proto/src/prekeys.rs:42:45: replace * with +
+crates/secmp-proto/src/prekeys.rs:42:45: replace * with /
+crates/secmp-proto/src/prekeys.rs:42:40: replace * with +
+crates/secmp-proto/src/prekeys.rs:42:40: replace * with /
+crates/secmp-proto/src/prekeys.rs:42:35: replace * with +
+crates/secmp-proto/src/prekeys.rs:42:35: replace * with /
+crates/secmp-proto/src/prekeys.rs:48:53: replace + with -
+crates/secmp-proto/src/prekeys.rs:48:53: replace + with *
+crates/secmp-proto/src/prekeys.rs:48:48: replace + with -
+crates/secmp-proto/src/prekeys.rs:48:48: replace + with *
+crates/secmp-proto/src/prekeys.rs:48:43: replace + with -
+crates/secmp-proto/src/prekeys.rs:48:43: replace + with *
+crates/secmp-proto/src/prekeys.rs:59:9: replace IkDhSecret::from_bytes -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:67:9: replace IkDhSecret::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:75:9: replace IkDhSecret::public_key -> Result<X25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:79:9: replace IkDhSecret::secret -> &X25519Secret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:96:9: replace IdentityKeys::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new()))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![]])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![0]])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![0])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![0])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![1]])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![1])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![1])))
+crates/secmp-proto/src/prekeys.rs:128:9: replace IdentityKeys::from_section -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:129:20: replace != with == in IdentityKeys::from_section
+crates/secmp-proto/src/prekeys.rs:147:9: replace IdentityKeys::from_parts -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:159:9: replace IdentityKeys::public -> &IksPublic with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:167:9: replace IdentityKeys::fingerprint -> Result<[u8; HASH_LEN]> with Ok([0; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:167:9: replace IdentityKeys::fingerprint -> Result<[u8; HASH_LEN]> with Ok([1; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:173:9: replace IdentityKeys::ik_dh -> &IkDhSecret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:179:9: replace IdentityKeys::initiator_keys -> crate::hx::InitiatorKeys<'_> with Default::default()
+crates/secmp-proto/src/prekeys.rs:188:9: replace IdentityKeys::responder_keys -> crate::hx::ResponderKeys<'_> with Default::default()
+crates/secmp-proto/src/prekeys.rs:200:5: replace fingerprint_of -> Result<[u8; HASH_LEN]> with Ok([0; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:200:5: replace fingerprint_of -> Result<[u8; HASH_LEN]> with Ok([1; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:219:9: replace SpkGeneration::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:231:9: replace SpkGeneration::id -> u32 with 0
+crates/secmp-proto/src/prekeys.rs:231:9: replace SpkGeneration::id -> u32 with 1
+crates/secmp-proto/src/prekeys.rs:237:9: replace SpkGeneration::created -> u64 with 0
+crates/secmp-proto/src/prekeys.rs:237:9: replace SpkGeneration::created -> u64 with 1
+crates/secmp-proto/src/prekeys.rs:245:9: replace SpkGeneration::dh_public -> Result<X25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:253:9: replace SpkGeneration::kem_public -> Result<keys::MlKem1024Ek> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:261:9: replace SpkGeneration::rpk_public -> Result<keys::MlKem768Ek> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:265:9: replace SpkGeneration::dh_secret -> &X25519Secret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:269:9: replace SpkGeneration::kem_secret -> &MlKem1024Dk with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:275:9: replace SpkGeneration::rpk_copy -> Result<MlKem768Dk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:280:9: replace SpkGeneration::dh_copy -> Result<X25519Secret> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new()
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+crates/secmp-proto/src/prekeys.rs:304:9: replace SpkGeneration::from_seeds -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:325:53: replace + with -
+crates/secmp-proto/src/prekeys.rs:325:53: replace + with *
+crates/secmp-proto/src/prekeys.rs:325:40: replace + with -
+crates/secmp-proto/src/prekeys.rs:325:40: replace + with *
+crates/secmp-proto/src/prekeys.rs:325:36: replace + with -
+crates/secmp-proto/src/prekeys.rs:325:36: replace + with *
+crates/secmp-proto/src/prekeys.rs:325:57: replace * with +
+crates/secmp-proto/src/prekeys.rs:325:57: replace * with /
+crates/secmp-proto/src/prekeys.rs:328:49: replace + with -
+crates/secmp-proto/src/prekeys.rs:328:49: replace + with *
+crates/secmp-proto/src/prekeys.rs:328:36: replace + with -
+crates/secmp-proto/src/prekeys.rs:328:36: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:61: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:61: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:57: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:57: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:53: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:53: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:38: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:38: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:42: replace * with +
+crates/secmp-proto/src/prekeys.rs:331:42: replace * with /
+crates/secmp-proto/src/prekeys.rs:346:9: replace OpkSecrets::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:356:9: replace OpkSecrets::id -> u32 with 0
+crates/secmp-proto/src/prekeys.rs:356:9: replace OpkSecrets::id -> u32 with 1
+crates/secmp-proto/src/prekeys.rs:364:9: replace OpkSecrets::dh_public -> Result<X25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:372:9: replace OpkSecrets::kem_public -> Result<keys::MlKem1024Ek> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:376:9: replace OpkSecrets::dh_secret -> &X25519Secret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:380:9: replace OpkSecrets::kem_secret -> &MlKem1024Dk with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new()
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+crates/secmp-proto/src/prekeys.rs:401:9: replace OpkSecrets::from_seeds -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:439:9: replace InvitationRecord::owner_pk -> Result<Ed25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:447:9: replace InvitationRecord::invq_recv_pk -> Result<Ed25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new()
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+crates/secmp-proto/src/prekeys.rs:471:9: replace InvitationRecord::from_bytes -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:502:9: replace InvitationRecord::duplicate_kat -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:530:5: replace ed25519_pk_of -> Result<Ed25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:614:9: replace MemoryPrekeyStore::starting_at -> Self with Default::default()
+crates/secmp-proto/src/prekeys.rs:626:9: replace MemoryPrekeyStore::current_spk -> Option<&SpkGeneration> with None
+crates/secmp-proto/src/prekeys.rs:626:9: replace MemoryPrekeyStore::current_spk -> Option<&SpkGeneration> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:634:9: replace MemoryPrekeyStore::create_spk -> Result<u32> with Ok(0)
+crates/secmp-proto/src/prekeys.rs:634:9: replace MemoryPrekeyStore::create_spk -> Result<u32> with Ok(1)
+crates/secmp-proto/src/prekeys.rs:647:9: replace MemoryPrekeyStore::rotate_if_due -> Result<u32> with Ok(0)
+crates/secmp-proto/src/prekeys.rs:647:9: replace MemoryPrekeyStore::rotate_if_due -> Result<u32> with Ok(1)
+crates/secmp-proto/src/prekeys.rs:649:65: replace <= with > in MemoryPrekeyStore::rotate_if_due
+crates/secmp-proto/src/prekeys.rs:665:9: replace MemoryPrekeyStore::issue_opk -> Result<u32> with Ok(0)
+crates/secmp-proto/src/prekeys.rs:665:9: replace MemoryPrekeyStore::issue_opk -> Result<u32> with Ok(1)
+crates/secmp-proto/src/prekeys.rs:686:9: replace MemoryPrekeyStore::bundle -> Result<PrekeyBundle> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:699:9: replace MemoryPrekeyStore::add_record -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:702:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:701:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:700:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:701:52: replace == with != in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:702:53: replace == with != in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:713:9: replace MemoryPrekeyStore::record -> Option<&InvitationRecord> with None
+crates/secmp-proto/src/prekeys.rs:713:9: replace MemoryPrekeyStore::record -> Option<&InvitationRecord> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:713:47: replace == with != in MemoryPrekeyStore::record
+crates/secmp-proto/src/prekeys.rs:723:9: replace MemoryPrekeyStore::consume_record -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:726:36: replace == with != in MemoryPrekeyStore::consume_record
+crates/secmp-proto/src/prekeys.rs:735:9: replace MemoryPrekeyStore::offered_records -> Vec<&InvitationRecord> with vec![]
+crates/secmp-proto/src/prekeys.rs:735:9: replace MemoryPrekeyStore::offered_records -> Vec<&InvitationRecord> with vec![Box::leak(Box::new(Default::default()))]
+crates/secmp-proto/src/prekeys.rs:735:50: replace > with == in MemoryPrekeyStore::offered_records
+crates/secmp-proto/src/prekeys.rs:735:50: replace > with < in MemoryPrekeyStore::offered_records
+crates/secmp-proto/src/prekeys.rs:735:50: replace > with >= in MemoryPrekeyStore::offered_records
+crates/secmp-proto/src/prekeys.rs:743:9: replace MemoryPrekeyStore::retire_expired -> Vec<Id> with vec![]
+crates/secmp-proto/src/prekeys.rs:743:9: replace MemoryPrekeyStore::retire_expired -> Vec<Id> with vec![Default::default()]
+crates/secmp-proto/src/prekeys.rs:746:26: replace > with == in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:746:26: replace > with < in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:746:26: replace > with >= in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:754:30: delete ! in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:758:47: replace || with && in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:758:36: replace == with != in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:765:9: replace MemoryPrekeyStore::spk_ids -> Vec<u32> with vec![]
+crates/secmp-proto/src/prekeys.rs:765:9: replace MemoryPrekeyStore::spk_ids -> Vec<u32> with vec![0]
+crates/secmp-proto/src/prekeys.rs:765:9: replace MemoryPrekeyStore::spk_ids -> Vec<u32> with vec![1]
+crates/secmp-proto/src/prekeys.rs:771:9: replace MemoryPrekeyStore::opk_ids -> Vec<u32> with vec![]
+crates/secmp-proto/src/prekeys.rs:771:9: replace MemoryPrekeyStore::opk_ids -> Vec<u32> with vec![0]
+crates/secmp-proto/src/prekeys.rs:771:9: replace MemoryPrekeyStore::opk_ids -> Vec<u32> with vec![1]
+crates/secmp-proto/src/prekeys.rs:788:9: replace MemoryPrekeyStore::issue_invitation -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:805:9: replace MemoryPrekeyStore::issue_invitation_on -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:815:9: replace MemoryPrekeyStore::issue_checked -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:821:39: replace != with == in MemoryPrekeyStore::issue_checked
+crates/secmp-proto/src/prekeys.rs:835:9: replace MemoryPrekeyStore::issue_with -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:850:9: replace MemoryPrekeyStore::duplicate_kat -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:886:9: replace MemoryPrekeyStore::digest_kat -> [u8; 32] with [0; 32]
+crates/secmp-proto/src/prekeys.rs:886:9: replace MemoryPrekeyStore::digest_kat -> [u8; 32] with [1; 32]
+crates/secmp-proto/src/prekeys.rs:927:5: replace bundle_on_parts -> Result<PrekeyBundle> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:954:9: delete field sig from struct PrekeyBundle expression in bundle_on_parts
+crates/secmp-proto/src/prekeys.rs:975:5: replace issue_on_parts -> core::result::Result<(Issued, InvitationRecord), IssueError> with Ok((Default::default(), Default::default()))
+crates/secmp-proto/src/prekeys.rs:1034:9: replace <impl PrekeyStore for MemoryPrekeyStore>::spk -> Option<&SpkGeneration> with None
+crates/secmp-proto/src/prekeys.rs:1034:9: replace <impl PrekeyStore for MemoryPrekeyStore>::spk -> Option<&SpkGeneration> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:1034:47: replace == with != in <impl PrekeyStore for MemoryPrekeyStore>::spk
+crates/secmp-proto/src/prekeys.rs:1038:9: replace <impl PrekeyStore for MemoryPrekeyStore>::opk -> Option<&OpkSecrets> with None
+crates/secmp-proto/src/prekeys.rs:1038:9: replace <impl PrekeyStore for MemoryPrekeyStore>::opk -> Option<&OpkSecrets> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:1038:40: replace == with != in <impl PrekeyStore for MemoryPrekeyStore>::opk
+crates/secmp-proto/src/prekeys.rs:1043:9: replace <impl PrekeyStore for MemoryPrekeyStore>::commit_accept -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:1046:36: replace || with && in <impl PrekeyStore for MemoryPrekeyStore>::commit_accept
+crates/secmp-proto/src/prekeys.rs:1046:26: replace != with == in <impl PrekeyStore for MemoryPrekeyStore>::commit_accept
+crates/secmp-proto/src/prekeys.rs:1054:9: replace <impl PrekeyStore for MemoryPrekeyStore>::delete_opk -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:1057:32: replace == with != in <impl PrekeyStore for MemoryPrekeyStore>::delete_opk
+crates/secmp-proto/src/tr/state.rs:112:9: replace SkippedKey::mk -> &SecretBytes<32> with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/tr/state.rs:165:5: replace write_opt with ()
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(None)
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(Some(Vec::leak(Vec::new())))
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(Some(Vec::leak(vec![0])))
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(Some(Vec::leak(vec![1])))
+crates/secmp-proto/src/tr/state.rs:183:5: replace secret32 -> Result<SecretBytes<32>> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:187:5: replace opt_secret -> Result<Option<SecretBytes<32>>> with Ok(None)
+crates/secmp-proto/src/tr/state.rs:187:5: replace opt_secret -> Result<Option<SecretBytes<32>>> with Ok(Some(Default::default()))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new())
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![]]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![0]]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![0]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![0]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![1]]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![1]))
+crates/secmp-proto/src/tr/state.rs:220:31: replace > with == in RatchetState::to_bytes
+crates/secmp-proto/src/tr/state.rs:220:31: replace > with < in RatchetState::to_bytes
+crates/secmp-proto/src/tr/state.rs:220:31: replace > with >= in RatchetState::to_bytes
+crates/secmp-proto/src/tr/state.rs:264:9: replace RatchetState::from_bytes -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:292:18: replace > with == in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:292:18: replace > with < in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:292:18: replace > with >= in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:321:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:319:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:318:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:317:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:316:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:317:29: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:317:55: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:318:31: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:318:59: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:319:29: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:319:32: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:31: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:55: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:44: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:39: replace == with != in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:50: replace == with != in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:321:29: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:321:36: replace == with != in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:324:13: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:323:13: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:322:12: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:323:16: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:324:16: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:363:5: replace skipped_is_reachable -> bool with true
+crates/secmp-proto/src/tr/state.rs:363:5: replace skipped_is_reachable -> bool with false
+crates/secmp-proto/src/tr/state.rs:366:17: replace |= with &= in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:366:35: replace & with | in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:366:35: replace & with ^ in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:366:63: replace >= with < in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:369:17: replace |= with &= in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:372:5: delete ! in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:379:5: replace skipped_is_canonical -> bool with true
+crates/secmp-proto/src/tr/state.rs:379:5: replace skipped_is_canonical -> bool with false
+crates/secmp-proto/src/tr/state.rs:383:24: replace match guard bool::from(p.hk.ct_eq(&e.hk)) with true in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:24: replace match guard bool::from(p.hk.ct_eq(&e.hk)) with false in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:61: replace > with == in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:61: replace > with < in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:61: replace > with >= in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:387:30: replace |= with &= in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:390:17: delete ! in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:393:12: delete ! in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:424:9: replace RatchetParts::split -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:446:18: replace > with == in RatchetParts::split
+crates/secmp-proto/src/tr/state.rs:446:18: replace > with < in RatchetParts::split
+crates/secmp-proto/src/tr/state.rs:446:18: replace > with >= in RatchetParts::split
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new())
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![]]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![0]]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![0]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![0]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![1]]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![1]))
+crates/secmp-proto/src/tr/state.rs:466:13: replace || with && in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:465:31: replace > with == in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:465:31: replace > with < in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:465:31: replace > with >= in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:466:52: replace != with == in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:486:9: replace RatchetState::to_parts -> Result<RatchetParts> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:494:9: replace RatchetState::from_parts -> Result<Self> with Ok(Default::default())
+== after (edited tree)
+crates/secmp-proto/src/prekeys.rs:42:45: replace * with +
+crates/secmp-proto/src/prekeys.rs:42:45: replace * with /
+crates/secmp-proto/src/prekeys.rs:42:40: replace * with +
+crates/secmp-proto/src/prekeys.rs:42:40: replace * with /
+crates/secmp-proto/src/prekeys.rs:42:35: replace * with +
+crates/secmp-proto/src/prekeys.rs:42:35: replace * with /
+crates/secmp-proto/src/prekeys.rs:48:53: replace + with -
+crates/secmp-proto/src/prekeys.rs:48:53: replace + with *
+crates/secmp-proto/src/prekeys.rs:48:48: replace + with -
+crates/secmp-proto/src/prekeys.rs:48:48: replace + with *
+crates/secmp-proto/src/prekeys.rs:48:43: replace + with -
+crates/secmp-proto/src/prekeys.rs:48:43: replace + with *
+crates/secmp-proto/src/prekeys.rs:59:9: replace IkDhSecret::from_bytes -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:67:9: replace IkDhSecret::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:75:9: replace IkDhSecret::public_key -> Result<X25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:79:9: replace IkDhSecret::secret -> &X25519Secret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:96:9: replace IdentityKeys::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new()))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![]])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![0]])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![0])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![0])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![1]])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![1])))
+crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![1])))
+crates/secmp-proto/src/prekeys.rs:128:9: replace IdentityKeys::from_section -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:129:20: replace != with == in IdentityKeys::from_section
+crates/secmp-proto/src/prekeys.rs:147:9: replace IdentityKeys::from_parts -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:159:9: replace IdentityKeys::public -> &IksPublic with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:167:9: replace IdentityKeys::fingerprint -> Result<[u8; HASH_LEN]> with Ok([0; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:167:9: replace IdentityKeys::fingerprint -> Result<[u8; HASH_LEN]> with Ok([1; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:173:9: replace IdentityKeys::ik_dh -> &IkDhSecret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:179:9: replace IdentityKeys::initiator_keys -> crate::hx::InitiatorKeys<'_> with Default::default()
+crates/secmp-proto/src/prekeys.rs:188:9: replace IdentityKeys::responder_keys -> crate::hx::ResponderKeys<'_> with Default::default()
+crates/secmp-proto/src/prekeys.rs:200:5: replace fingerprint_of -> Result<[u8; HASH_LEN]> with Ok([0; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:200:5: replace fingerprint_of -> Result<[u8; HASH_LEN]> with Ok([1; HASH_LEN])
+crates/secmp-proto/src/prekeys.rs:219:9: replace SpkGeneration::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:231:9: replace SpkGeneration::id -> u32 with 0
+crates/secmp-proto/src/prekeys.rs:231:9: replace SpkGeneration::id -> u32 with 1
+crates/secmp-proto/src/prekeys.rs:237:9: replace SpkGeneration::created -> u64 with 0
+crates/secmp-proto/src/prekeys.rs:237:9: replace SpkGeneration::created -> u64 with 1
+crates/secmp-proto/src/prekeys.rs:245:9: replace SpkGeneration::dh_public -> Result<X25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:253:9: replace SpkGeneration::kem_public -> Result<keys::MlKem1024Ek> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:261:9: replace SpkGeneration::rpk_public -> Result<keys::MlKem768Ek> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:265:9: replace SpkGeneration::dh_secret -> &X25519Secret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:269:9: replace SpkGeneration::kem_secret -> &MlKem1024Dk with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:275:9: replace SpkGeneration::rpk_copy -> Result<MlKem768Dk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:280:9: replace SpkGeneration::dh_copy -> Result<X25519Secret> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new()
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+crates/secmp-proto/src/prekeys.rs:288:9: replace SpkGeneration::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+crates/secmp-proto/src/prekeys.rs:304:9: replace SpkGeneration::from_seeds -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:325:53: replace + with -
+crates/secmp-proto/src/prekeys.rs:325:53: replace + with *
+crates/secmp-proto/src/prekeys.rs:325:40: replace + with -
+crates/secmp-proto/src/prekeys.rs:325:40: replace + with *
+crates/secmp-proto/src/prekeys.rs:325:36: replace + with -
+crates/secmp-proto/src/prekeys.rs:325:36: replace + with *
+crates/secmp-proto/src/prekeys.rs:325:57: replace * with +
+crates/secmp-proto/src/prekeys.rs:325:57: replace * with /
+crates/secmp-proto/src/prekeys.rs:328:49: replace + with -
+crates/secmp-proto/src/prekeys.rs:328:49: replace + with *
+crates/secmp-proto/src/prekeys.rs:328:36: replace + with -
+crates/secmp-proto/src/prekeys.rs:328:36: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:61: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:61: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:57: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:57: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:53: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:53: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:38: replace + with -
+crates/secmp-proto/src/prekeys.rs:331:38: replace + with *
+crates/secmp-proto/src/prekeys.rs:331:42: replace * with +
+crates/secmp-proto/src/prekeys.rs:331:42: replace * with /
+crates/secmp-proto/src/prekeys.rs:346:9: replace OpkSecrets::generate -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:356:9: replace OpkSecrets::id -> u32 with 0
+crates/secmp-proto/src/prekeys.rs:356:9: replace OpkSecrets::id -> u32 with 1
+crates/secmp-proto/src/prekeys.rs:364:9: replace OpkSecrets::dh_public -> Result<X25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:372:9: replace OpkSecrets::kem_public -> Result<keys::MlKem1024Ek> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:376:9: replace OpkSecrets::dh_secret -> &X25519Secret with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:380:9: replace OpkSecrets::kem_secret -> &MlKem1024Dk with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new()
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+crates/secmp-proto/src/prekeys.rs:387:9: replace OpkSecrets::to_seeds -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+crates/secmp-proto/src/prekeys.rs:401:9: replace OpkSecrets::from_seeds -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:439:9: replace InvitationRecord::owner_pk -> Result<Ed25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:447:9: replace InvitationRecord::invq_recv_pk -> Result<Ed25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new()
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![]])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![0]])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![0])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![0])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from_iter([vec![1]])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::new(vec![1])
+crates/secmp-proto/src/prekeys.rs:455:9: replace InvitationRecord::to_bytes -> Zeroizing<Vec<u8>> with Zeroizing::from(vec![1])
+crates/secmp-proto/src/prekeys.rs:471:9: replace InvitationRecord::from_bytes -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:502:9: replace InvitationRecord::duplicate_kat -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:530:5: replace ed25519_pk_of -> Result<Ed25519Pk> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:614:9: replace MemoryPrekeyStore::starting_at -> Self with Default::default()
+crates/secmp-proto/src/prekeys.rs:626:9: replace MemoryPrekeyStore::current_spk -> Option<&SpkGeneration> with None
+crates/secmp-proto/src/prekeys.rs:626:9: replace MemoryPrekeyStore::current_spk -> Option<&SpkGeneration> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:634:9: replace MemoryPrekeyStore::create_spk -> Result<u32> with Ok(0)
+crates/secmp-proto/src/prekeys.rs:634:9: replace MemoryPrekeyStore::create_spk -> Result<u32> with Ok(1)
+crates/secmp-proto/src/prekeys.rs:647:9: replace MemoryPrekeyStore::rotate_if_due -> Result<u32> with Ok(0)
+crates/secmp-proto/src/prekeys.rs:647:9: replace MemoryPrekeyStore::rotate_if_due -> Result<u32> with Ok(1)
+crates/secmp-proto/src/prekeys.rs:649:65: replace <= with > in MemoryPrekeyStore::rotate_if_due
+crates/secmp-proto/src/prekeys.rs:665:9: replace MemoryPrekeyStore::issue_opk -> Result<u32> with Ok(0)
+crates/secmp-proto/src/prekeys.rs:665:9: replace MemoryPrekeyStore::issue_opk -> Result<u32> with Ok(1)
+crates/secmp-proto/src/prekeys.rs:686:9: replace MemoryPrekeyStore::bundle -> Result<PrekeyBundle> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:699:9: replace MemoryPrekeyStore::add_record -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:702:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:701:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:700:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:701:52: replace == with != in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:702:53: replace == with != in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:713:9: replace MemoryPrekeyStore::record -> Option<&InvitationRecord> with None
+crates/secmp-proto/src/prekeys.rs:713:9: replace MemoryPrekeyStore::record -> Option<&InvitationRecord> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:713:47: replace == with != in MemoryPrekeyStore::record
+crates/secmp-proto/src/prekeys.rs:723:9: replace MemoryPrekeyStore::consume_record -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:726:36: replace == with != in MemoryPrekeyStore::consume_record
+crates/secmp-proto/src/prekeys.rs:735:9: replace MemoryPrekeyStore::offered_records -> Vec<&InvitationRecord> with vec![]
+crates/secmp-proto/src/prekeys.rs:735:9: replace MemoryPrekeyStore::offered_records -> Vec<&InvitationRecord> with vec![Box::leak(Box::new(Default::default()))]
+crates/secmp-proto/src/prekeys.rs:735:50: replace > with == in MemoryPrekeyStore::offered_records
+crates/secmp-proto/src/prekeys.rs:735:50: replace > with < in MemoryPrekeyStore::offered_records
+crates/secmp-proto/src/prekeys.rs:735:50: replace > with >= in MemoryPrekeyStore::offered_records
+crates/secmp-proto/src/prekeys.rs:743:9: replace MemoryPrekeyStore::retire_expired -> Vec<Id> with vec![]
+crates/secmp-proto/src/prekeys.rs:743:9: replace MemoryPrekeyStore::retire_expired -> Vec<Id> with vec![Default::default()]
+crates/secmp-proto/src/prekeys.rs:746:26: replace > with == in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:746:26: replace > with < in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:746:26: replace > with >= in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:754:30: delete ! in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:758:47: replace || with && in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:758:36: replace == with != in MemoryPrekeyStore::retire_expired
+crates/secmp-proto/src/prekeys.rs:765:9: replace MemoryPrekeyStore::spk_ids -> Vec<u32> with vec![]
+crates/secmp-proto/src/prekeys.rs:765:9: replace MemoryPrekeyStore::spk_ids -> Vec<u32> with vec![0]
+crates/secmp-proto/src/prekeys.rs:765:9: replace MemoryPrekeyStore::spk_ids -> Vec<u32> with vec![1]
+crates/secmp-proto/src/prekeys.rs:771:9: replace MemoryPrekeyStore::opk_ids -> Vec<u32> with vec![]
+crates/secmp-proto/src/prekeys.rs:771:9: replace MemoryPrekeyStore::opk_ids -> Vec<u32> with vec![0]
+crates/secmp-proto/src/prekeys.rs:771:9: replace MemoryPrekeyStore::opk_ids -> Vec<u32> with vec![1]
+crates/secmp-proto/src/prekeys.rs:788:9: replace MemoryPrekeyStore::issue_invitation -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:805:9: replace MemoryPrekeyStore::issue_invitation_on -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:815:9: replace MemoryPrekeyStore::issue_checked -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:821:39: replace != with == in MemoryPrekeyStore::issue_checked
+crates/secmp-proto/src/prekeys.rs:835:9: replace MemoryPrekeyStore::issue_with -> core::result::Result<Issued, IssueError> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:850:9: replace MemoryPrekeyStore::duplicate_kat -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:886:9: replace MemoryPrekeyStore::digest_kat -> [u8; 32] with [0; 32]
+crates/secmp-proto/src/prekeys.rs:886:9: replace MemoryPrekeyStore::digest_kat -> [u8; 32] with [1; 32]
+crates/secmp-proto/src/prekeys.rs:927:5: replace bundle_on_parts -> Result<PrekeyBundle> with Ok(Default::default())
+crates/secmp-proto/src/prekeys.rs:954:9: delete field sig from struct PrekeyBundle expression in bundle_on_parts
+crates/secmp-proto/src/prekeys.rs:975:5: replace issue_on_parts -> core::result::Result<(Issued, InvitationRecord), IssueError> with Ok((Default::default(), Default::default()))
+crates/secmp-proto/src/prekeys.rs:1034:9: replace <impl PrekeyStore for MemoryPrekeyStore>::spk -> Option<&SpkGeneration> with None
+crates/secmp-proto/src/prekeys.rs:1034:9: replace <impl PrekeyStore for MemoryPrekeyStore>::spk -> Option<&SpkGeneration> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:1034:47: replace == with != in <impl PrekeyStore for MemoryPrekeyStore>::spk
+crates/secmp-proto/src/prekeys.rs:1038:9: replace <impl PrekeyStore for MemoryPrekeyStore>::opk -> Option<&OpkSecrets> with None
+crates/secmp-proto/src/prekeys.rs:1038:9: replace <impl PrekeyStore for MemoryPrekeyStore>::opk -> Option<&OpkSecrets> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/prekeys.rs:1038:40: replace == with != in <impl PrekeyStore for MemoryPrekeyStore>::opk
+crates/secmp-proto/src/prekeys.rs:1043:9: replace <impl PrekeyStore for MemoryPrekeyStore>::commit_accept -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:1046:36: replace || with && in <impl PrekeyStore for MemoryPrekeyStore>::commit_accept
+crates/secmp-proto/src/prekeys.rs:1046:26: replace != with == in <impl PrekeyStore for MemoryPrekeyStore>::commit_accept
+crates/secmp-proto/src/prekeys.rs:1054:9: replace <impl PrekeyStore for MemoryPrekeyStore>::delete_opk -> Result<()> with Ok(())
+crates/secmp-proto/src/prekeys.rs:1057:32: replace == with != in <impl PrekeyStore for MemoryPrekeyStore>::delete_opk
+crates/secmp-proto/src/tr/state.rs:112:9: replace SkippedKey::mk -> &SecretBytes<32> with Box::leak(Box::new(Default::default()))
+crates/secmp-proto/src/tr/state.rs:165:5: replace write_opt with ()
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(None)
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(Some(Vec::leak(Vec::new())))
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(Some(Vec::leak(vec![0])))
+crates/secmp-proto/src/tr/state.rs:175:5: replace read_opt -> Result<Option<&'a[u8]>> with Ok(Some(Vec::leak(vec![1])))
+crates/secmp-proto/src/tr/state.rs:183:5: replace secret32 -> Result<SecretBytes<32>> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:187:5: replace opt_secret -> Result<Option<SecretBytes<32>>> with Ok(None)
+crates/secmp-proto/src/tr/state.rs:187:5: replace opt_secret -> Result<Option<SecretBytes<32>>> with Ok(Some(Default::default()))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new())
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![]]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![0]]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![0]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![0]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![1]]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1]))
+crates/secmp-proto/src/tr/state.rs:220:9: replace RatchetState::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![1]))
+crates/secmp-proto/src/tr/state.rs:220:31: replace > with == in RatchetState::to_bytes
+crates/secmp-proto/src/tr/state.rs:220:31: replace > with < in RatchetState::to_bytes
+crates/secmp-proto/src/tr/state.rs:220:31: replace > with >= in RatchetState::to_bytes
+crates/secmp-proto/src/tr/state.rs:264:9: replace RatchetState::from_bytes -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:292:18: replace > with == in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:292:18: replace > with < in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:292:18: replace > with >= in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:321:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:319:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:318:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:317:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:316:13: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:317:29: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:317:55: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:318:31: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:318:59: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:319:29: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:319:32: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:31: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:55: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:44: replace && with || in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:39: replace == with != in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:320:50: replace == with != in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:321:29: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:321:36: replace == with != in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:324:13: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:323:13: replace || with && in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:322:12: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:323:16: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:324:16: delete ! in RatchetState::from_bytes
+crates/secmp-proto/src/tr/state.rs:363:5: replace skipped_is_reachable -> bool with true
+crates/secmp-proto/src/tr/state.rs:363:5: replace skipped_is_reachable -> bool with false
+crates/secmp-proto/src/tr/state.rs:366:17: replace |= with &= in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:366:35: replace & with | in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:366:35: replace & with ^ in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:366:63: replace >= with < in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:369:17: replace |= with &= in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:372:5: delete ! in skipped_is_reachable
+crates/secmp-proto/src/tr/state.rs:379:5: replace skipped_is_canonical -> bool with true
+crates/secmp-proto/src/tr/state.rs:379:5: replace skipped_is_canonical -> bool with false
+crates/secmp-proto/src/tr/state.rs:383:24: replace match guard bool::from(p.hk.ct_eq(&e.hk)) with true in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:24: replace match guard bool::from(p.hk.ct_eq(&e.hk)) with false in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:61: replace > with == in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:61: replace > with < in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:383:61: replace > with >= in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:387:30: replace |= with &= in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:390:17: delete ! in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:393:12: delete ! in skipped_is_canonical
+crates/secmp-proto/src/tr/state.rs:424:9: replace RatchetParts::split -> Result<Self> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:446:18: replace > with == in RatchetParts::split
+crates/secmp-proto/src/tr/state.rs:446:18: replace > with < in RatchetParts::split
+crates/secmp-proto/src/tr/state.rs:446:18: replace > with >= in RatchetParts::split
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new())
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![]]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![0]]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![0]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![0]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from_iter([vec![1]]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1]))
+crates/secmp-proto/src/tr/state.rs:465:9: replace RatchetParts::to_bytes -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![1]))
+crates/secmp-proto/src/tr/state.rs:466:13: replace || with && in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:465:31: replace > with == in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:465:31: replace > with < in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:465:31: replace > with >= in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:466:52: replace != with == in RatchetParts::to_bytes
+crates/secmp-proto/src/tr/state.rs:486:9: replace RatchetState::to_parts -> Result<RatchetParts> with Ok(Default::default())
+crates/secmp-proto/src/tr/state.rs:494:9: replace RatchetState::from_parts -> Result<Self> with Ok(Default::default())
+before-count: 268; after-count: 268; mutants at prekeys.rs>=1064 / state.rs>=500: 0 before, 0 after

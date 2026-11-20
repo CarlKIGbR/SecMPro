@@ -82,6 +82,20 @@ pub struct ControlMaterial {
     pub link_status: Vec<(u32, bool, bool)>,
     /// Control operations completed, with their kind.
     pub done: Vec<ControlKind>,
+    /// M7-S4 test hook: virtual ms the host's prepare step waits — a hub lock held.
+    pub prepare_wait_ms: u64,
+    /// M7-S4 test hook: virtual ms the commit of an answer waits.
+    pub commit_wait_ms: u64,
+    /// M7-S4 test hook: operations the host has nothing to do for.
+    pub skip: Vec<ControlKind>,
+    /// M7-S4d test hook (Q300 phase rule): after the link is up, `run` of this operation returns this error without the
+    /// command.
+    pub answer: Option<(ControlKind, TransportError)>,
+    /// M7-S4d test hook: `run` of these operations never returns — a relay that never answers; the driver's timeout ends
+    /// the link.
+    pub hang: Vec<ControlKind>,
+    /// Operations whose link was up but ended without a committed answer (`ControlRunner::unanswered`, M7-S4d).
+    pub unanswered: Vec<ControlKind>,
 }
 
 /// The control runner (as the virtual driver's `run_control`); queue seeds of new pool queues come from `seeds`.
@@ -109,13 +123,45 @@ fn seed32(bytes: &[u8; 32]) -> SecretBytes<32> {
 }
 
 impl ControlRunner for TestControl {
-    async fn run<S: ProviderStream>(
+    type Prepared = (ControlKind, RelayId);
+    type Answer = (ControlKind, ControlEffect);
+
+    async fn prepare(
         &self,
         _op: OpId,
         kind: ControlKind,
         relay: RelayId,
+    ) -> Result<Option<Self::Prepared>, TransportError> {
+        let (wait, skip) = {
+            let m = self.material.lock().unwrap();
+            (m.prepare_wait_ms, m.skip.contains(&kind))
+        };
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
+        Ok((!skip).then_some((kind, relay)))
+    }
+
+    async fn run<S: ProviderStream>(
+        &self,
+        (kind, relay): (ControlKind, RelayId),
         t: &mut AsyncRelayQueueTransport<S>,
-    ) -> Result<ControlEffect, TransportError> {
+    ) -> Result<Self::Answer, TransportError> {
+        // M7-S4d test hooks (Q300 phase rule): the link is up; the relay never answers, or the call returns `e` without the
+        // command — a relay `ERR`, a close after the command (`Closed`), an unfitting answer (`Rejected`)
+        let (answer, hang) = {
+            let m = self.material.lock().unwrap();
+            (
+                m.answer.filter(|(k, _)| *k == kind).map(|(_, e)| e),
+                m.hang.contains(&kind),
+            )
+        };
+        if hang {
+            std::future::pending::<()>().await;
+        }
+        if let Some(e) = answer {
+            return Err(e);
+        }
         let effect = match kind {
             ControlKind::QueueNew(queue) => {
                 let known = self.material.lock().unwrap().queues.get(&queue.0).copied();
@@ -195,8 +241,25 @@ impl ControlRunner for TestControl {
                 ControlEffect::None
             }
         };
+        Ok((kind, effect))
+    }
+
+    async fn commit(
+        &self,
+        (kind, effect): (ControlKind, ControlEffect),
+    ) -> Result<ControlEffect, TransportError> {
+        let wait = self.material.lock().unwrap().commit_wait_ms;
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
         self.material.lock().unwrap().done.push(kind);
         Ok(effect)
+    }
+
+    fn unanswered(&self, kind: ControlKind) -> impl Future<Output = bool> + Send {
+        self.material.lock().unwrap().unanswered.push(kind);
+        // as the runtime: a consume whose link was up ends the accept (Q300, M7-S4d)
+        std::future::ready(matches!(kind, ControlKind::LinkGetConsume(_)))
     }
 }
 

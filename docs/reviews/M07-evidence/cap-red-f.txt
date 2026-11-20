@@ -1,0 +1,132 @@
+head eb2d5cb7ae1c5288addf74bb7eb15913a0a72b8d
+diff --git a/crates/secmp-client-core/src/hub.rs b/crates/secmp-client-core/src/hub.rs
+index 18b517c..d938d4a 100644
+--- a/crates/secmp-client-core/src/hub.rs
++++ b/crates/secmp-client-core/src/hub.rs
+@@ -406,7 +406,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
+             }
+             // CAP (Q270): no more than the cap again — a row beyond it (a replayed or an older store) is not registered: it
+             // goes at the next preparation and a marker of its `sid` keeps holding (fail closed); the open never fails on it
+-            if self.overlaps_held(contact) >= MAX_SEND_OVERLAPS {
++            if self.overlaps_held(contact) > MAX_SEND_OVERLAPS {
+                 continue;
+             }
+             let queue = self.alloc_send();
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.21s
+────────────
+ Nextest run ID 157ca4ec-9594-4043-85c6-9d3c8ed10e3a with nextest profile: default
+    Starting 22 tests across 1 binary (305 tests skipped)
+        PASS [   0.023s] ( 1/22) secmp-client-core hub::tests::cap_leaves_a_margin_over_the_spec
+        FAIL [   2.127s] ( 2/22) secmp-client-core hub::tests::restart_registers_at_most_the_cap
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_registers_at_most_the_cap ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_registers_at_most_the_cap
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 326 filtered out; finished in 2.12s
+
+  stderr ───
+
+    thread '<unnamed>' (464312) panicked at crates/secmp-client-core/src/hub.rs:4043:13:
+    assertion `left == right` failed: B and the first rows up to the cap
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [62, 80, 229, 10, 178, 127, 200, 0, 6, 130, 205, 118, 103, 28, 172, 200], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50], [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51], [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52], [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53], [54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [62, 80, 229, 10, 178, 127, 200, 0, 6, 130, 205, 118, 103, 28, 172, 200], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50], [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51], [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52], [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.134s] ( 3/22) secmp-client-core hub::tests::cap_leaves_our_own_rotation_alone
+        FAIL [   2.226s] ( 4/22) secmp-client-core hub::tests::restart_counts_each_sid_once_toward_the_cap
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_counts_each_sid_once_toward_the_cap ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_counts_each_sid_once_toward_the_cap
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 326 filtered out; finished in 2.22s
+
+  stderr ───
+
+    thread '<unnamed>' (464355) panicked at crates/secmp-client-core/src/hub.rs:4518:13:
+    assertion `left == right` failed: B and the first distinct sids up to the cap
+      left: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [223, 203, 168, 56, 240, 213, 195, 44, 129, 57, 72, 46, 92, 209, 228, 72], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50], [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51], [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52], [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53], [54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54]]
+     right: [[4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4], [223, 203, 168, 56, 240, 213, 195, 44, 129, 57, 72, 46, 92, 209, 228, 72], [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9], [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50], [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51], [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52], [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53]]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   2.292s] ( 5/22) secmp-client-core hub::tests::floor_waits_for_its_row
+        PASS [   2.338s] ( 6/22) secmp-client-core hub::tests::restart_at_the_cap_refuses_a_new_route
+        PASS [   2.406s] ( 7/22) secmp-client-core hub::tests::cap_counts_no_receive_queue
+        PASS [   2.413s] ( 8/22) secmp-client-core hub::tests::first_route_is_not_capped
+        PASS [   2.446s] ( 9/22) secmp-client-core hub::tests::cap_refuses_a_route_at_the_cap
+        PASS [   2.447s] (10/22) secmp-client-core hub::tests::cap_inside_one_pump_and_a_crash_after_a_refusal
+        PASS [   2.453s] (11/22) secmp-client-core hub::tests::cap_keeps_a_held_key_change
+        PASS [   2.467s] (12/22) secmp-client-core hub::tests::our_rotation_at_the_cap_retires_the_old_receive_queue
+        PASS [   2.482s] (13/22) secmp-client-core hub::tests::refused_route_leaves_the_marker_on_the_sent_queue
+        PASS [   2.493s] (14/22) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+        PASS [   2.552s] (15/22) secmp-client-core hub::tests::cap_holds_through_queue_loss_until_an_end
+        PASS [   2.558s] (16/22) secmp-client-core hub::tests::refused_route_leaves_the_current_queue_as_it_was
+        FAIL [   2.870s] (17/22) secmp-client-core hub::tests::restart_beyond_the_cap_holds_the_key_change
+  stdout ───
+
+    running 1 test
+    test hub::tests::restart_beyond_the_cap_holds_the_key_change ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::restart_beyond_the_cap_holds_the_key_change
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 326 filtered out; finished in 2.84s
+
+  stderr ───
+
+    thread '<unnamed>' (464357) panicked at crates/secmp-client-core/src/hub.rs:4169:13:
+    assertion `left == right` failed: the cap
+      left: 7
+     right: 6
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+        PASS [   3.683s] (18/22) secmp-client-core hub::tests::cap_is_per_contact
+        PASS [   4.217s] (19/22) secmp-client-core hub::tests::cap_counts_each_contact_alone_across_a_restart
+        PASS [   4.287s] (20/22) secmp-client-core hub::tests::refused_route_draws_nothing
+        PASS [   4.689s] (21/22) secmp-client-core hub::tests::cap_bounds_the_send_queues_at_any_draw
+        FAIL [   8.969s] (22/22) secmp-client-core hub::tests::a_refusal_changes_nothing_but_the_stored_route
+  stdout ───
+
+    running 1 test
+    test hub::tests::a_refusal_changes_nothing_but_the_stored_route ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::a_refusal_changes_nothing_but_the_stored_route
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 326 filtered out; finished in 8.96s
+
+  stderr ───
+
+    thread '<unnamed>' (464309) panicked at crates/secmp-client-core/src/hub.rs:5768:13:
+    assertion `left == right` failed: SE-178 open beyond the cap: actions
+      left: ["AddRecv QueueId(1) RelayId(1) [42, 44, 254, 176, 25, 99, 136, 124, 151, 40, 140, 167, 242, 121, 249, 136, 165, 149, 246, 188, 167, 144, 41, 41, 63, 111, 152, 131, 65, 200, 65, 68] 10000", "AddSend QueueId(1073741825) RelayId(1) [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4] [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4] 80000", "AddSend QueueId(1073741826) RelayId(1) [30, 183, 190, 67, 97, 52, 240, 6, 14, 27, 51, 50, 101, 222, 156, 206] [183, 208, 114, 208, 252, 227, 74, 35, 71, 62, 207, 164, 165, 181, 31, 40, 106, 106, 161, 131, 215, 67, 146, 93, 230, 61, 1, 55, 225, 162, 243, 241] 10000", "AddSend QueueId(1073741827) RelayId(1) [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9] [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9] 80000", "AddSend QueueId(1073741828) RelayId(1) [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50] [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50] 20000", "AddSend QueueId(1073741829) RelayId(1) [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51] [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51] 20000", "AddSend QueueId(1073741830) RelayId(1) [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52] [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52] 20000", "AddSend QueueId(1073741831) RelayId(1) [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53] [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53] 20000", "AddSend QueueId(1073741832) RelayId(1) [54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54] [54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54, 54] 20000"]
+     right: ["AddRecv QueueId(1) RelayId(1) [42, 44, 254, 176, 25, 99, 136, 124, 151, 40, 140, 167, 242, 121, 249, 136, 165, 149, 246, 188, 167, 144, 41, 41, 63, 111, 152, 131, 65, 200, 65, 68] 10000", "AddSend QueueId(1073741825) RelayId(1) [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4] [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4] 80000", "AddSend QueueId(1073741826) RelayId(1) [30, 183, 190, 67, 97, 52, 240, 6, 14, 27, 51, 50, 101, 222, 156, 206] [183, 208, 114, 208, 252, 227, 74, 35, 71, 62, 207, 164, 165, 181, 31, 40, 106, 106, 161, 131, 215, 67, 146, 93, 230, 61, 1, 55, 225, 162, 243, 241] 10000", "AddSend QueueId(1073741827) RelayId(1) [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9] [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9] 80000", "AddSend QueueId(1073741828) RelayId(1) [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50] [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50] 20000", "AddSend QueueId(1073741829) RelayId(1) [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51] [51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51, 51] 20000", "AddSend QueueId(1073741830) RelayId(1) [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52] [52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52, 52] 20000", "AddSend QueueId(1073741831) RelayId(1) [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53] [53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53, 53] 20000"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+    Error: "the test panicked"
+
+────────────
+     Summary [   8.970s] 22 tests run: 18 passed, 4 failed, 305 skipped
+        FAIL [   2.127s] ( 2/22) secmp-client-core hub::tests::restart_registers_at_most_the_cap
+        FAIL [   2.226s] ( 4/22) secmp-client-core hub::tests::restart_counts_each_sid_once_toward_the_cap
+        FAIL [   2.870s] (17/22) secmp-client-core hub::tests::restart_beyond_the_cap_holds_the_key_change
+        FAIL [   8.969s] (22/22) secmp-client-core hub::tests::a_refusal_changes_nothing_but_the_stored_route
+error: test run failed

@@ -1,0 +1,5 @@
+measured on HEAD eb9d3b896adf607011de4c71bd0696456bd69a35 (the G7-00 tree with the ctutils entry restored in COOLDOWN_EXCEPTIONS (target/m7draft/g700_red.py), before the commit)
+G7-00 cooldown_exceptions_empty with the ctutils entry still listed: exit 100
+FAIL [   0.005s] (1/1) xtask::bin/xtask expect::cooldown_exceptions_empty
+thread 'expect::cooldown_exceptions_empty' (3973594) panicked at xtask/src/expect.rs:2113:5:
+FAIL [   0.005s] (1/1) xtask::bin/xtask expect::cooldown_exceptions_empty

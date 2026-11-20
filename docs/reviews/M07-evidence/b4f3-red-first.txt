@@ -1,0 +1,6 @@
+head 432f43a6318a672a8f85bc6da373b33048caa3e4
+cargo test -p secmp-client-core --features kat --lib -- newer_routes_row_outlives_a_retired_one
+panicked at crates/secmp-client-core/src/sessions/actor.rs:2887:9:
+assertion `left == right` failed: Q230: the newer row stays while the retired older row is kept
+  left: [("relayed", 4), ("relayed", 4), ("relayed", 4), ("relayed", 5)]
+ right: [("relayed", 4), ("relayed", 4), ("relayed", 4)]

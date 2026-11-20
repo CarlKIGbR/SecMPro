@@ -86,6 +86,8 @@ struct Inner {
     chunking: Mutex<Option<Chunking>>,
     captures: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
     isolations: Mutex<Vec<(u64, Isolation)>>,
+    /// When each connection ended: connection, virtual ms (M7-S4).
+    closes: Mutex<Vec<(u64, u64)>>,
     /// The store as of the last unit (`rid` → `next_cell_id`, head) and every change since the start.
     store: Mutex<StoreLog>,
 }
@@ -178,6 +180,7 @@ impl MemRelay {
             chunking: Mutex::new(None),
             captures: Mutex::new(Vec::new()),
             isolations: Mutex::new(Vec::new()),
+            closes: Mutex::new(Vec::new()),
             store: Mutex::new((std::collections::BTreeMap::new(), Vec::new())),
         }))
     }
@@ -391,6 +394,11 @@ impl MemRelay {
                     break;
                 }
             }
+            inner
+                .closes
+                .lock()
+                .unwrap()
+                .push((n, inner.clock.mono_ms()));
         });
         true
     }
@@ -445,6 +453,15 @@ impl MemRelay {
     #[must_use]
     pub fn isolations(&self) -> Vec<(u64, Isolation)> {
         self.0.isolations.lock().unwrap().clone()
+    }
+
+    /// When each connection ended: connection (as [`Unit::conn`]), virtual milliseconds.
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    #[must_use]
+    pub fn closes(&self) -> Vec<(u64, u64)> {
+        self.0.closes.lock().unwrap().clone()
     }
 }
 

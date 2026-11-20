@@ -23,6 +23,7 @@ harness = [
     "secmp-relay/direct-tls",
     "secmp-transport/harness",
     "secmp-client-core/kat",
+    "secmp-store/kat",
 ]
 kat = ["harness"]
 
@@ -43,6 +44,7 @@ tokio.workspace = true
 # 38724110285). The harness, the only user of these two crates, is compiled out under Miri (`src/lib.rs`).
 [target.'cfg(not(miri))'.dependencies]
 secmp-client-core.workspace = true
+secmp-store.workspace = true
 secmp-transport.workspace = true
 
 # Test-only. `chacha20poly1305`, `subtle` and `sha3` serve the constant-time bench (its isolating CAEAD targets and
@@ -93,4 +95,9 @@ workspace = true
 # The real-time activity-independence run (TEST-SPEC-M6 AI-07, loopback part): started by the dispatch job `ks-hour`, 2 h.
 [[example]]
 name = "ks_hour"
+required-features = ["harness"]
+
+# TEST-SPEC-M7 E2-10: two secmp-cli processes through recording proxies (build box; no dispatch job).
+[[example]]
+name = "ks_cli"
 required-features = ["harness"]

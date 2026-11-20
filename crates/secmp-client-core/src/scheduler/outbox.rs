@@ -10,6 +10,7 @@
 //! back to *queued*: it is re-encrypted under a new key and sent again, the receiver deduplicates by `msg_id`.
 
 use secmp_crypto::Zeroizing;
+use secmp_proto::tr::RatchetParts;
 use secmp_proto::wire::Id;
 use secmp_proto::wire::cell::AppKind;
 
@@ -49,6 +50,14 @@ pub trait Outbox {
     /// Queue a message at `now_ms`.
     fn enqueue(&mut self, message: OutMessage, now_ms: u64);
 
+    /// Queue a message and report whether it is as durable as the outbox promises; a store that refused the write gives the
+    /// message back (it is dropped again) and the answer is `false` (F9: the `Api` answers with an error and the message is
+    /// not queued). The default is [`Outbox::enqueue`] (an outbox without a store).
+    fn enqueue_durable(&mut self, message: OutMessage, now_ms: u64) -> bool {
+        self.enqueue(message, now_ms);
+        true
+    }
+
     /// The state of a message.
     fn state(&self, id: &MsgId) -> Option<MsgState>;
 
@@ -66,6 +75,12 @@ pub trait Outbox {
 
     /// A `Receipt{delivered}` for the message.
     fn delivered(&mut self, id: &MsgId);
+
+    /// The message became `Delivered` in a commit that already made it durable (SE-21): only the in-memory view follows,
+    /// no row is written. The default is [`Outbox::delivered`] (an outbox without a store).
+    fn delivered_committed(&mut self, id: &MsgId) {
+        self.delivered(id);
+    }
 
     /// The process restarted: a message that was being sent (taken, no `OK_SEND` yet) is waiting again — the outbox
     /// survives restarts, what was in flight does not (spec §10.4).
@@ -114,6 +129,46 @@ impl MemOutbox {
             .iter()
             .map(|e| (e.message.msg_id, e.state))
             .collect()
+    }
+
+    /// The entries in enqueue order as a durable outbox keeps them: the message, when it was queued, when it was first
+    /// relayed, its state (what is in flight is not durable, spec §10.4).
+    pub fn entries(&self) -> impl Iterator<Item = (&OutMessage, u64, Option<u64>, MsgState)> {
+        self.entries
+            .iter()
+            .map(|e| (&e.message, e.queued_at, e.first_relayed_at, e.state))
+    }
+
+    /// The outbox of a restarted process from durable entries ([`MemOutbox::entries`], enqueue order): nothing in
+    /// flight.
+    #[must_use]
+    pub fn from_entries(entries: Vec<(OutMessage, u64, Option<u64>, MsgState)>) -> Self {
+        let clock = entries
+            .iter()
+            .map(|(_, queued, first, _)| first.unwrap_or(*queued).max(*queued))
+            .max()
+            .unwrap_or(0);
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(message, queued_at, first_relayed_at, state)| Entry {
+                    message,
+                    queued_at,
+                    first_relayed_at,
+                    state,
+                    taken: false,
+                })
+                .collect(),
+            clock,
+        }
+    }
+
+    /// Drop a message that was queued and is waiting (not in flight, not relayed): `enqueue_durable`'s rollback.
+    pub fn discard(&mut self, id: &MsgId) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| !(e.message.msg_id == *id && e.state == MsgState::Queued && !e.taken));
+        self.entries.len() != before
     }
 
     fn entry(&mut self, id: &MsgId) -> Option<&mut Entry> {
@@ -232,6 +287,62 @@ pub enum PersistKind {
     Receive,
 }
 
+/// A message a receiving commit records as delivered: the history row and the dedup key are durable together with the
+/// ratchet state that consumed its cell (persist-before-ack covers the delivery, PC-05).
+pub struct DeliveredMessage<'a> {
+    /// Its id.
+    pub msg_id: MsgId,
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// The payload.
+    pub payload: &'a [u8],
+    /// `AppMessage.expire_after` (seconds, 0: never).
+    pub expire_after: u32,
+    /// Unix ms of the latest slot preparation, ≤ one period before the fetch; before the first preparation,
+    /// `unix_base`·1000 (V1-F4).
+    pub received_ms: u64,
+}
+
+/// What one commit makes durable together, in one store transaction (OPEN-M7-14 A; PC-09): the ratchet state in its
+/// parts (CS-3.7: fixed part and skipped entries), and with a received cell the reassembly state, the trust and the
+/// messages the cell delivered.
+pub struct CommitParts<'a> {
+    /// The ratchet state.
+    pub ratchet: &'a RatchetParts,
+    /// The reassembly state (`Inbox`), when it changed.
+    pub inbox: Option<&'a [u8]>,
+    /// The trust, when it changed.
+    pub trust: Option<u8>,
+    /// The block a `Control{1|2}` in the received cell sets (the sessions' `block_code`: 1 removed, 2 reset; Q210 b).
+    pub block: Option<u8>,
+    /// The peer's new identity of a verified `KeyChange` in the received cell (encoded `IksPublic`, fingerprint): the
+    /// contact row takes it, unverified, in the same commit (Q210 a, spec §7.7).
+    pub identity: Option<(&'a [u8], &'a [u8])>,
+    /// The contact's identity before the verified `KeyChange` of this cell: kept so that a repeat of it verifies,
+    /// ADR-058.
+    pub previous_identity: Option<&'a [u8]>,
+    /// The messages delivered by the received cell.
+    pub delivered: &'a [DeliveredMessage<'a>],
+    /// The messages that a `Receipt{delivered}` in the received cell confirms: `Delivered` in the same commit (SE-21).
+    pub receipted: &'a [MsgId],
+    /// The routes of a `RouteUpdate` in the received cell (`count u8 ‖ RouteDescriptor × count`), for the contact (SE-01).
+    pub routes: Option<&'a [u8]>,
+    /// The first reply of an initiator was decrypted: its stored handshake cells go (Q150, IN-14).
+    pub clear_handshake: bool,
+}
+
+/// The code of a trust in [`CommitParts::trust`] (the `sessions` trust row).
+#[must_use]
+pub const fn trust_code(trust: secmp_proto::tr::content::Trust) -> u8 {
+    use secmp_proto::tr::content::Trust;
+    match trust {
+        Trust::Unverified => 0,
+        Trust::Verified => 1,
+        Trust::KeyChanged => 2,
+        Trust::Frozen => 3,
+    }
+}
+
 /// Where a ratchet state becomes durable (the encrypted store of M7).
 pub trait Persist {
     /// Make `state` (the serialised `RatchetStateV1`) durable.
@@ -239,6 +350,32 @@ pub trait Persist {
     /// # Errors
     /// [`PersistError`]: nothing is durable; the caller neither sends nor acknowledges.
     fn commit(&mut self, kind: PersistKind, state: &[u8]) -> Result<(), PersistError>;
+
+    /// Make `parts` durable in one commit; the default writes the whole state ([`Persist::commit`]) and keeps nothing
+    /// else (the in-memory durability); an incremental store overrides it.
+    ///
+    /// # Errors
+    /// [`PersistError`]: nothing is durable; the caller neither sends nor acknowledges.
+    fn commit_parts(
+        &mut self,
+        kind: PersistKind,
+        parts: &CommitParts<'_>,
+    ) -> Result<(), PersistError> {
+        let bytes = parts.ratchet.to_bytes().map_err(|_| PersistError)?;
+        self.commit(kind, &bytes)
+    }
+
+    /// The last cell of the pending control content at `ord` has its `OK_SEND`: its row goes (Q222).
+    ///
+    /// # Errors
+    /// [`PersistError`]: the row stays; the caller tries again.
+    fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError>;
+
+    /// A control content whose row went is planned again: its row is written again; `None`: no durable row.
+    ///
+    /// # Errors
+    /// [`PersistError`]: nothing is written; the caller tries again.
+    fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError>;
 }
 
 /// The in-memory durability: the last durable state, counters, and failure injection for the tests.
@@ -251,6 +388,8 @@ pub struct MemPersist {
     fail_from: Option<u64>,
     /// The next commit is made durable and then the "process dies": it reports an error to the caller.
     crash_after: bool,
+    /// A second durability every commit goes to first (the store behind the in-memory copy in the tests, PC-03).
+    mirror: Option<Box<dyn Persist + Send>>,
 }
 
 impl MemPersist {
@@ -263,7 +402,13 @@ impl MemPersist {
             fail: false,
             fail_from: None,
             crash_after: false,
+            mirror: None,
         }
+    }
+
+    /// Make every later commit durable in `mirror` first (its failure fails the commit); the in-memory copy follows.
+    pub fn set_mirror(&mut self, mirror: Box<dyn Persist + Send>) {
+        self.mirror = Some(mirror);
     }
 
     /// The last durable state.
@@ -303,17 +448,149 @@ impl MemPersist {
     }
 }
 
+impl MemPersist {
+    fn refuses(&self) -> bool {
+        self.fail || self.fail_from.is_some_and(|n| self.commits >= n)
+    }
+}
+
 impl Persist for MemPersist {
-    fn commit(&mut self, _kind: PersistKind, state: &[u8]) -> Result<(), PersistError> {
-        if self.fail || self.fail_from.is_some_and(|n| self.commits >= n) {
+    fn commit(&mut self, kind: PersistKind, state: &[u8]) -> Result<(), PersistError> {
+        if self.refuses() {
             return Err(PersistError);
         }
+        if let Some(m) = self.mirror.as_mut() {
+            m.commit(kind, state)?;
+        }
+        self.keep(state)
+    }
+
+    fn commit_parts(
+        &mut self,
+        kind: PersistKind,
+        parts: &CommitParts<'_>,
+    ) -> Result<(), PersistError> {
+        if self.refuses() {
+            return Err(PersistError);
+        }
+        if let Some(m) = self.mirror.as_mut() {
+            m.commit_parts(kind, parts)?;
+        }
+        let bytes = parts.ratchet.to_bytes().map_err(|_| PersistError)?;
+        self.keep(&bytes)
+    }
+
+    fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError> {
+        match self.mirror.as_mut() {
+            Some(m) => m.control_relayed(ord),
+            None => Ok(()),
+        }
+    }
+
+    fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError> {
+        match self.mirror.as_mut() {
+            Some(m) => m.control_requeued(row),
+            None => Ok(None),
+        }
+    }
+}
+
+impl MemPersist {
+    fn keep(&mut self, state: &[u8]) -> Result<(), PersistError> {
         self.durable = Some(Zeroizing::new(state.to_vec()));
         self.commits = self.commits.saturating_add(1);
         if self.crash_after {
             self.crash_after = false;
             return Err(PersistError);
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(n: u8) -> OutMessage {
+        OutMessage {
+            msg_id: [n; 16],
+            kind: secmp_proto::wire::cell::AppKind::Text,
+            expire_after: 0,
+            payload: Zeroizing::new(vec![n; 4]),
+        }
+    }
+
+    /// B-4 killers (`Outbox::enqueue_durable`, `MemOutbox::discard`, OPEN-M7-F9): an outbox without a store queues and says
+    /// so; a message that waits can be taken back, one that is in flight, relayed or unknown cannot, and only it goes.
+    #[test]
+    fn enqueue_durable_and_discard() {
+        let mut outbox = MemOutbox::new();
+        assert!(outbox.enqueue_durable(message(1), 0));
+        assert_eq!(outbox.state(&[1; 16]), Some(MsgState::Queued));
+        assert!(!outbox.discard(&[9; 16]), "unknown");
+        let _taken = outbox.take_next();
+        assert!(!outbox.discard(&[1; 16]), "in flight");
+        outbox.relayed(&[1; 16], 5);
+        assert!(!outbox.discard(&[1; 16]), "relayed");
+        outbox.enqueue(message(2), 0);
+        outbox.enqueue(message(3), 0);
+        assert!(outbox.discard(&[2; 16]));
+        assert_eq!(outbox.state(&[2; 16]), None);
+        assert_eq!(outbox.state(&[3; 16]), Some(MsgState::Queued));
+        assert_eq!(outbox.waiting(), 1);
+        assert!(!outbox.discard(&[2; 16]), "gone already");
+        // a requeued message waits again and can be taken back
+        outbox.requeue(&[1; 16]);
+        assert!(outbox.discard(&[1; 16]));
+        assert_eq!(outbox.state(&[1; 16]), None);
+        assert_eq!(outbox.state(&[3; 16]), Some(MsgState::Queued));
+    }
+
+    /// The calls a mirror saw: `("requeued", row length)`, `("relayed", ord)`.
+    type Calls = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, i64)>>>;
+
+    /// A mirror that records the control-row calls and answers `ord` 7 for a written row.
+    struct Mirror(Calls);
+
+    impl Persist for Mirror {
+        fn commit(&mut self, _kind: PersistKind, _state: &[u8]) -> Result<(), PersistError> {
+            Ok(())
+        }
+
+        fn control_relayed(&mut self, ord: i64) -> Result<(), PersistError> {
+            self.0
+                .lock()
+                .map_err(|_| PersistError)?
+                .push(("relayed", ord));
+            Ok(())
+        }
+
+        fn control_requeued(&mut self, row: &[u8]) -> Result<Option<i64>, PersistError> {
+            let len = i64::try_from(row.len()).map_err(|_| PersistError)?;
+            self.0
+                .lock()
+                .map_err(|_| PersistError)?
+                .push(("requeued", len));
+            Ok(Some(7))
+        }
+    }
+
+    /// SE-39 (PC-03, Q222): without a mirror the in-memory durability has no control rows (a written row has no `ord`);
+    /// with one, both control-row calls go to it and its answers come back.
+    #[test]
+    fn mem_persist_forwards_control_rows_to_its_mirror() -> Result<(), PersistError> {
+        let calls = Calls::default();
+        let mut persist = MemPersist::new();
+        assert_eq!(persist.control_requeued(b"r"), Ok(None));
+        assert_eq!(persist.control_relayed(3), Ok(()));
+        assert!(calls.lock().map_err(|_| PersistError)?.is_empty());
+        persist.set_mirror(Box::new(Mirror(std::sync::Arc::clone(&calls))));
+        assert_eq!(persist.control_requeued(b"r"), Ok(Some(7)));
+        assert_eq!(persist.control_relayed(7), Ok(()));
+        assert_eq!(
+            *calls.lock().map_err(|_| PersistError)?,
+            [("requeued", 1), ("relayed", 7)]
+        );
         Ok(())
     }
 }

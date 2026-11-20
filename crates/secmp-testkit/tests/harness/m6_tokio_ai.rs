@@ -22,7 +22,7 @@ fn assert_clean(run: &TRun, what: &str) {
     let bad: Vec<_> = run
         .torn
         .iter()
-        .filter(|(_, e)| !matches!(e, LinkEvent::TornDown(_, Reason::Lifetime)))
+        .filter(|(_, e)| !matches!(e, LinkEvent::TornDown(_, _, Reason::Lifetime)))
         .collect();
     assert!(bad.is_empty(), "{what}: teardowns {bad:?}");
     for (slot, up) in &run.ups {
@@ -55,7 +55,7 @@ fn assert_clean(run: &TRun, what: &str) {
             .torn
             .iter()
             .find_map(|(t, e)| match e {
-                LinkEvent::TornDown(l, _) if l.0 == *slot => Some(*t),
+                LinkEvent::TornDown(l, _, _) if l.0 == *slot => Some(*t),
                 _ => None,
             })
             .unwrap_or(run.end_ms);

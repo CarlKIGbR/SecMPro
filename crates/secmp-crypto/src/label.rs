@@ -102,13 +102,21 @@ pub enum Label {
     StoreInvitations,
     /// `"SecMP-STORE/1 settings"`
     StoreSettings,
+    /// `"SecMP-STORE/1 wrap"` (ADR-053 item 2)
+    StoreWrap,
+    /// `"SecMP-STORE/1 db"` (ADR-053 item 4)
+    StoreDb,
+    /// `"SecMP-STORE/1 backup"` (ADR-053 item 6)
+    StoreBackup,
+    /// `"SecMP-STORE/1 bwrap"` (ADR-053 item 6)
+    StoreBwrap,
     /// `"SecMP-vectors/1"`
     Vectors,
 }
 
 impl Label {
     /// Every label, in the order of spec Appendix A.
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 53] = [
         Self::HybridKem768,
         Self::HybridKem1024,
         Self::HybridSign,
@@ -157,6 +165,10 @@ impl Label {
         Self::StoreMessages,
         Self::StoreInvitations,
         Self::StoreSettings,
+        Self::StoreWrap,
+        Self::StoreDb,
+        Self::StoreBackup,
+        Self::StoreBwrap,
         Self::Vectors,
     ];
 
@@ -212,6 +224,10 @@ impl Label {
             Self::StoreMessages => "SecMP-STORE/1 messages",
             Self::StoreInvitations => "SecMP-STORE/1 invitations",
             Self::StoreSettings => "SecMP-STORE/1 settings",
+            Self::StoreWrap => "SecMP-STORE/1 wrap",
+            Self::StoreDb => "SecMP-STORE/1 db",
+            Self::StoreBackup => "SecMP-STORE/1 backup",
+            Self::StoreBwrap => "SecMP-STORE/1 bwrap",
             Self::Vectors => "SecMP-vectors/1",
         }
     }
@@ -261,7 +277,7 @@ mod tests {
     fn enum_equals_appendix_a_of_the_spec() {
         let spec: Vec<String> = appendix_a_labels();
         let ours: Vec<String> = Label::ALL.iter().map(|l| l.as_str().to_owned()).collect();
-        assert_eq!(spec.len(), 49, "Appendix A should list 49 labels: {spec:?}");
+        assert_eq!(spec.len(), 53, "Appendix A should list 53 labels: {spec:?}");
         assert_eq!(ours, spec, "Label::ALL must list Appendix A in order");
     }
 

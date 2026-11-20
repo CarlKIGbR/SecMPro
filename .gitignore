@@ -7,6 +7,8 @@
 /fuzz/coverage/
 # mutation-testing output
 /mutants.out*/
+# LLVM coverage profiles that re-entered child processes of the tests write under the default name (coverage children)
+*.profraw
 # Claude Code local permission settings (per machine, never committed)
 .claude/settings.local.json
 # Rust-generated SecMP vectors (compared with vectors/ref/ by `cargo xtask vectors`; the frozen files are vectors/*.json)

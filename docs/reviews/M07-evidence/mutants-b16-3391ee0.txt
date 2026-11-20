@@ -1,0 +1,8 @@
+head 3391ee0dcd39a1d0e7256f662f4e2e65a8c2915e
+git diff ba61e4be343a4c737d564ce8d4d6100ffe3f773f -- crates/secmp-store/src/backup.rs > target/m7-b16-mutants.diff
+timeout 3600 cargo mutants --no-shuffle -j 2 --output target/m7-b16-mutants --features kat --caught --unviable --package secmp-store --test-package secmp-store --file crates/secmp-store/src/backup.rs --in-diff target/m7-b16-mutants.diff --test-tool nextest --timeout 600 > target/m7-b16-mutants.log 2>&1
+Found 2 mutants to test
+ok       Unmutated baseline in 64s build + 8s test
+caught   crates/secmp-store/src/backup.rs:612:5: replace message_time -> Result<()> with Ok(()) in 1s build + 7s test
+unviable crates/secmp-store/src/backup.rs:623:5: replace decode -> Result<Contents> with Ok(Default::default()) in 0s build
+2 mutants tested in 16m: 1 caught, 1 unviable

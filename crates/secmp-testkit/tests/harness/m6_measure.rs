@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! M6 (h) measurements on the virtual clock (MR-01, MR-02; spec §10.2, §9.5; `docs/07` M6).
 
-use secmp_client_core::scheduler::conversation::Conversation;
 use secmp_client_core::scheduler::core::LinkKind;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{LinkEvent, QueueId, RelayId};
+use secmp_client_core::sessions::actor::Conversation;
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::cell::AppKind;
 use secmp_relay::Limits;
@@ -58,7 +58,7 @@ fn check_model(rig: &Rig, end: u64) -> Vec<Conn> {
         let Some(up) = client
             .events
             .iter()
-            .find(|(_, e)| matches!(e, LinkEvent::Up(i) if i == id))
+            .find(|(_, e)| matches!(e, LinkEvent::Up(i, _) if i == id))
         else {
             continue;
         };
@@ -66,7 +66,7 @@ fn check_model(rig: &Rig, end: u64) -> Vec<Conn> {
         let down = client
             .events
             .iter()
-            .find(|(_, e)| matches!(e, LinkEvent::TornDown(i, _) if i == id))
+            .find(|(_, e)| matches!(e, LinkEvent::TornDown(i, _, _) if i == id))
             .map(|(t, _)| *t);
         let (stop, inclusive) = down.map_or((end, true), |t| (t, false));
         let n = ticks(up.0, stop, period, inclusive);
@@ -225,7 +225,7 @@ fn add_sender(
     sim.client(bob)
         .material
         .queues
-        .insert(b_recv.0, (recv_seed, send_seed));
+        .insert(b_recv.0, (recv_seed, Some(send_seed)));
     let (state_a, state_b) = sim.ratchet_states(alice, bob);
     let key_a = sim.peer_key(alice);
     let key_b = sim.peer_key(bob);
@@ -237,6 +237,7 @@ fn add_sender(
         key_b,
         START_UNIX,
     );
+    conv_a.raw_app_payloads_kat();
     let mut conv_b: TestConv = Conversation::new(
         state_b,
         MemOutbox::new(),
@@ -245,6 +246,7 @@ fn add_sender(
         key_a,
         START_UNIX,
     );
+    conv_b.raw_app_payloads_kat();
     conv_a.bind(a_send, QueueId(u32::MAX));
     conv_b.bind(QueueId(u32::MAX - 1), b_recv);
     let conv = sim.client(alice).convs.add(conv_a);

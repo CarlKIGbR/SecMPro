@@ -15,6 +15,7 @@ mod clock;
 mod convo;
 mod direct;
 mod driver;
+pub mod e2e;
 mod entropy;
 mod mem;
 mod stream;
@@ -27,7 +28,7 @@ pub use convo::{Polled, Side, ratchet_pair, text_content, text_of};
 pub use direct::DirectRelay;
 pub use driver::{
     Audit, CONTROL_SLOT_BASE, Conv, Convs, Costs, Dir, Gate, GateState, Inspect, LinkMaterial,
-    Material, Options, SimClient, Trace, TraceEntry, VirtualDriver,
+    Material, Options, SimClient, Source, StoreHub, Trace, TraceEntry, VirtualDriver,
 };
 pub use entropy::EntropyPool;
 pub use mem::{Chunking, MemProvider, MemRelay, StoreChange, Unit};

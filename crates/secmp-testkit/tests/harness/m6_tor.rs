@@ -90,6 +90,8 @@ const READY: Status = Status {
 /// A relay with a direct endpoint (or without).
 fn relay(direct: bool) -> RelayRef {
     let mut r = MemRelay::new(HarnessConfig::default()).relay_ref();
+    // C-T1 (OPEN-M7-22 A): MemRelay's test onion (32 × 0x42) is not an Ed25519 point and is refused before any connect
+    r.onion = secmp_proto::wire::inv::Onion::from_pubkey(&[0x33; 32]);
     if direct {
         r.direct = Some(Direct {
             host: Host::from_bytes(b"relay.example").unwrap(),

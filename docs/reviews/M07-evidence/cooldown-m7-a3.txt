@@ -1,0 +1,23 @@
+# cargo xtask step cooldown, 2026-10-28 (head ba1dce6 + §0.1 doc edits)
+   Compiling xtask v0.0.0 (/work/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running `target/debug/xtask step cooldown`
+
+=== [3] cooldown ===
+cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2))
+### gate `cooldown`
+
+| item | verdict |
+|---|---|
+| status | PASS (25 s) |
+| line 1 | 567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2) |
+| line 2 | youngest: rustls-webpki 0.103.16, 8 days |
+| line 3 | cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2)) |
+
+
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: false) ===
+   3 cooldown        PASS         25s  567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: rustls-webpki 0.103.16, 8 days; cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-0385 (ADR-015 Am. 2))
+step: PASS
+
+youngest new entry argon2 0.6.0 published 2026-08-27, 62 days

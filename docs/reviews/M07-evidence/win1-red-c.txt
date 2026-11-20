@@ -1,0 +1,53 @@
+head d5dfdc71c46e2fbbc207d580e6aa94870376116b
+diff --git a/crates/secmp-sys-mem/src/secret_page/grow.rs b/crates/secmp-sys-mem/src/secret_page/grow.rs
+index 8605acd..3653653 100644
+--- a/crates/secmp-sys-mem/src/secret_page/grow.rs
++++ b/crates/secmp-sys-mem/src/secret_page/grow.rs
+@@ -86,7 +86,7 @@ pub(super) fn lock_with_growth(
+     let mut step = growth.first_step;
+     for _ in 0..growth.max_steps {
+         let (min, max) = sizes()?;
+-        let target = min.checked_add(step).ok_or(Error::new())?.min(growth.cap);
++        let target = min.checked_add(step).ok_or(Error::new())?;
+         let added = target
+             .checked_sub(min)
+             .filter(|a| *a > 0)
+   Compiling secmp-sys-mem v0.0.0 (/work/SecMPro/crates/secmp-sys-mem)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+────────────
+ Nextest run ID e1623c08-709d-4e7a-af9f-5e0085cf4e86 with nextest profile: default
+    Starting 10 tests across 1 binary (9 tests skipped)
+        PASS [   0.005s] ( 1/10) secmp-sys-mem secret_page::grow::tests::grows_again_when_the_grown_quota_is_taken
+        PASS [   0.006s] ( 2/10) secmp-sys-mem secret_page::grow::tests::re_reads_the_sizes_when_a_step_was_undone
+        PASS [   0.006s] ( 3/10) secmp-sys-mem secret_page::grow::tests::fails_closed_when_the_sizes_cannot_be_read
+        PASS [   0.006s] ( 4/10) secmp-sys-mem secret_page::grow::tests::stops_after_the_last_step
+        PASS [   0.006s] ( 5/10) secmp-sys-mem secret_page::grow::tests::first_lock_success_touches_no_sizes
+        PASS [   0.006s] ( 6/10) secmp-sys-mem secret_page::grow::tests::other_lock_errors_fail_without_growth
+        PASS [   0.006s] ( 7/10) secmp-sys-mem secret_page::grow::tests::working_set_bounds_cover_the_measured_demand
+        PASS [   0.006s] ( 8/10) secmp-sys-mem secret_page::grow::tests::steps_double_and_overflow_fails
+        PASS [   0.006s] ( 9/10) secmp-sys-mem secret_page::grow::tests::fails_closed_when_the_quota_cannot_be_set
+        FAIL [   0.006s] (10/10) secmp-sys-mem secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it
+  stdout ───
+
+    running 1 test
+    test secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it ... FAILED
+
+    failures:
+
+    failures:
+        secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it' (4039068) panicked at crates/secmp-sys-mem/src/secret_page/grow.rs:226:9:
+    assertion `left == right` failed
+      left: Ok(())
+     right: Err(Error(()))
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.007s] 10 tests run: 9 passed, 1 failed, 9 skipped
+        FAIL [   0.006s] (10/10) secmp-sys-mem secret_page::grow::tests::fails_at_the_cap_and_never_locks_beyond_it
+error: test run failed

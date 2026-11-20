@@ -1,0 +1,35 @@
+# B-3b §1 (Q189): `cargo xtask vectors` before any edit (@05f58e1) and after the refactor commit (@373869b). modell=claude-opus-5-5
+# raw outputs: target/fable/b3b-vectors-before.txt, target/fable/b3b-vectors-after.txt (both exit 0)
+
+## before (@05f58e1) — summary line
+vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)
+
+## after (@373869b) — summary line
+vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)
+
+## python3 -I target/fable/vdiff.py target/fable/b3b-vectors-before.txt target/fable/b3b-vectors-after.txt
+## (unified diff of the two outputs with the build-time, `Compiling`, nextest run-id and per-test timing lines filtered)
+content diff (build/timing/run-id lines filtered): EMPTY
+exit=0
+
+## after (@373869b), full output
+$ cargo run --release --locked --quiet --package secmp-crypto --features kat --example gen-vectors -- vectors/rust
+$ cargo run --release --locked --quiet --package secmp-proto --example gen-encodings -- vectors/rust
+$ cargo run --release --locked --quiet --package secmp-proto --features kat --example gen-tr -- vectors/rust
+$ cargo run --release --locked --quiet --package secmp-proto --features kat --example gen-hx -- vectors/rust
+$ cargo run --release --locked --quiet --package secmp-relay --features kat --example gen-link -- vectors/rust
+$ cargo nextest run --locked --package secmp-proto --test encodings_ref
+     Summary [   0.051s] 3 tests run: 3 passed, 0 skipped
+  caead: agrees with ref; frozen file unchanged
+  encodings: agrees with ref; frozen file unchanged
+  fingerprint: agrees with ref; frozen file unchanged
+  hkdf-labels: agrees with ref; frozen file unchanged
+  hx: agrees with ref; frozen file unchanged
+  hybridkem-1024: agrees with ref; frozen file unchanged
+  hybridkem-768: agrees with ref; frozen file unchanged
+  hybridsign: agrees with ref; frozen file unchanged
+  link: agrees with ref; frozen file unchanged
+  msgencrypt: agrees with ref; frozen file unchanged
+  sas: agrees with ref; frozen file unchanged
+  tr: agrees with ref; frozen file unchanged
+vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)

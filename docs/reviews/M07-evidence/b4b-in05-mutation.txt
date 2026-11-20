@@ -1,0 +1,33 @@
+Q203 mutation proof (WEISUNG M7-B-4b step 5), head 51f4b9bff6a7ae343552cf9f4335416d1055db05, clean tree, no background gate running.
+The mutation (Astra's, EXTB1-5): in commit_accept (crates/secmp-client-core/src/invitations.rs) the line
+  let routes = encode_routes(&accepted.routes)?;
+replaced by a copy whose last byte is flipped:
+diff --git a/crates/secmp-client-core/src/invitations.rs b/crates/secmp-client-core/src/invitations.rs
+index b38a5da..f6f5ffd 100644
+--- a/crates/secmp-client-core/src/invitations.rs
++++ b/crates/secmp-client-core/src/invitations.rs
+@@ -1317,7 +1317,13 @@ fn commit_accept(
+ ) -> Result<(ContactId, Vec<Event>), Error> {
+     let record = &stored.record;
+     let planned = contacts::plan(store, &accepted.peer)?;
+-    let routes = encode_routes(&accepted.routes)?;
++    let routes = {
++        let mut r = encode_routes(&accepted.routes)?;
++        if let Some(b) = r.last_mut() {
++            *b ^= 1;
++        }
++        r
++    };
+     let queues = encode_queues(stored, now_ms)?;
+     let session = planned.id.0;
+     let new = NewContact {
+
+Both tests run against the mutated tree:
+killers_rounds_and_contact: RED
+    thread 'invitations::tests::killers_rounds_and_contact' (630017) panicked at crates/secmp-client-core/src/invitations_tests.rs:1109:5:
+    assertion `left == right` failed: the stored route is the peer's, byte for byte
+commit_with_accepted_before_any_ack: RED
+    thread 'm7_accept::commit_with_accepted_before_any_ack' (631488) panicked at crates/secmp-testkit/tests/harness/m7_accept.rs:286:5:
+    assertion `left == right` failed: the stored route is the guest's, byte for byte
+
+Reverted. `git diff --stat` after the revert: (empty)

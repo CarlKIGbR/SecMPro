@@ -1,0 +1,118 @@
+# CI1 timing.rs mutants (WEISUNG M7-CI1/CI1b; modell=claude-sonnet-5-5)
+# Deviation from the weisung's command: `--features harness --package secmp-client-core` alone fails (the package has no feature `harness`; attempt 1 below);
+# `--package secmp-transport` was added (as gates::mutants_harness_args) and `--file timing.rs` replaced by `--re secmp-client-core/src/timing\.rs`
+# (with --file, attempt 2 failed the same way). The run covers 40 mutants (timing.rs + 7 others of the same packages that --re let through).
+
+## attempt 1 (build failed in the unmutated tree, no mutants tested)
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/m7-ci1-mutants-timing-red --features harness --caught --unviable --package secmp-client-core --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt --file crates/secmp-client-core/src/timing.rs --test-tool nextest --timeout 120 -- --max-fail=1:immediate --profile mutants-harness --test-threads 4 -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step --skip activity_independence_balanced_virtual --skip activity_independence_strict_virtual --skip activity_independence_lowbw_virtual --skip bandwidth_model_matches_capture --skip pool_queue_never_idles_out --skip activity_independence_both_directions --skip activity_independence_when_receiving --skip drain_after_offline_virtual --skip ai_asymmetric_prepare_cost_does_not_move_emission --skip prop_schedule_independent_of_activity --skip ai01_strict_tokio --skip ai02_balanced_tokio --skip ai03_lowbw_tokio --skip ai04_when_receiving_tokio --skip ai05_timing_draws_tokio --skip ai06_both_directions_tokio --skip two_clients_loopback_tcp --skip two_clients_direct_tls_loopback --skip sim_replay_deterministic --skip sim_latency_does_not_move_emission --skip sim_slow_link_in_flight_teardown --skip sim_partition_heals --skip sim_both_clients_restart --skip sim_crash_between_persist_and_write --skip sim_hello_flood_backoff_recovery --skip sim_relay_restart_recovery --skip sim_balanced_relay_restart --skip two_clients_exchange_script_mem --skip active_hour_enqueues_ten_bursts_of_twenty --skip cpu_per_slot_measured --skip two_clients_profiles_are_in_memory --skip timing_draws_independent_of_activity --skip relay_idle_and_age_bounds_from_schedule --skip crash_between_persist_and_send_no_key_reuse --skip write_amplification_measured --skip lifetime_end_reconnects_fresh --skip link_lifetime_uniform_6h_24h
+Found 33 mutants to test
+FAILED   Unmutated baseline in 0s build
+
+*** baseline
+
+*** /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --no-run --verbose --package=secmp-client-core@0.0.0 --features=harness
+error: the package 'secmp-client-core' does not contain this feature: harness
+help: packages with the missing feature: secmp-testkit, secmp-transport
+error: command `/work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo '--color=auto' test --no-run --message-format json-render-diagnostics --package secmp-client-core@0.0.0 --features harness` exited with code 101
+
+*** result: Failure(101)
+
+ERROR cargo build failed in an unmutated tree, so no mutants were tested
+
+exit status: 4
+
+## RED: m0_early.rs restored to 7d80d6a (git checkout 7d80d6a -- ...), --timeout 120: 6 timeouts, the six of PR-run 41193864080
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/m7-ci1-mutants-timing-red --features harness --caught --unviable --package secmp-client-core --package secmp-transport --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt --re secmp-client-core/src/timing\.rs --test-tool nextest --timeout 120 -- --max-fail=1:immediate --profile mutants-harness --test-threads 4 -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step --skip activity_independence_balanced_virtual --skip activity_independence_strict_virtual --skip activity_independence_lowbw_virtual --skip bandwidth_model_matches_capture --skip pool_queue_never_idles_out --skip activity_independence_both_directions --skip activity_independence_when_receiving --skip drain_after_offline_virtual --skip ai_asymmetric_prepare_cost_does_not_move_emission --skip prop_schedule_independent_of_activity --skip ai01_strict_tokio --skip ai02_balanced_tokio --skip ai03_lowbw_tokio --skip ai04_when_receiving_tokio --skip ai05_timing_draws_tokio --skip ai06_both_directions_tokio --skip two_clients_loopback_tcp --skip two_clients_direct_tls_loopback --skip sim_replay_deterministic --skip sim_latency_does_not_move_emission --skip sim_slow_link_in_flight_teardown --skip sim_partition_heals --skip sim_both_clients_restart --skip sim_crash_between_persist_and_write --skip sim_hello_flood_backoff_recovery --skip sim_relay_restart_recovery --skip sim_balanced_relay_restart --skip two_clients_exchange_script_mem --skip active_hour_enqueues_ten_bursts_of_twenty --skip cpu_per_slot_measured --skip two_clients_profiles_are_in_memory --skip timing_draws_independent_of_activity --skip relay_idle_and_age_bounds_from_schedule --skip crash_between_persist_and_send_no_key_reuse --skip write_amplification_measured --skip lifetime_end_reconnects_fresh --skip link_lifetime_uniform_6h_24h
+Found 40 mutants to test
+ok       Unmutated baseline in 104s build + 12s test
+caught   crates/secmp-client-core/src/invitations.rs:833:9: delete field sig from struct PrekeyBundle expression in signed_bundle in 44s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:974:21: delete field ack_through from struct Round expression in Invitations::process_round in 6s build + 4s test
+caught   crates/secmp-client-core/src/invitations.rs:982:21: delete field events from struct Round expression in Invitations::process_round in 4s build + 4s test
+caught   crates/secmp-client-core/src/invitations.rs:983:21: delete field ops from struct Round expression in Invitations::process_round in 4s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:1053:21: delete field ack_through from struct Round expression in Invitations::decide in 4s build + 6s test
+caught   crates/secmp-client-core/src/timing.rs:18:9: replace <impl core::fmt::Display for Unavailable>::fmt -> core::fmt::Result with Ok(Default::default()) in 4s build + 38s test
+TIMEOUT  crates/secmp-client-core/src/timing.rs:40:5: replace accept_ceiling -> Option<u64> with None in 6s build + 120s test
+TIMEOUT  crates/secmp-client-core/src/timing.rs:47:5: replace sample_with -> Option<u64> with None in 9s build + 120s test
+caught   crates/secmp-client-core/src/timing.rs:47:5: replace sample_with -> Option<u64> with Some(0) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:47:5: replace sample_with -> Option<u64> with Some(1) in 4s build + 0s test
+TIMEOUT  crates/secmp-client-core/src/timing.rs:40:5: replace accept_ceiling -> Option<u64> with Some(0) in 188s build + 120s test
+TIMEOUT  crates/secmp-client-core/src/timing.rs:40:5: replace accept_ceiling -> Option<u64> with Some(1) in 192s build + 120s test
+caught   crates/secmp-client-core/src/timing.rs:56:5: replace sample_round -> Option<u64> with Some(0) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:56:5: replace sample_round -> Option<u64> with Some(1) in 4s build + 0s test
+unviable crates/secmp-client-core/src/timing.rs:63:9: replace TimingRng::os -> Self with Default::default() in 1s build
+unviable crates/secmp-client-core/src/timing.rs:73:9: replace TimingRng::seeded -> Self with Default::default() in 0s build
+unviable crates/secmp-client-core/src/timing.rs:85:9: replace TimingRng::fork -> Result<Self, Unavailable> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/timing.rs:92:52: replace ^ with | in TimingRng::fork in 4s build + 13s test
+TIMEOUT  crates/secmp-client-core/src/timing.rs:47:10: replace >= with < in sample_with in 4s build + 120s test
+caught   crates/secmp-client-core/src/timing.rs:92:52: replace ^ with & in TimingRng::fork in 4s build + 14s test
+caught   crates/secmp-client-core/src/timing.rs:99:9: replace TimingRng::draws -> u64 with 0 in 4s build + 7s test
+caught   crates/secmp-client-core/src/timing.rs:99:9: replace TimingRng::draws -> u64 with 1 in 4s build + 4s test
+caught   crates/secmp-client-core/src/timing.rs:103:9: replace TimingRng::next_u64 -> Result<u64, Unavailable> with Ok(0) in 7s build + 7s test
+caught   crates/secmp-client-core/src/timing.rs:103:9: replace TimingRng::next_u64 -> Result<u64, Unavailable> with Ok(1) in 7s build + 8s test
+caught   crates/secmp-client-core/src/timing.rs:112:24: replace ^ with | in TimingRng::next_u64 in 7s build + 14s test
+caught   crates/secmp-client-core/src/timing.rs:112:24: replace ^ with & in TimingRng::next_u64 in 7s build + 14s test
+caught   crates/secmp-client-core/src/timing.rs:112:29: replace >> with << in TimingRng::next_u64 in 4s build + 14s test
+TIMEOUT  crates/secmp-client-core/src/timing.rs:56:5: replace sample_round -> Option<u64> with None in 4s build + 120s test
+caught   crates/secmp-client-core/src/timing.rs:113:24: replace ^ with | in TimingRng::next_u64 in 4s build + 26s test
+caught   crates/secmp-client-core/src/timing.rs:113:29: replace >> with << in TimingRng::next_u64 in 4s build + 8s test
+caught   crates/secmp-client-core/src/timing.rs:113:24: replace ^ with & in TimingRng::next_u64 in 4s build + 21s test
+caught   crates/secmp-client-core/src/timing.rs:114:22: replace ^ with | in TimingRng::next_u64 in 4s build + 15s test
+caught   crates/secmp-client-core/src/timing.rs:124:9: replace TimingRng::uniform -> Result<u64, Unavailable> with Ok(0) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:114:22: replace ^ with & in TimingRng::next_u64 in 4s build + 15s test
+caught   crates/secmp-client-core/src/timing.rs:114:27: replace >> with << in TimingRng::next_u64 in 4s build + 15s test
+caught   crates/secmp-client-core/src/timing.rs:124:9: replace TimingRng::uniform -> Result<u64, Unavailable> with Ok(1) in 5s build + 0s test
+unviable crates/secmp-transport/src/tls.rs:72:9: delete field cipher_suites from struct CryptoProvider expression in crypto_provider in 1s build
+caught   crates/secmp-client-core/src/timing.rs:124:30: replace <= with > in TimingRng::uniform in 5s build + 1s test
+caught   crates/secmp-client-core/src/timing.rs:128:17: replace == with != in TimingRng::uniform in 5s build + 1s test
+caught   crates/secmp-transport/src/tls.rs:73:9: delete field kx_groups from struct CryptoProvider expression in crypto_provider in 5s build + 48s test
+40 mutants tested in 15m: 30 caught, 4 unviable, 6 timeouts
+
+exit status: 3
+
+## GREEN: HEAD aa89fd5 (three new tests), --timeout 900: 0 timeouts, 0 missed
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/m7-ci1-mutants-timing-green --features harness --caught --unviable --package secmp-client-core --package secmp-transport --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt --re secmp-client-core/src/timing\.rs --test-tool nextest --timeout 900 -- --max-fail=1:immediate --profile mutants-harness --test-threads 4 -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step --skip activity_independence_balanced_virtual --skip activity_independence_strict_virtual --skip activity_independence_lowbw_virtual --skip bandwidth_model_matches_capture --skip pool_queue_never_idles_out --skip activity_independence_both_directions --skip activity_independence_when_receiving --skip drain_after_offline_virtual --skip ai_asymmetric_prepare_cost_does_not_move_emission --skip prop_schedule_independent_of_activity --skip ai01_strict_tokio --skip ai02_balanced_tokio --skip ai03_lowbw_tokio --skip ai04_when_receiving_tokio --skip ai05_timing_draws_tokio --skip ai06_both_directions_tokio --skip two_clients_loopback_tcp --skip two_clients_direct_tls_loopback --skip sim_replay_deterministic --skip sim_latency_does_not_move_emission --skip sim_slow_link_in_flight_teardown --skip sim_partition_heals --skip sim_both_clients_restart --skip sim_crash_between_persist_and_write --skip sim_hello_flood_backoff_recovery --skip sim_relay_restart_recovery --skip sim_balanced_relay_restart --skip two_clients_exchange_script_mem --skip active_hour_enqueues_ten_bursts_of_twenty --skip cpu_per_slot_measured --skip two_clients_profiles_are_in_memory --skip timing_draws_independent_of_activity --skip relay_idle_and_age_bounds_from_schedule --skip crash_between_persist_and_send_no_key_reuse --skip write_amplification_measured --skip lifetime_end_reconnects_fresh --skip link_lifetime_uniform_6h_24h
+Found 40 mutants to test
+ok       Unmutated baseline in 104s build + 16s test
+caught   crates/secmp-client-core/src/invitations.rs:833:9: delete field sig from struct PrekeyBundle expression in signed_bundle in 45s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:974:21: delete field ack_through from struct Round expression in Invitations::process_round in 8s build + 3s test
+caught   crates/secmp-client-core/src/invitations.rs:982:21: delete field events from struct Round expression in Invitations::process_round in 4s build + 4s test
+caught   crates/secmp-client-core/src/invitations.rs:983:21: delete field ops from struct Round expression in Invitations::process_round in 4s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:1053:21: delete field ack_through from struct Round expression in Invitations::decide in 4s build + 5s test
+caught   crates/secmp-client-core/src/timing.rs:18:9: replace <impl core::fmt::Display for Unavailable>::fmt -> core::fmt::Result with Ok(Default::default()) in 4s build + 34s test
+caught   crates/secmp-client-core/src/timing.rs:40:5: replace accept_ceiling -> Option<u64> with None in 5s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:40:5: replace accept_ceiling -> Option<u64> with Some(0) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:40:5: replace accept_ceiling -> Option<u64> with Some(1) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:47:5: replace sample_with -> Option<u64> with None in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:47:5: replace sample_with -> Option<u64> with Some(0) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:47:5: replace sample_with -> Option<u64> with Some(1) in 5s build + 1s test
+caught   crates/secmp-client-core/src/timing.rs:56:5: replace sample_round -> Option<u64> with Some(0) in 12s build + 1s test
+caught   crates/secmp-client-core/src/timing.rs:56:5: replace sample_round -> Option<u64> with Some(1) in 9s build + 1s test
+unviable crates/secmp-client-core/src/timing.rs:63:9: replace TimingRng::os -> Self with Default::default() in 1s build
+unviable crates/secmp-client-core/src/timing.rs:73:9: replace TimingRng::seeded -> Self with Default::default() in 1s build
+unviable crates/secmp-client-core/src/timing.rs:85:9: replace TimingRng::fork -> Result<Self, Unavailable> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/timing.rs:92:52: replace ^ with | in TimingRng::fork in 24s build + 26s test
+caught   crates/secmp-client-core/src/timing.rs:92:52: replace ^ with & in TimingRng::fork in 9s build + 21s test
+caught   crates/secmp-client-core/src/timing.rs:99:9: replace TimingRng::draws -> u64 with 0 in 6s build + 9s test
+caught   crates/secmp-client-core/src/timing.rs:99:9: replace TimingRng::draws -> u64 with 1 in 6s build + 4s test
+caught   crates/secmp-client-core/src/timing.rs:103:9: replace TimingRng::next_u64 -> Result<u64, Unavailable> with Ok(0) in 7s build + 8s test
+caught   crates/secmp-client-core/src/timing.rs:103:9: replace TimingRng::next_u64 -> Result<u64, Unavailable> with Ok(1) in 4s build + 10s test
+caught   crates/secmp-client-core/src/timing.rs:47:10: replace >= with < in sample_with in 189s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:56:5: replace sample_round -> Option<u64> with None in 193s build + 1s test
+caught   crates/secmp-client-core/src/timing.rs:112:24: replace ^ with | in TimingRng::next_u64 in 11s build + 17s test
+caught   crates/secmp-client-core/src/timing.rs:112:24: replace ^ with & in TimingRng::next_u64 in 5s build + 17s test
+caught   crates/secmp-client-core/src/timing.rs:112:29: replace >> with << in TimingRng::next_u64 in 5s build + 17s test
+caught   crates/secmp-client-core/src/timing.rs:113:29: replace >> with << in TimingRng::next_u64 in 4s build + 8s test
+caught   crates/secmp-client-core/src/timing.rs:113:24: replace ^ with | in TimingRng::next_u64 in 4s build + 31s test
+caught   crates/secmp-client-core/src/timing.rs:113:24: replace ^ with & in TimingRng::next_u64 in 5s build + 24s test
+caught   crates/secmp-client-core/src/timing.rs:114:22: replace ^ with | in TimingRng::next_u64 in 4s build + 17s test
+caught   crates/secmp-client-core/src/timing.rs:124:9: replace TimingRng::uniform -> Result<u64, Unavailable> with Ok(0) in 4s build + 0s test
+caught   crates/secmp-client-core/src/timing.rs:114:22: replace ^ with & in TimingRng::next_u64 in 4s build + 17s test
+caught   crates/secmp-client-core/src/timing.rs:124:9: replace TimingRng::uniform -> Result<u64, Unavailable> with Ok(1) in 4s build + 1s test
+caught   crates/secmp-client-core/src/timing.rs:114:27: replace >> with << in TimingRng::next_u64 in 4s build + 19s test
+caught   crates/secmp-client-core/src/timing.rs:124:30: replace <= with > in TimingRng::uniform in 5s build + 2s test
+unviable crates/secmp-transport/src/tls.rs:72:9: delete field cipher_suites from struct CryptoProvider expression in crypto_provider in 0s build
+caught   crates/secmp-client-core/src/timing.rs:128:17: replace == with != in TimingRng::uniform in 5s build + 0s test
+caught   crates/secmp-transport/src/tls.rs:73:9: delete field kx_groups from struct CryptoProvider expression in crypto_provider in 5s build + 50s test
+40 mutants tested in 11m: 36 caught, 4 unviable
+
+exit status: 0

@@ -67,6 +67,11 @@ tokio-rustls = { version = "=0.26.5", default-features = false }
 tokio = { version = "=1.53.3", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "sync", "io-util"] }
 turmoil = { version = "=0.7.2", default-features = false }
 
+# ADR-055 (OPEN-M7-03 A; effective 2026-10-28): the M7 dependency set. `rusqlite` at exactly the version Arti resolves, with bundled
+# SQLCipher and vendored OpenSSL (`secmp-store` only, never for SecMP constructions); `argon2` (RFC 9106) for `secmp-crypto` only.
+rusqlite = { version = "=0.39.0", default-features = false, features = ["bundled-sqlcipher-vendored-openssl"] }
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+
 # ADR-040: seeded generators for the property tests of secmp-proto (dev-dependency only; never key material).
 rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }
 
@@ -76,6 +81,7 @@ secmp-proto = { path = "crates/secmp-proto" }
 secmp-relay = { path = "crates/secmp-relay" }
 secmp-transport = { path = "crates/secmp-transport" }
 secmp-client-core = { path = "crates/secmp-client-core" }
+secmp-store = { path = "crates/secmp-store" }
 secmp-sys-mem = { path = "crates/secmp-sys-mem" }
 secmp-testkit = { path = "crates/secmp-testkit" }
 

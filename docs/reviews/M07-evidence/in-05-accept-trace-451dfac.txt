@@ -1,0 +1,15 @@
+head 451dfac: harness::m7_accept::commit_with_accepted_before_any_ack
+IN-05 transactional accept: the host fetches the three handshake cells (ids 3, 5, 6 among garbage 1, 2, 4, 7)
+from a recording relay; kat::txn_log() of the round (txn seq, table, verb):
+  txn 1: delete prekeys
+  txn 1: update invitations
+  txn 1: update invitations
+  txn 1: insert contacts
+  txn 1: insert sessions
+  txn 1: insert sessions
+sequence at the relay:
+  Fetch([1, 2, 3, 4, 5, 6, 7])
+  Commits(1)
+  Ack(7)
+store transactions committed by the round: 1; acknowledged only after the commit; QUEUE_DEL not asked for
+

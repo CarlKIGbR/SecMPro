@@ -1,0 +1,1807 @@
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/Cargo.toml b/work/home/.cache/cargo-vet/src/rustix-1.1.6/Cargo.toml
+index 0d16494..65e6f0d 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/Cargo.toml
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/Cargo.toml
+@@ -13,7 +13,7 @@
+ edition = "2021"
+ rust-version = "1.65"
+ name = "rustix"
+-version = "1.1.5"
++version = "1.1.6"
+ authors = [
+     "Dan Gohman <dev@sunfishcode.online>",
+     "Jakub Konka <kubkon@jakubkonka.com>",
+@@ -124,7 +124,6 @@ rustc-dep-of-std = [
+     "core",
+     "rustc-std-workspace-alloc",
+     "linux-raw-sys/rustc-dep-of-std",
+-    "bitflags/rustc-dep-of-std",
+ ]
+ shm = ["fs"]
+ std = [
+@@ -156,23 +155,23 @@ path = "benches/mod.rs"
+ harness = false
+ 
+ [dependencies.bitflags]
+-version = "2.4.0"
++version = "2.9.2"
+ default-features = false
+ 
+ [dependencies.core]
+-version = "1.0.0"
++version = "1.0.1"
+ optional = true
+ package = "rustc-std-workspace-core"
+ 
+ [dependencies.rustc-std-workspace-alloc]
+-version = "1.0.0"
++version = "1.0.1"
+ optional = true
+ 
+ [dev-dependencies.flate2]
+ version = "1.0"
+ 
+ [dev-dependencies.libc]
+-version = "0.2.171"
++version = "0.2.182"
+ 
+ [dev-dependencies.libc_errno]
+ version = "0.3.10"
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/Cargo.toml.orig b/work/home/.cache/cargo-vet/src/rustix-1.1.6/Cargo.toml.orig
+index 656b11c..289398f 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/Cargo.toml.orig
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/Cargo.toml.orig
+@@ -1,6 +1,6 @@
+ [package]
+ name = "rustix"
+-version = "1.1.5"
++version = "1.1.6"
+ authors = [
+     "Dan Gohman <dev@sunfishcode.online>",
+     "Jakub Konka <kubkon@jakubkonka.com>",
+@@ -20,11 +20,11 @@ rust-version = "1.65"
+ mostly-unused = true
+ 
+ [dependencies]
+-bitflags = { version = "2.4.0", default-features = false }
++bitflags = { version = "2.9.2", default-features = false }
+ 
+ # Special dependencies used in rustc-dep-of-std mode.
+-core = { version = "1.0.0", optional = true, package = "rustc-std-workspace-core" }
+-rustc-std-workspace-alloc = { version = "1.0.0", optional = true } # not aliased here but in lib.rs because of name collision with the alloc feature
++core = { version = "1.0.1", optional = true, package = "rustc-std-workspace-core" }
++rustc-std-workspace-alloc = { version = "1.0.1", optional = true } # not aliased here but in lib.rs because of name collision with the alloc feature
+ 
+ # Dependencies for platforms where linux_raw is supported, in addition to libc:
+ #
+@@ -69,7 +69,7 @@ default-features = false
+ 
+ [dev-dependencies]
+ tempfile = "3.5.0"
+-libc = "0.2.171"
++libc = "0.2.182"
+ libc_errno = { package = "errno", version = "0.3.10", default-features = false }
+ serial_test = "2.0.0"
+ memoffset = "0.9.0"
+@@ -233,7 +233,6 @@ rustc-dep-of-std = [
+     "core",
+     "rustc-std-workspace-alloc",
+     "linux-raw-sys/rustc-dep-of-std",
+-    "bitflags/rustc-dep-of-std",
+ ]
+ 
+ # Enable `rustix::io::try_close`. The rustix developers do not intend the
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/dir.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/dir.rs
+index 6574287..19a9090 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/dir.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/dir.rs
+@@ -30,6 +30,8 @@ use crate::io;
+ #[cfg(not(any(target_os = "fuchsia", target_os = "vita", target_os = "wasi")))]
+ #[cfg(feature = "process")]
+ use crate::process::fchdir;
++#[cfg(target_os = "openbsd")]
++use crate::types::Padding;
+ use alloc::borrow::ToOwned as _;
+ #[cfg(not(any(linux_like, target_os = "hurd")))]
+ use c::readdir as libc_readdir;
+@@ -408,7 +410,7 @@ struct libc_dirent {
+     d_reclen: u16,
+     d_type: u8,
+     d_namlen: u8,
+-    __d_padding: [u8; 4],
++    __d_padding: Padding<[u8; 4]>,
+     d_name: [c::c_char; 256],
+ }
+ 
+@@ -434,7 +436,7 @@ fn check_dirent_layout(dirent: &c::dirent) {
+                 d_reclen: 0_u16,
+                 d_type: 0_u8,
+                 d_namlen: 0_u8,
+-                __d_padding: [0_u8; 4],
++                __d_padding: Default::default(),
+                 d_name: [0 as c::c_char; 256],
+             };
+             let base = as_ptr(&z) as usize;
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/inotify.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/inotify.rs
+index 89745fb..e1f2a96 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/inotify.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/inotify.rs
+@@ -62,11 +62,11 @@ bitflags! {
+         /// `IN_DONT_FOLLOW`
+         const DONT_FOLLOW = c::IN_DONT_FOLLOW;
+         /// `IN_EXCL_UNLINK`
+-        const EXCL_UNLINK = 1;
++        const EXCL_UNLINK = c::IN_EXCL_UNLINK;
+         /// `IN_MASK_ADD`
+-        const MASK_ADD = 1;
++        const MASK_ADD = c::IN_MASK_ADD;
+         /// `IN_MASK_CREATE`
+-        const MASK_CREATE = 1;
++        const MASK_CREATE = c::IN_MASK_CREATE;
+         /// `IN_ONESHOT`
+         const ONESHOT = c::IN_ONESHOT;
+         /// `IN_ONLYDIR`
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/syscalls.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/syscalls.rs
+index c95eaf5..d1f1d34 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/syscalls.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/syscalls.rs
+@@ -1478,12 +1478,17 @@ pub(crate) fn fchown(fd: BorrowedFd<'_>, owner: Option<Uid>, group: Option<Gid>)
+     // implementations, such as musl, add extra logic to `fchown` to emulate
+     // support for `O_PATH`, which uses `/proc` outside our control and
+     // interferes with our own use of `O_PATH`.
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    const SYS: c::c_long = c::SYS_fchown32 as c::c_long;
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    const SYS: c::c_long = c::SYS_fchown as c::c_long;
++
+     syscall! {
+         fn fchown(
+             fd: c::c_int,
+             owner: c::uid_t,
+             group: c::gid_t
+-        ) via SYS_fchown -> c::c_int
++        ) via SYS -> c::c_int
+     }
+     unsafe {
+         let (ow, gr) = crate::ugid::translate_fchown_args(owner, group);
+@@ -1807,20 +1812,22 @@ pub(crate) fn fallocate(
+     assert!(mode.is_empty());
+ 
+     let new_len = offset.checked_add(len).ok_or(io::Errno::FBIG)?;
+-    let mut store = c::fstore_t {
+-        fst_flags: c::F_ALLOCATECONTIG,
++    let store = c::fstore_t {
++        // Allocate the full length or fail; don't accept partial success.
++        fst_flags: c::F_ALLOCATEALL,
+         fst_posmode: c::F_PEOFPOSMODE,
+         fst_offset: 0,
+         fst_length: new_len,
+         fst_bytesalloc: 0,
+     };
+     unsafe {
+-        if c::fcntl(borrowed_fd(fd), c::F_PREALLOCATE, &store) == -1 {
+-            // Unable to allocate contiguous disk space; attempt to allocate
+-            // non-contiguously.
+-            store.fst_flags = c::F_ALLOCATEALL;
+-            let _ = ret_c_int(c::fcntl(borrowed_fd(fd), c::F_PREALLOCATE, &store))?;
+-        }
++        ret(c::fcntl(borrowed_fd(fd), c::F_PREALLOCATE, &store))?;
++
++        // Apple platforms have no way to perform the `posix_fallocate`
++        // behavior of increasing the file size if `new_len` is greater
++        // than the file's original size, but not decreasing if it's
++        // less, so we just use `ftruncate`, which does decrease the
++        // size, and document it.
+         ret(c::ftruncate(borrowed_fd(fd), new_len))
+     }
+ }
+@@ -1908,7 +1915,7 @@ const SYS_OPENAT2: i32 = 437;
+ #[cfg(all(linux_kernel, target_pointer_width = "64"))]
+ const SYS_OPENAT2: i64 = 437;
+ 
+-#[cfg(target_os = "linux")]
++#[cfg(linux_kernel)]
+ pub(crate) fn sendfile(
+     out_fd: BorrowedFd<'_>,
+     in_fd: BorrowedFd<'_>,
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/types.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/types.rs
+index 6a4ed6d..31bdaea 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/fs/types.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/fs/types.rs
+@@ -1,6 +1,8 @@
+ use crate::backend::c;
+ #[cfg(not(target_os = "horizon"))]
+ use crate::ffi;
++#[cfg(target_os = "netbsd")]
++use crate::types::Padding;
+ use bitflags::bitflags;
+ 
+ #[cfg(not(any(target_os = "espidf", target_os = "horizon", target_os = "vita")))]
+@@ -1056,7 +1058,7 @@ pub struct Stat {
+     pub st_blksize: c::blksize_t,
+     pub st_flags: u32,
+     pub st_gen: u32,
+-    pub st_spare: [u32; 2],
++    pub(crate) st_spare: Padding<[u32; 2]>,
+ }
+ 
+ /// `struct statfs` for use with [`statfs`] and [`fstatfs`].
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/net/sockopt.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/net/sockopt.rs
+index 9710488..286adde 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/net/sockopt.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/net/sockopt.rs
+@@ -618,12 +618,12 @@ pub(crate) fn ipv6_multicast_loop(fd: BorrowedFd<'_>) -> io::Result<bool> {
+ 
+ #[inline]
+ pub(crate) fn set_ipv6_multicast_hops(fd: BorrowedFd<'_>, multicast_hops: u32) -> io::Result<()> {
+-    setsockopt(fd, c::IPPROTO_IP, c::IPV6_MULTICAST_HOPS, multicast_hops)
++    setsockopt(fd, c::IPPROTO_IPV6, c::IPV6_MULTICAST_HOPS, multicast_hops)
+ }
+ 
+ #[inline]
+ pub(crate) fn ipv6_multicast_hops(fd: BorrowedFd<'_>) -> io::Result<u32> {
+-    getsockopt(fd, c::IPPROTO_IP, c::IPV6_MULTICAST_HOPS)
++    getsockopt(fd, c::IPPROTO_IPV6, c::IPV6_MULTICAST_HOPS)
+ }
+ 
+ #[inline]
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/termios/syscalls.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/termios/syscalls.rs
+index dbe4a6e..5278a98 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/termios/syscalls.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/termios/syscalls.rs
+@@ -167,10 +167,9 @@ pub(crate) fn tcgetpgrp(fd: BorrowedFd<'_>) -> io::Result<Pid> {
+     unsafe {
+         let pid = ret_pid_t(c::tcgetpgrp(borrowed_fd(fd)))?;
+ 
+-        // This doesn't appear to be documented, but on Linux, it appears
+-        // `tcsetpgrp` can succeed and set the pid to 0 if we pass it a
+-        // pseudo-terminal device fd. For now, translate it into `OPNOTSUPP`.
+-        #[cfg(linux_kernel)]
++        // On some platforms, a pseudo-terminal without a foreground process
++        // group returns 0, which `Pid` cannot represent. Translate this into
++        // `OPNOTSUPP`, as in the linux_raw backend.
+         if pid == 0 {
+             return Err(io::Errno::OPNOTSUPP);
+         }
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/thread/syscalls.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/thread/syscalls.rs
+index 81f6021..acd0dee 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/libc/thread/syscalls.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/libc/thread/syscalls.rs
+@@ -9,7 +9,7 @@ use crate::io;
+ use crate::pid::Pid;
+ #[cfg(not(any(
+     apple,
+-    freebsdlike,
++    target_os = "dragonfly",
+     target_os = "emscripten",
+     target_os = "espidf",
+     target_os = "haiku",
+@@ -51,7 +51,6 @@ weak!(fn __nanosleep64(*const LibcTimespec, *mut LibcTimespec) -> c::c_int);
+     target_os = "dragonfly",
+     target_os = "emscripten",
+     target_os = "espidf",
+-    target_os = "freebsd", // FreeBSD 12 has clock_nanosleep, but libc targets FreeBSD 11.
+     target_os = "haiku",
+     target_os = "horizon",
+     target_os = "openbsd",
+@@ -162,7 +161,6 @@ fn clock_nanosleep_relative_old(
+     target_os = "dragonfly",
+     target_os = "emscripten",
+     target_os = "espidf",
+-    target_os = "freebsd", // FreeBSD 12 has clock_nanosleep, but libc targets FreeBSD 11.
+     target_os = "haiku",
+     target_os = "horizon",
+     target_os = "openbsd",
+@@ -389,8 +387,13 @@ pub(crate) fn capset(
+ #[cfg(linux_kernel)]
+ #[inline]
+ pub(crate) fn setuid_thread(uid: crate::ugid::Uid) -> io::Result<()> {
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    const SYS: c::c_long = c::SYS_setuid32 as c::c_long;
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    const SYS: c::c_long = c::SYS_setuid as c::c_long;
++
+     syscall! {
+-        fn setuid(uid: c::uid_t) via SYS_setuid -> c::c_int
++        fn setuid(uid: c::uid_t) via SYS -> c::c_int
+     }
+ 
+     unsafe { ret(setuid(uid.as_raw())) }
+@@ -424,8 +427,13 @@ pub(crate) fn setresuid_thread(
+ #[cfg(linux_kernel)]
+ #[inline]
+ pub(crate) fn setgid_thread(gid: crate::ugid::Gid) -> io::Result<()> {
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    const SYS: c::c_long = c::SYS_setgid32 as c::c_long;
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    const SYS: c::c_long = c::SYS_setgid as c::c_long;
++
+     syscall! {
+-        fn setgid(gid: c::gid_t) via SYS_setgid -> c::c_int
++        fn setgid(gid: c::gid_t) via SYS -> c::c_int
+     }
+ 
+     unsafe { ret(setgid(gid.as_raw())) }
+@@ -696,8 +704,13 @@ pub(crate) fn futex_waitv(
+ #[cfg(linux_kernel)]
+ #[inline]
+ pub(crate) fn setgroups_thread(groups: &[crate::ugid::Gid]) -> io::Result<()> {
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    const SYS: c::c_long = c::SYS_setgroups32 as c::c_long;
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    const SYS: c::c_long = c::SYS_setgroups as c::c_long;
++
+     syscall! {
+-        fn setgroups(size: c::size_t, list: *const c::gid_t) via SYS_setgroups -> c::c_int
++        fn setgroups(size: c::size_t, list: *const c::gid_t) via SYS -> c::c_int
+     }
+     ret(unsafe { setgroups(groups.len(), groups.as_ptr().cast()) })
+ }
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/fs/syscalls.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/fs/syscalls.rs
+index 297782d..149ee07 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/fs/syscalls.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/fs/syscalls.rs
+@@ -164,8 +164,25 @@ pub(crate) fn chownat(
+ 
+ #[inline]
+ pub(crate) fn chown(path: &CStr, owner: Option<Uid>, group: Option<Gid>) -> io::Result<()> {
++    #[cfg(any(target_arch = "arm", target_arch = "sparc", target_arch = "x86"))]
++    unsafe {
++        let (ow, gr) = crate::ugid::translate_fchown_args(owner, group);
++        ret(syscall_readonly!(
++            __NR_chown32,
++            path,
++            c_uint(ow),
++            c_uint(gr)
++        ))
++    }
++
+     // Most architectures have a `chown` syscall.
+-    #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
++    #[cfg(not(any(
++        target_arch = "aarch64",
++        target_arch = "arm",
++        target_arch = "riscv64",
++        target_arch = "sparc",
++        target_arch = "x86"
++    )))]
+     unsafe {
+         let (ow, gr) = crate::ugid::translate_fchown_args(owner, group);
+         ret(syscall_readonly!(__NR_chown, path, c_uint(ow), c_uint(gr)))
+@@ -188,6 +205,12 @@ pub(crate) fn chown(path: &CStr, owner: Option<Uid>, group: Option<Gid>) -> io::
+ 
+ #[inline]
+ pub(crate) fn fchown(fd: BorrowedFd<'_>, owner: Option<Uid>, group: Option<Gid>) -> io::Result<()> {
++    #[cfg(any(target_arch = "arm", target_arch = "sparc", target_arch = "x86"))]
++    unsafe {
++        let (ow, gr) = crate::ugid::translate_fchown_args(owner, group);
++        ret(syscall_readonly!(__NR_fchown32, fd, c_uint(ow), c_uint(gr)))
++    }
++    #[cfg(not(any(target_arch = "arm", target_arch = "sparc", target_arch = "x86")))]
+     unsafe {
+         let (ow, gr) = crate::ugid::translate_fchown_args(owner, group);
+         ret(syscall_readonly!(__NR_fchown, fd, c_uint(ow), c_uint(gr)))
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/fs/types.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/fs/types.rs
+index 7abd665..c46ed87 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/fs/types.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/fs/types.rs
+@@ -1,4 +1,6 @@
+ use crate::ffi;
++#[allow(unused_imports)]
++use crate::types::Padding;
+ use bitflags::bitflags;
+ 
+ bitflags! {
+@@ -534,35 +536,40 @@ bitflags! {
+ 
+ bitflags! {
+     /// `ST_*` constants for use with [`StatVfs`].
++    ///
++    /// These are the values the kernel reports in `statfs`'s `f_flags`,
++    /// which `statvfs` passes through unconverted. linux-raw-sys does not
++    /// define the `ST_*` names, and they are not all equal to the `MS_*`
++    /// ones: `ST_RELATIME` is `0x1000`, while `MS_RELATIME` is `1 << 21`.
+     #[repr(transparent)]
+     #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+     pub struct StatVfsMountFlags: u64 {
+         /// `ST_MANDLOCK`
+-        const MANDLOCK = linux_raw_sys::general::MS_MANDLOCK as u64;
++        const MANDLOCK = 0x0040;
+ 
+         /// `ST_NOATIME`
+-        const NOATIME = linux_raw_sys::general::MS_NOATIME as u64;
++        const NOATIME = 0x0400;
+ 
+         /// `ST_NODEV`
+-        const NODEV = linux_raw_sys::general::MS_NODEV as u64;
++        const NODEV = 0x0004;
+ 
+         /// `ST_NODIRATIME`
+-        const NODIRATIME = linux_raw_sys::general::MS_NODIRATIME as u64;
++        const NODIRATIME = 0x0800;
+ 
+         /// `ST_NOEXEC`
+-        const NOEXEC = linux_raw_sys::general::MS_NOEXEC as u64;
++        const NOEXEC = 0x0008;
+ 
+         /// `ST_NOSUID`
+-        const NOSUID = linux_raw_sys::general::MS_NOSUID as u64;
++        const NOSUID = 0x0002;
+ 
+         /// `ST_RDONLY`
+-        const RDONLY = linux_raw_sys::general::MS_RDONLY as u64;
++        const RDONLY = 0x0001;
+ 
+         /// `ST_RELATIME`
+-        const RELATIME = linux_raw_sys::general::MS_RELATIME as u64;
++        const RELATIME = 0x1000;
+ 
+         /// `ST_SYNCHRONOUS`
+-        const SYNCHRONOUS = linux_raw_sys::general::MS_SYNCHRONOUS as u64;
++        const SYNCHRONOUS = 0x0010;
+ 
+         /// <https://docs.rs/bitflags/*/bitflags/#externally-defined-flags>
+         const _ = !0;
+@@ -640,7 +647,7 @@ pub struct Stat {
+     pub st_mode: ffi::c_uint,
+     pub st_uid: ffi::c_uint,
+     pub st_gid: ffi::c_uint,
+-    pub(crate) __pad0: ffi::c_uint,
++    pub(crate) __pad0: Padding<ffi::c_uint>,
+     pub st_rdev: ffi::c_ulong,
+     pub st_size: ffi::c_long,
+     pub st_blksize: ffi::c_long,
+@@ -651,7 +658,7 @@ pub struct Stat {
+     pub st_mtime_nsec: ffi::c_ulong,
+     pub st_ctime: ffi::c_long,
+     pub st_ctime_nsec: ffi::c_ulong,
+-    pub(crate) __unused: [ffi::c_long; 3],
++    pub(crate) __unused: Padding<[ffi::c_long; 3]>,
+ }
+ #[repr(C)]
+ #[derive(Debug, Copy, Clone)]
+@@ -666,10 +673,10 @@ pub struct Stat {
+     pub st_uid: ffi::c_uint,
+     pub st_gid: ffi::c_uint,
+     pub st_rdev: ffi::c_ulong,
+-    pub(crate) __pad1: ffi::c_ulong,
++    pub(crate) __pad1: Padding<ffi::c_ulong>,
+     pub st_size: ffi::c_long,
+     pub st_blksize: ffi::c_int,
+-    pub(crate) __pad2: ffi::c_int,
++    pub(crate) __pad2: Padding<ffi::c_int>,
+     pub st_blocks: ffi::c_long,
+     pub st_atime: ffi::c_long,
+     pub st_atime_nsec: ffi::c_ulong,
+@@ -677,8 +684,8 @@ pub struct Stat {
+     pub st_mtime_nsec: ffi::c_ulong,
+     pub st_ctime: ffi::c_long,
+     pub st_ctime_nsec: ffi::c_ulong,
+-    pub(crate) __unused4: ffi::c_uint,
+-    pub(crate) __unused5: ffi::c_uint,
++    pub(crate) __unused4: Padding<ffi::c_uint>,
++    pub(crate) __unused5: Padding<ffi::c_uint>,
+ }
+ #[repr(C)]
+ #[derive(Debug, Copy, Clone)]
+@@ -693,10 +700,10 @@ pub struct Stat {
+     pub st_uid: ffi::c_uint,
+     pub st_gid: ffi::c_uint,
+     pub st_rdev: ffi::c_ulong,
+-    pub(crate) __pad1: ffi::c_ulong,
++    pub(crate) __pad1: Padding<ffi::c_ulong>,
+     pub st_size: ffi::c_long,
+     pub st_blksize: ffi::c_int,
+-    pub(crate) __pad2: ffi::c_int,
++    pub(crate) __pad2: Padding<ffi::c_int>,
+     pub st_blocks: ffi::c_long,
+     pub st_atime: ffi::c_long,
+     pub st_atime_nsec: ffi::c_ulong,
+@@ -704,8 +711,8 @@ pub struct Stat {
+     pub st_mtime_nsec: ffi::c_ulong,
+     pub st_ctime: ffi::c_long,
+     pub st_ctime_nsec: ffi::c_ulong,
+-    pub(crate) __unused4: ffi::c_uint,
+-    pub(crate) __unused5: ffi::c_uint,
++    pub(crate) __unused4: Padding<ffi::c_uint>,
++    pub(crate) __unused5: Padding<ffi::c_uint>,
+ }
+ // This follows `stat`. powerpc64 defines a `stat64` but it's not used.
+ #[repr(C)]
+@@ -730,9 +737,9 @@ pub struct Stat {
+     pub st_mtime_nsec: ffi::c_ulong,
+     pub st_ctime: ffi::c_long,
+     pub st_ctime_nsec: ffi::c_ulong,
+-    pub(crate) __unused4: ffi::c_ulong,
+-    pub(crate) __unused5: ffi::c_ulong,
+-    pub(crate) __unused6: ffi::c_ulong,
++    pub(crate) __unused4: Padding<ffi::c_ulong>,
++    pub(crate) __unused5: Padding<ffi::c_ulong>,
++    pub(crate) __unused6: Padding<ffi::c_ulong>,
+ }
+ #[repr(C)]
+ #[derive(Debug, Copy, Clone)]
+@@ -746,7 +753,7 @@ pub struct Stat {
+     pub st_mode: ffi::c_uint,
+     pub st_uid: ffi::c_uint,
+     pub st_gid: ffi::c_uint,
+-    pub(crate) __pad1: ffi::c_uint,
++    pub(crate) __pad1: Padding<ffi::c_uint>,
+     pub st_rdev: ffi::c_ulong,
+     pub st_size: ffi::c_long, // Linux has `c_ulong` but we make it signed.
+     pub st_atime: ffi::c_long,
+@@ -757,7 +764,7 @@ pub struct Stat {
+     pub st_ctime_nsec: ffi::c_ulong,
+     pub st_blksize: ffi::c_ulong,
+     pub st_blocks: ffi::c_long,
+-    pub(crate) __unused: [ffi::c_ulong; 3],
++    pub(crate) __unused: Padding<[ffi::c_ulong; 3]>,
+ }
+ 
+ /// `struct statfs` for use with [`statfs`] and [`fstatfs`].
+@@ -795,9 +802,9 @@ pub struct StatFs {
+     #[cfg(any(target_arch = "arm", target_arch = "s390x"))]
+     pub f_flags: ffi::c_uint,
+     #[cfg(not(target_arch = "s390x"))]
+-    pub(crate) f_spare: [ffi::c_long; 4],
++    pub(crate) f_spare: Padding<[ffi::c_long; 4]>,
+     #[cfg(target_arch = "s390x")]
+-    pub(crate) f_spare: [ffi::c_uint; 5],
++    pub(crate) f_spare: Padding<[ffi::c_uint; 5]>,
+ }
+ 
+ /// `fsid_t` for use with [`StatFs`].
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/net/sockopt.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/net/sockopt.rs
+index a8b2819..33ed5c6 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/net/sockopt.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/net/sockopt.rs
+@@ -580,12 +580,12 @@ pub(crate) fn ipv6_multicast_loop(fd: BorrowedFd<'_>) -> io::Result<bool> {
+ 
+ #[inline]
+ pub(crate) fn set_ipv6_multicast_hops(fd: BorrowedFd<'_>, multicast_hops: u32) -> io::Result<()> {
+-    setsockopt(fd, c::IPPROTO_IP, c::IPV6_MULTICAST_HOPS, multicast_hops)
++    setsockopt(fd, c::IPPROTO_IPV6, c::IPV6_MULTICAST_HOPS, multicast_hops)
+ }
+ 
+ #[inline]
+ pub(crate) fn ipv6_multicast_hops(fd: BorrowedFd<'_>) -> io::Result<u32> {
+-    getsockopt(fd, c::IPPROTO_IP, c::IPV6_MULTICAST_HOPS)
++    getsockopt(fd, c::IPPROTO_IPV6, c::IPV6_MULTICAST_HOPS)
+ }
+ 
+ #[inline]
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/process/syscalls.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/process/syscalls.rs
+index c9c1fd8..109958c 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/process/syscalls.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/process/syscalls.rs
+@@ -519,6 +519,15 @@ pub(crate) fn pivot_root(new_root: &CStr, put_old: &CStr) -> io::Result<()> {
+ pub(crate) fn getgroups(buf: &mut [Gid]) -> io::Result<usize> {
+     let len = buf.len().try_into().map_err(|_| io::Errno::NOMEM)?;
+ 
++    #[cfg(any(target_arch = "arm", target_arch = "sparc", target_arch = "x86"))]
++    unsafe {
++        ret_usize(syscall!(
++            __NR_getgroups32,
++            c_int(len),
++            slice_just_addr_mut(buf)
++        ))
++    }
++    #[cfg(not(any(target_arch = "arm", target_arch = "sparc", target_arch = "x86")))]
+     unsafe {
+         ret_usize(syscall!(
+             __NR_getgroups,
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/thread/syscalls.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/thread/syscalls.rs
+index c22e74a..5893cdf 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/backend/linux_raw/thread/syscalls.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/backend/linux_raw/thread/syscalls.rs
+@@ -400,7 +400,14 @@ pub(crate) fn capset(
+ 
+ #[inline]
+ pub(crate) fn setuid_thread(uid: crate::ugid::Uid) -> io::Result<()> {
+-    unsafe { ret(syscall_readonly!(__NR_setuid, uid)) }
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    unsafe {
++        ret(syscall_readonly!(__NR_setuid32, uid))
++    }
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    unsafe {
++        ret(syscall_readonly!(__NR_setuid, uid))
++    }
+ }
+ 
+ #[inline]
+@@ -421,7 +428,14 @@ pub(crate) fn setresuid_thread(
+ 
+ #[inline]
+ pub(crate) fn setgid_thread(gid: crate::ugid::Gid) -> io::Result<()> {
+-    unsafe { ret(syscall_readonly!(__NR_setgid, gid)) }
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    unsafe {
++        ret(syscall_readonly!(__NR_setgid32, gid))
++    }
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    unsafe {
++        ret(syscall_readonly!(__NR_setgid, gid))
++    }
+ }
+ 
+ #[inline]
+@@ -443,7 +457,14 @@ pub(crate) fn setresgid_thread(
+ #[inline]
+ pub(crate) fn setgroups_thread(gids: &[crate::ugid::Gid]) -> io::Result<()> {
+     let (addr, len) = slice(gids);
+-    unsafe { ret(syscall_readonly!(__NR_setgroups, len, addr)) }
++    #[cfg(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc"))]
++    unsafe {
++        ret(syscall_readonly!(__NR_setgroups32, len, addr))
++    }
++    #[cfg(not(any(target_arch = "x86", target_arch = "arm", target_arch = "sparc")))]
++    unsafe {
++        ret(syscall_readonly!(__NR_setgroups, len, addr))
++    }
+ }
+ 
+ // `sched_getcpu` has special optimizations via the vDSO on some architectures.
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/event/epoll.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/event/epoll.rs
+index 839f05d..2a747be 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/event/epoll.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/event/epoll.rs
+@@ -80,6 +80,8 @@ use crate::buffer::Buffer;
+ use crate::fd::{AsFd, OwnedFd};
+ use crate::io;
+ use crate::timespec::Timespec;
++#[cfg(target_pointer_width = "32")]
++use crate::types::Padding;
+ use core::ffi::c_void;
+ use core::hash::{Hash, Hasher};
+ 
+@@ -276,7 +278,7 @@ impl EventData {
+             sixty_four_bit_pointer: SixtyFourBitPointer {
+                 pointer: value,
+                 #[cfg(target_pointer_width = "32")]
+-                _padding: 0,
++                _padding: Padding::new(0),
+             },
+         }
+     }
+@@ -321,13 +323,13 @@ impl Hash for EventData {
+ struct SixtyFourBitPointer {
+     #[cfg(target_endian = "big")]
+     #[cfg(target_pointer_width = "32")]
+-    _padding: u32,
++    _padding: Padding<u32>,
+ 
+     pointer: *mut c_void,
+ 
+     #[cfg(target_endian = "little")]
+     #[cfg(target_pointer_width = "32")]
+-    _padding: u32,
++    _padding: Padding<u32>,
+ }
+ 
+ #[cfg(test)]
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/at.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/at.rs
+index f74bd43..b670a5a 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/at.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/at.rs
+@@ -466,9 +466,11 @@ pub fn fclonefileat<Fd: AsFd, DstFd: AsFd, P: path::Arg>(
+ /// # References
+ ///  - [POSIX]
+ ///  - [Linux]
++///  - [FreeBSD]
+ ///
+ /// [POSIX]: https://pubs.opengroup.org/onlinepubs/9799919799/functions/mknodat.html
+ /// [Linux]: https://man7.org/linux/man-pages/man2/mknodat.2.html
++/// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=mknodat&sektion=2
+ #[cfg(not(any(
+     apple,
+     target_os = "espidf",
+@@ -494,8 +496,12 @@ pub fn mknodat<P: path::Arg, Fd: AsFd>(
+ ///
+ /// # References
+ ///  - [POSIX]
++///  - [Linux]
++///  - [FreeBSD]
+ ///
+ /// [POSIX]: https://pubs.opengroup.org/onlinepubs/9799919799/functions/mkfifoat.html
++/// [Linux]: https://www.man7.org/linux/man-pages/man3/mkfifo.3.html
++/// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=mkfifoat&sektion=2
+ #[cfg(not(any(
+     apple,
+     target_os = "espidf",
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/fd.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/fd.rs
+index 61cd3f4..782a0f9 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/fd.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/fd.rs
+@@ -223,6 +223,11 @@ pub fn futimens<Fd: AsFd>(fd: Fd, times: &Timestamps) -> io::Result<()> {
+ /// `posix_fallocate` and not the more general form, no `FallocateFlags` values
+ /// are defined so it will always be empty.
+ ///
++/// # Warning
++///
++/// On Apple platforms, if `offset + len` is less than the original file size,
++/// the file is truncated to that length.
++///
+ /// # References
+ ///  - [POSIX]
+ ///  - [Linux `fallocate`]
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/mod.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/mod.rs
+index dfeed87..baf9d7e 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/mod.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/mod.rs
+@@ -51,7 +51,7 @@ mod openat2;
+ #[cfg(linux_kernel)]
+ mod raw_dir;
+ mod seek_from;
+-#[cfg(target_os = "linux")]
++#[cfg(linux_kernel)]
+ mod sendfile;
+ #[cfg(not(target_os = "espidf"))]
+ mod special;
+@@ -117,7 +117,7 @@ pub use openat2::openat2;
+ #[cfg(linux_kernel)]
+ pub use raw_dir::{RawDir, RawDirEntry};
+ pub use seek_from::SeekFrom;
+-#[cfg(target_os = "linux")]
++#[cfg(linux_kernel)]
+ pub use sendfile::sendfile;
+ #[cfg(not(target_os = "espidf"))]
+ pub use special::*;
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/statx.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/statx.rs
+index f8be29f..b03cfac 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/statx.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/statx.rs
+@@ -2,6 +2,7 @@
+ 
+ use crate::fd::AsFd;
+ use crate::fs::AtFlags;
++use crate::types::Padding;
+ use crate::{backend, io, path};
+ use backend::c;
+ use bitflags::bitflags;
+@@ -24,7 +25,7 @@ pub struct Statx {
+     pub stx_uid: u32,
+     pub stx_gid: u32,
+     pub stx_mode: u16,
+-    pub(crate) __spare0: [u16; 1],
++    pub(crate) __spare0: Padding<[u16; 1]>,
+     pub stx_ino: u64,
+     pub stx_size: u64,
+     pub stx_blocks: u64,
+@@ -46,8 +47,8 @@ pub struct Statx {
+     pub stx_atomic_write_segments_max: u32,
+     pub stx_dio_read_offset_align: u32,
+     pub stx_atomic_write_unit_max_opt: u32,
+-    pub __spare2: [u32; 1usize],
+-    pub __spare3: [u64; 8usize],
++    pub(crate) __spare2: Padding<[u32; 1usize]>,
++    pub(crate) __spare3: Padding<[u64; 8usize]>,
+ }
+ 
+ /// `struct statx_timestamp` for use with [`Statx`].
+@@ -61,7 +62,7 @@ pub struct StatxTimestamp {
+     /// Nanoseconds. Must be less than 1_000_000_000.
+     pub tv_nsec: u32,
+ 
+-    pub(crate) __reserved: i32,
++    pub(crate) __reserved: Padding<i32>,
+ }
+ 
+ bitflags! {
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/xattr.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/xattr.rs
+index ea0eaea..c948ede 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/fs/xattr.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/fs/xattr.rs
+@@ -7,6 +7,7 @@ use crate::{backend, ffi, io, path};
+ use backend::c;
+ use backend::fd::AsFd;
+ use bitflags::bitflags;
++use core::ptr::null_mut;
+ 
+ bitflags! {
+     /// `XATTR_*` constants for use with [`setxattr`], and other `*setxattr`
+@@ -27,6 +28,10 @@ bitflags! {
+ 
+ /// `getxattr(path, name, value)`—Get extended filesystem attributes.
+ ///
++/// Unlike the libc `getxattr` function, this function does not treat an
++/// buffer with zero length as a way to return the size of the attribute.
++/// To obtain the size, use [`getxattr_query`].
++///
+ /// For a higher-level API to xattr functionality, see the [xattr] crate.
+ ///
+ /// [xattr]: https://crates.io/crates/xattr
+@@ -45,10 +50,42 @@ pub fn getxattr<P: path::Arg, Name: path::Arg, Buf: Buffer<u8>>(
+ ) -> io::Result<Buf::Output> {
+     path.into_with_c_str(|path| {
+         name.into_with_c_str(|name| {
++            let parts = value.parts_mut();
+             // SAFETY: `getxattr` behaves.
+-            let len = unsafe { backend::fs::syscalls::getxattr(path, name, value.parts_mut())? };
++            let len = unsafe { backend::fs::syscalls::getxattr(path, name, parts)? };
++            if parts.1 == 0 {
++                // `getxattr` special-cases an input size of 0 as a size
++                // query, which we handle through a different API function.
++                unsafe { Ok(value.assume_init(0)) }
++            } else {
++                // SAFETY: `getxattr` behaves, and we've handled the special
++                // case of an empty buffer above.
++                unsafe { Ok(value.assume_init(len)) }
++            }
++        })
++    })
++}
++
++/// `getxattr(path, name, NULL, 0)`—Query the length of an extended filesystem
++/// attribute.
++///
++/// This function uses `getxattr` with no buffer to just return the size of
++/// the attribute. This can be used to determine the size of a buffer to
++/// allocate for a subsequent call to [`getxattr`], however keep in mind
++/// that other processes may modify attributes at any time.
++///
++/// # References
++///  - [Linux]
++///  - [Apple]
++///
++/// [Linux]: https://man7.org/linux/man-pages/man2/getxattr.2.html
++/// [Apple]: https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getxattr.2.html
++#[inline]
++pub fn getxattr_query<P: path::Arg, Name: path::Arg>(path: P, name: Name) -> io::Result<usize> {
++    path.into_with_c_str(|path| {
++        name.into_with_c_str(|name| {
+             // SAFETY: `getxattr` behaves.
+-            unsafe { Ok(value.assume_init(len)) }
++            unsafe { backend::fs::syscalls::getxattr(path, name, (null_mut(), 0)) }
+         })
+     })
+ }
+@@ -57,6 +94,10 @@ pub fn getxattr<P: path::Arg, Name: path::Arg, Buf: Buffer<u8>>(
+ /// filesystem attributes, without following symlinks in the last path
+ /// component.
+ ///
++/// Unlike the libc `lgetxattr` function, this function does not treat an
++/// buffer with zero length as a way to return the size of the attribute.
++/// To obtain the size, use [`lgetxattr_query`].
++///
+ /// # References
+ ///  - [Linux]
+ ///
+@@ -69,10 +110,41 @@ pub fn lgetxattr<P: path::Arg, Name: path::Arg, Buf: Buffer<u8>>(
+ ) -> io::Result<Buf::Output> {
+     path.into_with_c_str(|path| {
+         name.into_with_c_str(|name| {
++            let parts = value.parts_mut();
+             // SAFETY: `lgetxattr` behaves.
+-            let len = unsafe { backend::fs::syscalls::lgetxattr(path, name, value.parts_mut())? };
++            let len = unsafe { backend::fs::syscalls::lgetxattr(path, name, parts)? };
++            if parts.1 == 0 {
++                // `lgetxattr` special-cases an input size of 0 as a size
++                // query, which we handle through a different API function.
++                unsafe { Ok(value.assume_init(0)) }
++            } else {
++                // SAFETY: `lgetxattr` behaves, and we've handled the special
++                // case of an empty buffer above.
++                unsafe { Ok(value.assume_init(len)) }
++            }
++        })
++    })
++}
++
++/// `lgetxattr(path, name, NULL, 0)`—Query the length of an extended
++/// filesystem attribute, without following symlinks in the last path
++/// component.
++///
++/// This function uses `lgetxattr` with no buffer to just return the size of
++/// the attribute. This can be used to determine the size of a buffer to
++/// allocate for a subsequent call to [`lgetxattr`], however keep in mind
++/// that other processes may modify attributes at any time.
++///
++/// # References
++///  - [Linux]
++///
++/// [Linux]: https://man7.org/linux/man-pages/man2/lgetxattr.2.html
++#[inline]
++pub fn lgetxattr_query<P: path::Arg, Name: path::Arg>(path: P, name: Name) -> io::Result<usize> {
++    path.into_with_c_str(|path| {
++        name.into_with_c_str(|name| {
+             // SAFETY: `lgetxattr` behaves.
+-            unsafe { Ok(value.assume_init(len)) }
++            unsafe { backend::fs::syscalls::lgetxattr(path, name, (null_mut(), 0)) }
+         })
+     })
+ }
+@@ -80,6 +152,10 @@ pub fn lgetxattr<P: path::Arg, Name: path::Arg, Buf: Buffer<u8>>(
+ /// `fgetxattr(fd, name, value.as_ptr(), value.len())`—Get extended
+ /// filesystem attributes on an open file descriptor.
+ ///
++/// Unlike the libc `fgetxattr` function, this function does not treat an
++/// buffer with zero length as a way to return the size of the attribute.
++/// To obtain the size, use [`fgetxattr_query`].
++///
+ /// # References
+ ///  - [Linux]
+ ///  - [Apple]
+@@ -93,10 +169,40 @@ pub fn fgetxattr<Fd: AsFd, Name: path::Arg, Buf: Buffer<u8>>(
+     mut value: Buf,
+ ) -> io::Result<Buf::Output> {
+     name.into_with_c_str(|name| {
++        let parts = value.parts_mut();
+         // SAFETY: `fgetxattr` behaves.
+-        let len = unsafe { backend::fs::syscalls::fgetxattr(fd.as_fd(), name, value.parts_mut())? };
++        let len = unsafe { backend::fs::syscalls::fgetxattr(fd.as_fd(), name, parts)? };
++        if parts.1 == 0 {
++            // `fgetxattr` special-cases an input size of 0 as a size
++            // query, which we handle through a different API function.
++            unsafe { Ok(value.assume_init(0)) }
++        } else {
++            // SAFETY: `fgetxattr` behaves, and we've handled the special
++            // case of an empty buffer above.
++            unsafe { Ok(value.assume_init(len)) }
++        }
++    })
++}
++
++/// `fgetxattr(fd, name, NULL, 0)`—Query the length of an extended
++/// filesystem attribute on an open file descriptor.
++///
++/// This function uses `fgetxattr` with no buffer to just return the size of
++/// the attribute. This can be used to determine the size of a buffer to
++/// allocate for a subsequent call to [`fgetxattr`], however keep in mind
++/// that other processes may modify attributes at any time.
++///
++/// # References
++///  - [Linux]
++///  - [Apple]
++///
++/// [Linux]: https://man7.org/linux/man-pages/man2/fgetxattr.2.html
++/// [Apple]: https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fgetxattr.2.html
++#[inline]
++pub fn fgetxattr_query<Fd: AsFd, Name: path::Arg>(fd: Fd, name: Name) -> io::Result<usize> {
++    name.into_with_c_str(|name| {
+         // SAFETY: `fgetxattr` behaves.
+-        unsafe { Ok(value.assume_init(len)) }
++        unsafe { backend::fs::syscalls::fgetxattr(fd.as_fd(), name, (null_mut(), 0)) }
+     })
+ }
+ 
+@@ -163,24 +269,63 @@ pub fn fsetxattr<Fd: AsFd, Name: path::Arg>(
+ /// `listxattr(path, list.as_ptr(), list.len())`—List extended filesystem
+ /// attributes.
+ ///
++/// Unlike the libc `listxattr` function, this function does not treat an
++/// buffer with zero length as a way to return the size of the attribute.
++/// To obtain the size, use [`listxattr_query`].
++///
+ /// # References
+ ///  - [Linux]
++///  - [Apple]
+ ///
+ /// [Linux]: https://man7.org/linux/man-pages/man2/listxattr.2.html
+ /// [Apple]: https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/listxattr.2.html
+ #[inline]
+ pub fn listxattr<P: path::Arg, Buf: Buffer<u8>>(path: P, mut list: Buf) -> io::Result<Buf::Output> {
+     path.into_with_c_str(|path| {
++        let parts = list.parts_mut();
+         // SAFETY: `listxattr` behaves.
+-        let len = unsafe { backend::fs::syscalls::listxattr(path, list.parts_mut())? };
++        let len = unsafe { backend::fs::syscalls::listxattr(path, parts)? };
++        if parts.1 == 0 {
++            // `listxattr` special-cases an input size of 0 as a size
++            // query, which we handle through a different API function.
++            unsafe { Ok(list.assume_init(0)) }
++        } else {
++            // SAFETY: `listxattr` behaves, and we've handled the special
++            // case of an empty buffer above.
++            unsafe { Ok(list.assume_init(len)) }
++        }
++    })
++}
++
++/// `listxattr(path, NULL, 0)`—Query the length of the list of extended
++/// filesystem attributes.
++///
++/// This function uses `listxattr` with no buffer to just return the size of
++/// the list. This can be used to determine the size of a buffer to
++/// allocate for a subsequent call to [`listxattr`], however keep in mind
++/// that other processes may modify attributes at any time.
++///
++/// # References
++///  - [Linux]
++///  - [Apple]
++///
++/// [Linux]: https://man7.org/linux/man-pages/man2/listxattr.2.html
++/// [Apple]: https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/listxattr.2.html
++#[inline]
++pub fn listxattr_query<P: path::Arg>(path: P) -> io::Result<usize> {
++    path.into_with_c_str(|path| {
+         // SAFETY: `listxattr` behaves.
+-        unsafe { Ok(list.assume_init(len)) }
++        unsafe { backend::fs::syscalls::listxattr(path, (null_mut(), 0)) }
+     })
+ }
+ 
+ /// `llistxattr(path, list.as_ptr(), list.len())`—List extended filesystem
+ /// attributes, without following symlinks in the last path component.
+ ///
++/// Unlike the libc `llistxattr` function, this function does not treat an
++/// buffer with zero length as a way to return the size of the attribute.
++/// To obtain the size, use [`llistxattr_query`].
++///
+ /// # References
+ ///  - [Linux]
+ ///
+@@ -191,16 +336,49 @@ pub fn llistxattr<P: path::Arg, Buf: Buffer<u8>>(
+     mut list: Buf,
+ ) -> io::Result<Buf::Output> {
+     path.into_with_c_str(|path| {
+-        // SAFETY: `flistxattr` behaves.
+-        let len = unsafe { backend::fs::syscalls::llistxattr(path, list.parts_mut())? };
+-        // SAFETY: `flistxattr` behaves.
+-        unsafe { Ok(list.assume_init(len)) }
++        let parts = list.parts_mut();
++        // SAFETY: `llistxattr` behaves.
++        let len = unsafe { backend::fs::syscalls::llistxattr(path, parts)? };
++        if parts.1 == 0 {
++            // `llistxattr` special-cases an input size of 0 as a size
++            // query, which we handle through a different API function.
++            unsafe { Ok(list.assume_init(0)) }
++        } else {
++            // SAFETY: `llistxattr` behaves, and we've handled the special
++            // case of an empty buffer above.
++            unsafe { Ok(list.assume_init(len)) }
++        }
++    })
++}
++
++/// `llistxattr(path, NULL, 0)`—Query the length of the list of extended
++/// filesystem attributes, without following symlinks in the last path
++/// component.
++///
++/// This function uses `llistxattr` with no buffer to just return the size of
++/// the list. This can be used to determine the size of a buffer to
++/// allocate for a subsequent call to [`llistxattr`], however keep in mind
++/// that other processes may modify attributes at any time.
++///
++/// # References
++///  - [Linux]
++///
++/// [Linux]: https://man7.org/linux/man-pages/man2/llistxattr.2.html
++#[inline]
++pub fn llistxattr_query<P: path::Arg>(path: P) -> io::Result<usize> {
++    path.into_with_c_str(|path| {
++        // SAFETY: `llistxattr` behaves.
++        unsafe { backend::fs::syscalls::llistxattr(path, (null_mut(), 0)) }
+     })
+ }
+ 
+ /// `flistxattr(fd, list.as_ptr(), list.len())`—List extended filesystem
+ /// attributes on an open file descriptor.
+ ///
++/// Unlike the libc `flistxattr` function, this function does not treat an
++/// buffer with zero length as a way to return the size of the attribute.
++/// To obtain the size, use [`flistxattr_query`].
++///
+ /// # References
+ ///  - [Linux]
+ ///  - [Apple]
+@@ -209,10 +387,36 @@ pub fn llistxattr<P: path::Arg, Buf: Buffer<u8>>(
+ /// [Apple]: https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/flistxattr.2.html
+ #[inline]
+ pub fn flistxattr<Fd: AsFd, Buf: Buffer<u8>>(fd: Fd, mut list: Buf) -> io::Result<Buf::Output> {
++    let parts = list.parts_mut();
+     // SAFETY: `flistxattr` behaves.
+-    let len = unsafe { backend::fs::syscalls::flistxattr(fd.as_fd(), list.parts_mut())? };
++    let len = unsafe { backend::fs::syscalls::flistxattr(fd.as_fd(), parts)? };
++    if parts.1 == 0 {
++        // `flistxattr` special-cases an input size of 0 as a size
++        // query, which we handle through a different API function.
++        unsafe { Ok(list.assume_init(0)) }
++    } else {
++        // SAFETY: `flistxattr` behaves, and we've handled the special
++        // case of an empty buffer above.
++        unsafe { Ok(list.assume_init(len)) }
++    }
++}
++
++/// `flistxattr(fd, list.as_ptr(), list.len())`—Query the length of the
++/// list of extended filesystem attributes on an open file descriptor.
++///
++/// This function uses `flistxattr` with no buffer to just return the size of
++/// the list. This can be used to determine the size of a buffer to
++/// allocate for a subsequent call to [`flistxattr`], however keep in mind
++/// that other processes may modify attributes at any time.
++///
++/// # References
++///  - [Linux]
++///
++/// [Linux]: https://man7.org/linux/man-pages/man2/flistxattr.2.html
++#[inline]
++pub fn flistxattr_query<Fd: AsFd>(fd: Fd) -> io::Result<usize> {
+     // SAFETY: `flistxattr` behaves.
+-    unsafe { Ok(list.assume_init(len)) }
++    unsafe { backend::fs::syscalls::flistxattr(fd.as_fd(), (null_mut(), 0)) }
+ }
+ 
+ /// `removexattr(path, name)`—Remove an extended filesystem attribute.
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/lib.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/lib.rs
+index 8109ca2..51929da 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/lib.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/lib.rs
+@@ -178,6 +178,8 @@ pub(crate) mod bitcast;
+ #[cfg(sanitize_memory)]
+ pub(crate) mod msan;
+ 
++mod types;
++
+ // linux_raw: Weak symbols are used by the use-libc-auxv feature for
+ // glibc 2.15 support.
+ //
+@@ -389,6 +391,7 @@ mod signal;
+ #[cfg(any(
+     feature = "fs",
+     feature = "event",
++    feature = "net",
+     feature = "process",
+     feature = "runtime",
+     feature = "thread",
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/net/send_recv/msg.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/net/send_recv/msg.rs
+index 234e993..6c8de94 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/net/send_recv/msg.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/net/send_recv/msg.rs
+@@ -344,7 +344,7 @@ impl<'buf, 'slice, 'fd> SendAncillaryBuffer<'buf, 'slice, 'fd> {
+         self.length = new_length;
+ 
+         // Get the last header in the buffer.
+-        let last_header = leap!(messages::Messages::new(buffer).last());
++        let (last_header, _) = leap!(messages::Messages::new(buffer).last());
+ 
+         // Set the header fields.
+         last_header.cmsg_len = unsafe { c::CMSG_LEN(source_len) } as _;
+@@ -533,34 +533,48 @@ impl<'buf> AncillaryDrain<'buf> {
+         }
+     }
+ 
++    /// `space` is the number of bytes of buffer space at and after `msg`.
+     fn advance(
+         read_and_length: &mut Option<(&'buf mut usize, &'buf mut usize)>,
+         msg: &c::cmsghdr,
++        space: usize,
+     ) -> Option<RecvAncillaryMessage<'buf>> {
++        // Clamp the message length to the buffer. When `recvmsg` truncates
++        // control data to fit, Linux reduces `cmsg_len` to match what it
++        // wrote, but macOS leaves `cmsg_len` holding the untruncated length,
++        // so it can run past the end of the buffer.
++        let msg_len = (msg.cmsg_len as usize).min(space);
++
+         // Advance the `read` pointer.
+         if let Some((read, length)) = read_and_length {
+-            let msg_len = msg.cmsg_len as usize;
+             **read += msg_len;
+             **length -= msg_len;
+         }
+ 
+-        Self::cvt_msg(msg)
++        Self::cvt_msg(msg, msg_len)
+     }
+ 
+     /// A closure that converts a message into a [`RecvAncillaryMessage`].
+-    fn cvt_msg(msg: &c::cmsghdr) -> Option<RecvAncillaryMessage<'buf>> {
++    fn cvt_msg(msg: &c::cmsghdr, msg_len: usize) -> Option<RecvAncillaryMessage<'buf>> {
+         unsafe {
+-            // Get a pointer to the payload.
++            // Get a pointer to the payload. Use `msg_len` rather than
++            // `msg.cmsg_len`, as the message may have been truncated to fit
++            // in the buffer. If there isn't even a whole header, there's no
++            // message to report.
+             let payload = c::CMSG_DATA(msg);
+-            let payload_len = msg.cmsg_len as usize - c::CMSG_LEN(0) as usize;
+-
+-            // Get a mutable slice of the payload.
+-            let payload: &'buf mut [u8] = slice::from_raw_parts_mut(payload, payload_len);
++            let payload_len = msg_len.checked_sub(c::CMSG_LEN(0) as usize)?;
+ 
+             // Determine what type it is.
+             let (level, msg_type) = (msg.cmsg_level, msg.cmsg_type);
+             match (level as _, msg_type as _) {
+                 (c::SOL_SOCKET, c::SCM_RIGHTS) => {
++                    // Truncation can leave a partial file descriptor at the
++                    // end of the payload; round down to whole descriptors.
++                    let payload_len = payload_len - payload_len % size_of::<OwnedFd>();
++
++                    // Get a mutable slice of the payload.
++                    let payload: &'buf mut [u8] = slice::from_raw_parts_mut(payload, payload_len);
++
+                     // Create an iterator that reads out the file descriptors.
+                     let fds = AncillaryIter::new(payload);
+ 
+@@ -569,7 +583,7 @@ impl<'buf> AncillaryDrain<'buf> {
+                 #[cfg(linux_kernel)]
+                 (c::SOL_SOCKET, c::SCM_CREDENTIALS) => {
+                     if payload_len >= size_of::<UCred>() {
+-                        let ucred = payload.as_ptr().cast::<UCred>().read_unaligned();
++                        let ucred = payload.cast::<UCred>().read_unaligned();
+                         Some(RecvAncillaryMessage::ScmCredentials(ucred))
+                     } else {
+                         None
+@@ -586,7 +600,7 @@ impl<'buf> Iterator for AncillaryDrain<'buf> {
+ 
+     fn next(&mut self) -> Option<Self::Item> {
+         self.messages
+-            .find_map(|ev| Self::advance(&mut self.read_and_length, ev))
++            .find_map(|(msg, space)| Self::advance(&mut self.read_and_length, msg, space))
+     }
+ 
+     fn size_hint(&self) -> (usize, Option<usize>) {
+@@ -600,13 +614,13 @@ impl<'buf> Iterator for AncillaryDrain<'buf> {
+         F: FnMut(B, Self::Item) -> B,
+     {
+         self.messages
+-            .filter_map(|ev| Self::advance(&mut self.read_and_length, ev))
++            .filter_map(|(msg, space)| Self::advance(&mut self.read_and_length, msg, space))
+             .fold(init, f)
+     }
+ 
+     fn count(mut self) -> usize {
+         self.messages
+-            .filter_map(|ev| Self::advance(&mut self.read_and_length, ev))
++            .filter_map(|(msg, space)| Self::advance(&mut self.read_and_length, msg, space))
+             .count()
+     }
+ 
+@@ -615,7 +629,7 @@ impl<'buf> Iterator for AncillaryDrain<'buf> {
+         Self: Sized,
+     {
+         self.messages
+-            .filter_map(|ev| Self::advance(&mut self.read_and_length, ev))
++            .filter_map(|(msg, space)| Self::advance(&mut self.read_and_length, msg, space))
+             .last()
+     }
+ 
+@@ -624,7 +638,7 @@ impl<'buf> Iterator for AncillaryDrain<'buf> {
+         Self: Sized,
+     {
+         self.messages
+-            .filter_map(|ev| Self::advance(&mut self.read_and_length, ev))
++            .filter_map(|(msg, space)| Self::advance(&mut self.read_and_length, msg, space))
+             .collect()
+     }
+ }
+@@ -951,13 +965,21 @@ mod messages {
+     }
+ 
+     impl<'a> Iterator for Messages<'a> {
+-        type Item = &'a mut c::cmsghdr;
++        /// A message header, along with the number of bytes of buffer space
++        /// at and after it, which is an upper bound on the size of the
++        /// message.
++        type Item = (&'a mut c::cmsghdr, usize);
+ 
+         #[inline]
+         fn next(&mut self) -> Option<Self::Item> {
+             // Get the current header.
+             let header = self.header?;
+ 
++            // Compute the number of bytes of buffer space at and after this
++            // header.
++            let end = (self.msghdr.msg_control as usize) + (self.msghdr.msg_controllen as usize);
++            let space = end.saturating_sub(header.as_ptr() as usize);
++
+             // Get the next header.
+             self.header = NonNull::new(unsafe { c::CMSG_NXTHDR(&self.msghdr, header.as_ptr()) });
+ 
+@@ -967,7 +989,7 @@ mod messages {
+             }
+ 
+             // SAFETY: The lifetime of `header` is tied to this.
+-            Some(unsafe { &mut *header.as_ptr() })
++            Some((unsafe { &mut *header.as_ptr() }, space))
+         }
+ 
+         fn size_hint(&self) -> (usize, Option<usize>) {
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/process/ioctl.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/process/ioctl.rs
+index e0ba001..94e4c13 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/process/ioctl.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/process/ioctl.rs
+@@ -18,7 +18,7 @@ use backend::fd::AsFd;
+ ///  - [NetBSD]
+ ///  - [OpenBSD]
+ ///
+-/// [Linux]: https://man7.org/linux/man-pages/man4/tty_ioctl.4.html
++/// [Linux]: https://man7.org/linux/man-pages/man2/TIOCSCTTY.2const.html
+ /// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=tty&sektion=4
+ /// [NetBSD]: https://man.netbsd.org/tty.4
+ /// [OpenBSD]: https://man.openbsd.org/tty.4
+@@ -43,7 +43,7 @@ unsafe impl ioctl::Ioctl for Tiocsctty {
+     }
+ 
+     fn as_ptr(&mut self) -> *mut c::c_void {
+-        crate::utils::as_ptr(&0_u32) as *mut c::c_void
++        core::ptr::null_mut()
+     }
+ 
+     unsafe fn output_from_ptr(
+@@ -53,3 +53,11 @@ unsafe impl ioctl::Ioctl for Tiocsctty {
+         Ok(())
+     }
+ }
++
++#[test]
++#[cfg(not(any(windows, target_os = "aix", target_os = "redox", target_os = "wasi")))]
++fn tiocsctty_argument_is_zero() {
++    use crate::ioctl::Ioctl;
++
++    assert!(Tiocsctty.as_ptr().is_null());
++}
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/termios/tc.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/termios/tc.rs
+index dabd17e..c21b3dc 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/termios/tc.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/termios/tc.rs
+@@ -55,7 +55,7 @@ pub fn tcgetwinsize<Fd: AsFd>(fd: Fd) -> io::Result<Winsize> {
+ ///
+ /// Also known as the `TIOCGPGRP` operation with `ioctl`.
+ ///
+-/// On Linux, if `fd` is a pseudo-terminal, the underlying system call here can
++/// If `fd` is a pseudo-terminal, the underlying system call here can
+ /// return a pid of 0, which rustix's `Pid` type doesn't support. So rustix
+ /// instead handles this case by failing with [`io::Errno::OPNOTSUPP`] if the
+ /// pid is 0.
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/termios/types.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/termios/types.rs
+index 71d9fb8..cadbc47 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/termios/types.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/termios/types.rs
+@@ -2,6 +2,8 @@ use crate::backend::c;
+ use crate::backend::termios::types;
+ #[cfg(target_os = "nto")]
+ use crate::ffi;
++#[cfg(target_os = "nto")]
++use crate::types::Padding;
+ use crate::{backend, io};
+ use bitflags::bitflags;
+ 
+@@ -46,7 +48,7 @@ pub struct Termios {
+     pub special_codes: SpecialCodes,
+ 
+     #[cfg(target_os = "nto")]
+-    pub(crate) __reserved: [ffi::c_uint; 3],
++    pub(crate) __reserved: Padding<[ffi::c_uint; 3]>,
+ 
+     /// Line discipline.
+     // On PowerPC, this field comes after `c_cc`.
+@@ -341,37 +343,72 @@ bitflags! {
+         const ONLRET = c::ONLRET;
+ 
+         /// `OFILL`
+-        #[cfg(not(bsd))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++        )))]
+         const OFILL = c::OFILL;
+ 
+         /// `OFDEL`
+-        #[cfg(not(bsd))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++        )))]
+         const OFDEL = c::OFDEL;
+ 
+         /// `NLDLY`
+-        #[cfg(not(any(bsd, solarish, target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "redox",
++        )))]
+         const NLDLY = c::NLDLY;
+ 
+         /// `NL0`
+-        #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "fuchsia",
++            target_os = "redox",
++        )))]
+         const NL0 = c::NL0;
+ 
+         /// `NL1`
+-        #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "fuchsia",
++            target_os = "redox",
++        )))]
+         const NL1 = c::NL1;
+ 
+         /// `CRDLY`
+-        #[cfg(not(any(bsd, solarish, target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "redox",
++        )))]
+         const CRDLY = c::CRDLY;
+ 
+         /// `CR0`
+-        #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "fuchsia",
++            target_os = "redox",
++        )))]
+         const CR0 = c::CR0;
+ 
+         /// `CR1`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -382,7 +419,8 @@ bitflags! {
+         /// `CR2`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -393,7 +431,8 @@ bitflags! {
+         /// `CR3`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -423,7 +462,8 @@ bitflags! {
+         /// `TAB1`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -434,7 +474,8 @@ bitflags! {
+         /// `TAB2`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -445,7 +486,8 @@ bitflags! {
+         /// `TAB3`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -457,24 +499,35 @@ bitflags! {
+         #[cfg(not(any(
+             bsd,
+             solarish,
+-            target_os = "aix",
+             target_os = "haiku",
+             target_os = "redox",
+         )))]
+         const XTABS = c::XTABS;
+ 
+         /// `BSDLY`
+-        #[cfg(not(any(bsd, solarish, target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "redox",
++        )))]
+         const BSDLY = c::BSDLY;
+ 
+         /// `BS0`
+-        #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "fuchsia",
++            target_os = "redox",
++        )))]
+         const BS0 = c::BS0;
+ 
+         /// `BS1`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -483,17 +536,29 @@ bitflags! {
+         const BS1 = c::BS1;
+ 
+         /// `FFDLY`
+-        #[cfg(not(any(bsd, solarish, target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "redox",
++        )))]
+         const FFDLY = c::FFDLY;
+ 
+         /// `FF0`
+-        #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "fuchsia",
++            target_os = "redox",
++        )))]
+         const FF0 = c::FF0;
+ 
+         /// `FF1`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -502,17 +567,29 @@ bitflags! {
+         const FF1 = c::FF1;
+ 
+         /// `VTDLY`
+-        #[cfg(not(any(bsd, solarish, target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "redox",
++        )))]
+         const VTDLY = c::VTDLY;
+ 
+         /// `VT0`
+-        #[cfg(not(any(bsd, solarish, target_os = "fuchsia", target_os = "redox")))]
++        #[cfg(not(any(
++            freebsdlike,
++            netbsdlike,
++            solarish,
++            target_os = "fuchsia",
++            target_os = "redox",
++        )))]
+         const VT0 = c::VT0;
+ 
+         /// `VT1`
+         #[cfg(not(any(
+             target_env = "musl",
+-            bsd,
++            freebsdlike,
++            netbsdlike,
+             solarish,
+             target_os = "emscripten",
+             target_os = "fuchsia",
+@@ -738,13 +815,7 @@ pub mod speed {
+     pub const B230400: u32 = 230_400;
+ 
+     /// `B460800`
+-    #[cfg(not(any(
+-        apple,
+-        target_os = "aix",
+-        target_os = "dragonfly",
+-        target_os = "haiku",
+-        target_os = "openbsd"
+-    )))]
++    #[cfg(not(any(apple, target_os = "aix", target_os = "haiku", target_os = "openbsd")))]
+     pub const B460800: u32 = 460_800;
+ 
+     /// `B500000`
+@@ -756,13 +827,7 @@ pub mod speed {
+     pub const B576000: u32 = 576_000;
+ 
+     /// `B921600`
+-    #[cfg(not(any(
+-        apple,
+-        target_os = "aix",
+-        target_os = "dragonfly",
+-        target_os = "haiku",
+-        target_os = "openbsd"
+-    )))]
++    #[cfg(not(any(apple, target_os = "aix", target_os = "haiku", target_os = "openbsd")))]
+     pub const B921600: u32 = 921_600;
+ 
+     /// `B1000000`
+@@ -868,7 +933,6 @@ pub mod speed {
+             #[cfg(not(any(
+                 apple,
+                 target_os = "aix",
+-                target_os = "dragonfly",
+                 target_os = "haiku",
+                 target_os = "nto",
+                 target_os = "openbsd"
+@@ -893,7 +957,6 @@ pub mod speed {
+             #[cfg(not(any(
+                 apple,
+                 target_os = "aix",
+-                target_os = "dragonfly",
+                 target_os = "haiku",
+                 target_os = "nto",
+                 target_os = "openbsd"
+@@ -1007,7 +1070,6 @@ pub mod speed {
+             #[cfg(not(any(
+                 apple,
+                 target_os = "aix",
+-                target_os = "dragonfly",
+                 target_os = "haiku",
+                 target_os = "nto",
+                 target_os = "openbsd",
+@@ -1032,7 +1094,6 @@ pub mod speed {
+             #[cfg(not(any(
+                 apple,
+                 target_os = "aix",
+-                target_os = "dragonfly",
+                 target_os = "haiku",
+                 target_os = "nto",
+                 target_os = "openbsd"
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/thread/clock.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/thread/clock.rs
+index d6be40e..654c5d6 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/thread/clock.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/thread/clock.rs
+@@ -7,7 +7,6 @@ pub use crate::timespec::{Nsecs, Secs, Timespec};
+     apple,
+     target_os = "dragonfly",
+     target_os = "espidf",
+-    target_os = "freebsd", // FreeBSD 12 has clock_nanosleep, but libc targets FreeBSD 11.
+     target_os = "openbsd",
+     target_os = "redox",
+     target_os = "vita",
+@@ -24,15 +23,16 @@ pub use crate::clockid::ClockId;
+ /// # References
+ ///  - [POSIX]
+ ///  - [Linux]
++///  - [FreeBSD]
+ ///
+ /// [POSIX]: https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_nanosleep.html
+ /// [Linux]: https://man7.org/linux/man-pages/man2/clock_nanosleep.2.html
++/// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=nanosleep&sektion=2
+ #[cfg(not(any(
+     apple,
+     target_os = "dragonfly",
+     target_os = "emscripten",
+     target_os = "espidf",
+-    target_os = "freebsd", // FreeBSD 12 has clock_nanosleep, but libc targets FreeBSD 11.
+     target_os = "haiku",
+     target_os = "horizon",
+     target_os = "openbsd",
+@@ -54,15 +54,16 @@ pub fn clock_nanosleep_relative(id: ClockId, request: &Timespec) -> NanosleepRel
+ /// # References
+ ///  - [POSIX]
+ ///  - [Linux]
++///  - [FreeBSD]
+ ///
+ /// [POSIX]: https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_nanosleep.html
+ /// [Linux]: https://man7.org/linux/man-pages/man2/clock_nanosleep.2.html
++/// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=nanosleep&sektion=2
+ #[cfg(not(any(
+     apple,
+     target_os = "dragonfly",
+     target_os = "emscripten",
+     target_os = "espidf",
+-    target_os = "freebsd", // FreeBSD 12 has clock_nanosleep, but libc targets FreeBSD 11.
+     target_os = "haiku",
+     target_os = "horizon",
+     target_os = "openbsd",
+@@ -82,9 +83,11 @@ pub fn clock_nanosleep_absolute(id: ClockId, request: &Timespec) -> io::Result<(
+ /// # References
+ ///  - [POSIX]
+ ///  - [Linux]
++///  - [FreeBSD]
+ ///
+ /// [POSIX]: https://pubs.opengroup.org/onlinepubs/9799919799/functions/nanosleep.html
+ /// [Linux]: https://man7.org/linux/man-pages/man2/nanosleep.2.html
++/// [FreeBSD]: https://man.freebsd.org/cgi/man.cgi?query=nanosleep&sektion=2
+ #[inline]
+ pub fn nanosleep(request: &Timespec) -> NanosleepRelativeResult {
+     backend::thread::syscalls::nanosleep(request)
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/thread/futex.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/thread/futex.rs
+index 9862997..4d55bb5 100644
+--- a/work/home/.cache/cargo-vet/src/rustix-1.1.5/src/thread/futex.rs
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/thread/futex.rs
+@@ -34,6 +34,7 @@ use core::sync::atomic::AtomicU32;
+ use crate::backend::thread::futex::Operation;
+ use crate::backend::thread::syscalls::{futex_timeout, futex_val2};
+ use crate::fd::{FromRawFd as _, OwnedFd, RawFd};
++use crate::types::Padding;
+ use crate::{backend, io};
+ 
+ pub use crate::clockid::ClockId;
+@@ -532,7 +533,7 @@ pub struct Wait {
+     pub flags: WaitFlags,
+ 
+     /// Reserved for future use.
+-    pub(crate) __reserved: u32,
++    pub(crate) __reserved: Padding<u32>,
+ }
+ 
+ impl Wait {
+@@ -543,7 +544,7 @@ impl Wait {
+             val: 0,
+             uaddr: WaitPtr::new(ptr::null_mut()),
+             flags: WaitFlags::empty(),
+-            __reserved: 0,
++            __reserved: Padding::new(0),
+         }
+     }
+ }
+diff --git a/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/types.rs b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/types.rs
+new file mode 100644
+index 0000000..edaf17e
+--- /dev/null
++++ b/work/home/.cache/cargo-vet/src/rustix-1.1.6/src/types.rs
+@@ -0,0 +1,40 @@
++//! Platform-agnostic support types.
++//!
++//! Copied from https://github.com/rust-lang/libc/blob/008f905256d27eb5dd416d0976678ee6c2855554/src/types.rs
++
++use core::fmt;
++use core::mem::MaybeUninit;
++
++/// A transparent wrapper over `MaybeUninit<T>` to represent uninitialized padding
++/// while providing `Default`.
++// This is restricted to `Copy` types since that's a loose indicator that zeros is actually
++// a valid bitpattern. There is no technical reason this is required, though, so it could be
++// lifted in the future if it becomes a problem.
++#[allow(dead_code)]
++#[repr(transparent)]
++#[derive(Clone, Copy)]
++pub(crate) struct Padding<T: Copy>(MaybeUninit<T>);
++
++impl<T: Copy> Default for Padding<T> {
++    fn default() -> Self {
++        Self(MaybeUninit::zeroed())
++    }
++}
++
++impl<T: Copy> Padding<T> {
++    /// Create a `Padding` initialized with the given value.
++    #[allow(dead_code)]
++    pub(crate) const fn new(val: T) -> Self {
++        Self(MaybeUninit::new(val))
++    }
++}
++
++impl<T: Copy> fmt::Debug for Padding<T> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        // Taken from `MaybeUninit`'s debug implementation
++        // NB: there is no `.pad_fmt` so we can't use a simpler `format_args!("Padding<{..}>").
++        let full_name = core::any::type_name::<Self>();
++        let prefix_len = full_name.find("Padding").unwrap();
++        f.pad(&full_name[prefix_len..])
++    }
++}
+
+Use |cargo vet certify| to record your audit.

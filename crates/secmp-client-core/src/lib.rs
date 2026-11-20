@@ -9,11 +9,38 @@
 //! `secmp-sys-desktop`, `secmp-sys-mem`; an async runtime, added with an ADR.
 //!
 //! **Status.** M6 Phase A: [`clock`], [`timing`] and the sans-IO constant-rate [`scheduler`] with its `ControlOps`,
-//! `QueuePool` and `outbox` (in-memory behind traits). Contacts, sessions, invitations and the `Api` are M7.
+//! `QueuePool` and `outbox` (in-memory behind traits). Contacts, sessions, invitations and the `Api` are M7; since Phase C the
+//! [`runtime`] (re-exported as `api::runtime`) connects the hub, the tokio driver and the transport providers for a host.
 #![forbid(unsafe_code)]
 
+#[cfg(not(kani))]
+pub mod api;
 pub mod clock;
+#[cfg(not(kani))]
+pub mod contacts;
+#[cfg(not(kani))]
+pub mod hub;
+#[cfg(not(kani))]
+pub mod invitations;
 #[cfg(kani)]
 mod kani_proofs;
+#[cfg(not(kani))]
+pub mod outbox;
+#[cfg(not(kani))]
+pub mod persist;
+#[cfg(not(kani))]
+pub mod profile;
+#[cfg(not(kani))]
+pub mod relay_view;
+pub mod retention;
+#[cfg(not(kani))]
+pub mod runtime;
 pub mod scheduler;
+#[cfg(not(kani))]
+pub mod sessions;
+#[cfg(not(kani))]
+pub mod settings;
+#[cfg(test)]
+#[cfg(feature = "kat")]
+mod testutil;
 pub mod timing;

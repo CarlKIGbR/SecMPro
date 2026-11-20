@@ -1,0 +1,92 @@
+head 3bb0fc26431771a2e698a7c8af1f9f1261d03124
+diff --git a/crates/secmp-client-core/src/hub.rs b/crates/secmp-client-core/src/hub.rs
+index 3dbc5f6..4c88df7 100644
+--- a/crates/secmp-client-core/src/hub.rs
++++ b/crates/secmp-client-core/src/hub.rs
+@@ -904,11 +904,9 @@ pub fn cell_interval_ms(params: &Params, mode: Mode, period_ms: u64, n: u64) ->
+ /// term is capped, so the end moves with `blur` for every interval (uniform over the draw's 23 h); the span stays at most
+ /// `MAX_SEND_OVERLAP_MS` (`blur` ≤ `OLD_SEND_MS − 1 h`; a larger one is cut there).
+ fn floor_end(from: u64, blur: u64, interval: Option<u64>) -> u64 {
+-    let term = interval
++    let span = interval
+         .and_then(|i| FLOOR_CELLS.checked_mul(i))
+-        .map_or(FLOOR_TERM_CAP_MS, |t| t.min(FLOOR_TERM_CAP_MS));
+-    let span = blur
+-        .checked_add(term)
++        .and_then(|f| f.checked_add(blur))
+         .map_or(MAX_SEND_OVERLAP_MS, |s| s.min(MAX_SEND_OVERLAP_MS));
+     from.saturating_add(span)
+ }
+   Compiling secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.40s
+────────────
+ Nextest run ID d5444087-dc7c-45db-8271-bda050e19052 with nextest profile: default
+    Starting 23 tests across 1 binary (284 tests skipped)
+        PASS [   0.007s] ( 1/23) secmp-client-core hub::tests::cell_interval_follows_mode_period_and_queues
+        FAIL [   0.008s] ( 2/23) secmp-client-core hub::tests::floor_end_is_capped
+  stdout ───
+
+    running 1 test
+    test hub::tests::floor_end_is_capped ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::floor_end_is_capped
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 306 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'hub::tests::floor_end_is_capped' (339305) panicked at crates/secmp-client-core/src/hub.rs:3142:9:
+    assertion `left == right` failed: above it
+      left: 90000116
+     right: 90000008
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.008s] ( 3/23) secmp-client-core hub::tests::floor_end_keeps_the_draw_at_every_interval
+  stdout ───
+
+    running 1 test
+    test hub::tests::floor_end_keeps_the_draw_at_every_interval ... FAILED
+
+    failures:
+
+    failures:
+        hub::tests::floor_end_keeps_the_draw_at_every_interval
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 306 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'hub::tests::floor_end_keeps_the_draw_at_every_interval' (339303) panicked at crates/secmp-client-core/src/hub.rs:3186:17:
+    assertion `left == right` failed: Some(1309500) 41400000
+      left: Some(6000)
+     right: Some(41400000)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.112s] ( 4/23) secmp-client-core sessions::actor::tests::overlap_row_is_written_at_the_switch
+        PASS [   0.155s] ( 5/23) secmp-client-core sessions::actor::tests::dropped_overlap_deletes_its_row
+        PASS [   0.267s] ( 6/23) secmp-client-core sessions::actor::tests::extend_overlap_writes_before_it_deletes
+        PASS [   2.305s] ( 7/23) secmp-client-core hub::tests::floor_waits_for_its_row
+        PASS [   2.436s] ( 8/23) secmp-client-core hub::tests::switch_floor_shifts_the_drawn_end
+        PASS [   2.451s] ( 9/23) secmp-client-core hub::tests::restart_registers_the_old_send_queue_until_its_end
+        PASS [   2.473s] (10/23) secmp-client-core hub::tests::restart_later_keeps_the_stored_end
+        PASS [   2.492s] (11/23) secmp-client-core hub::tests::switch_floor_comes_before_the_drop
+        PASS [   2.478s] (12/23) secmp-client-core hub::tests::restart_takes_the_latest_end_of_a_sid
+        PASS [   2.492s] (13/23) secmp-client-core hub::tests::restart_keeps_the_stored_ends
+        PASS [   2.545s] (14/23) secmp-client-core hub::tests::switch_floor_counts_from_the_switch
+        PASS [   2.595s] (15/23) secmp-client-core hub::tests::restart_keeps_one_sender_per_physical_queue
+        PASS [   2.618s] (16/23) secmp-client-core hub::tests::restart_keeps_an_end_beyond_a_day
+        PASS [   2.629s] (17/23) secmp-client-core hub::tests::restart_registers_only_an_end_ahead_within_the_longest_overlap
+        PASS [   2.742s] (18/23) secmp-client-core hub::tests::restarts_do_not_extend_an_old_queue
+        PASS [   3.032s] (19/23) secmp-client-core hub::tests::restart_in_overlap_counts_the_copy_away
+        PASS [   3.082s] (20/23) secmp-client-core hub::tests::end_passed_while_down_holds
+        PASS [   3.304s] (21/23) secmp-client-core hub::tests::overlap_end_before_the_count_holds
+        PASS [   4.092s] (22/23) secmp-client-core hub::tests::second_contact_gets_its_floor
+        PASS [   4.627s] (23/23) secmp-client-core hub::tests::floor_follows_the_mode_and_a_growing_link
+────────────
+     Summary [   4.628s] 23 tests run: 21 passed, 2 failed, 284 skipped
+        FAIL [   0.008s] ( 2/23) secmp-client-core hub::tests::floor_end_is_capped
+        FAIL [   0.008s] ( 3/23) secmp-client-core hub::tests::floor_end_keeps_the_draw_at_every_interval
+error: test run failed

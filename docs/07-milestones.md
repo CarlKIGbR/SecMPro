@@ -1,6 +1,6 @@
 # SecMPro — Milestone Plan (v1 and v1.1)
 
-Status: baseline, revision 2 (2026-09-25, after adversarial review). This is the execution plan for the implementing agent (Claude Code / Opus) and the reviewer (Fable). Milestones are strictly sequential; the next one starts only after the previous one's review is recorded in `docs/reviews/`. Sizes are relative (S ≈ one focused session, M ≈ 2–4, L ≈ 5–8, XL ≈ 8+).
+Status: baseline, revision 2 (2026-09-25, after adversarial review). This is the execution plan for the implementing agent (Claude Code / Opus) and the reviewer (Fable). Milestones are strictly sequential; the next one starts only after the previous one's review is recorded in `docs/reviews/`. For M8–M10 ADR-062 (owner, 2026-11-17) replaces the full review by a short reviewer GO; the deferred reviews fall into the hardening phase (M11). Sizes are relative (S ≈ one focused session, M ≈ 2–4, L ≈ 5–8, XL ≈ 8+).
 
 Every milestone ends with a **Milestone Report** (`docs/templates/milestone-report.md`) and a **Review** (`docs/templates/review-checklist.md`). The Definition of Done in `06-engineering-standards.md` §8 applies to all.
 
@@ -130,7 +130,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Review focus.** No code path where activity influences timing (grep `Instant::now`, conditionals on outbox state outside `prepare`); isolation tokens per link; exactly one TLS KX group; Tor never bypassed silently.
 
-**Status (2026-10-09).** Started 2026-10-09 on branch `m06-transport` from `main` at `6300b653d0f1f176b7a31470910d5214fa87b9cc`; plan, test specification (`docs/reviews/M06-planning/TEST-SPEC-M6.md`, 177 rows), OPEN-M6 decisions and ADR-051 (Proposed) were committed first. Report: `docs/reviews/M06-report.md`. Phase A (Sonnet) in progress; Phase B waits for the owner's ADR-051 Part 2 approval. **Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence at `c570d98`, later commits covered by run #165); Phase C closed @ `cbf0284`; ⚙ rows TC-07, TC-08, AI-07 Tor part, MR-04, MR-05 VM part, TOR-10, X-10 open (owner-operated after merge)** (BRIEF M6-C1: ledger bound and Kani K-C1…K-C6, mutation survivors, ADR-047 Amendments 6/7, `ci-verdict`; BRIEF M6-C2 follows; M6 merges only after C2).
+**Status (2026-10-09).** Started 2026-10-09 on branch `m06-transport` from `main` at `6300b653d0f1f176b7a31470910d5214fa87b9cc`; plan, test specification (`docs/reviews/M06-planning/TEST-SPEC-M6.md`, 177 rows), OPEN-M6 decisions and ADR-051 (Proposed) were committed first. Report: `docs/reviews/M06-report.md`. Phase A (Sonnet) in progress; Phase B waits for the owner's ADR-051 Part 2 approval. **Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence at `c570d98`, later commits covered by run #165); Phase C closed @ `cbf0284`; ⚙ rows TC-07, TC-08, AI-07 Tor part, MR-04, MR-05 VM part, TOR-10, X-10 open (owner-operated after merge)** (BRIEF M6-C1: ledger bound and Kani K-C1…K-C6, mutation survivors, ADR-047 Amendments 6/7, `ci-verdict`; BRIEF M6-C2 follows; M6 merges only after C2). **Merged 2026-10-27 (#9, `bf55099`); review: `docs/reviews/M06-review.md` (acceptance record).**
 
 ---
 
@@ -147,6 +147,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 **Review focus.** Persist-before-send/ack enforced by construction; OPK deletion; unverified contacts cannot receive view-once messages; no identifiers reach `secmp-transport`; backup contains no ratchet material.
 
 **Obligation from the M4 review (F-M7, C-12).** The transactional store: `PrekeyStore::commit_accept` of the encrypted store stages the OPK deletion and the record's consumption in one store transaction, which the client commits together with the whole `hx::Accepted` (`state`, `peer`, `routes`, `profile`) before it acknowledges any cell of the invitation queue and before it retires that queue; a commit that cannot be made durable is `Error::Unavailable` and changes nothing (R-26). The client retains at most the newest 24 unclassified cells of an invitation queue between `accept` calls, and a complete group is spent after one `accept` (RT-1).
+
+**Status (2026-11-18).** Phases A and B closed; M7-RJ at `4e022a9`; Phase C (CLI, end to end, profile forensic) delivered in units C-1…C-5 except the owner-pending rows E2-07, G7-11, G7-20 and FZ-03 + G7-15c (report § Phase C close); ADR-062 governs the remaining units. Added 2026-11-19 (D-11): cuts recorded in the report — E2-02 over the CLI runs 40 messages each way (Q291; 500 each way in virtual time, E2-02v), E2-10 covers direct mode, Balanced, one link per client (Q293); review fix units after Phase C: S-1 (Q296), S-2 (Q297), S-2b (Q298), head `56e86e3`. Report: `docs/reviews/M07-report.md`.
 
 ---
 
@@ -182,6 +184,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 ---
 
 ### M11 — Security verification, audit preparation and release engineering (M/L)
+
+**Hardening phase (ADR-062, owner 2026-11-17).** M11 also carries the consolidated verification deferred from the build phase M8–M10: a full mutation run with zero undocumented survivors, fuzz campaigns, external cross-reviews (at least two model families) over the whole code base, the deferred reviews of M8–M10, and closure or owner acceptance of every item of `docs/HARDENING-BACKLOG.md`. M12 does not start before this is done.
 
 **Deliverables.** ⚙ 24 h fuzz campaign (corpora committed); mutation and coverage reports; `formal/` finalised with `CLAIMS.md` results; reproducible release builds for Linux and Windows on two builders with matching hashes (`xtask repro-check` real); SLSA L3 provenance; ⚙ offline minisign signing procedure executed; SBOMs; `docs/audit-package.md`; disclosure texts; `security.txt`; the M12 acceptance protocol scripted where possible (`xtask acceptance`).
 

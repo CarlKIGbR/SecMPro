@@ -83,6 +83,11 @@ STORE_OUTBOX = b"SecMP-STORE/1 outbox"
 STORE_MESSAGES = b"SecMP-STORE/1 messages"
 STORE_INVITATIONS = b"SecMP-STORE/1 invitations"
 STORE_SETTINGS = b"SecMP-STORE/1 settings"
+# Rev 2.7 (ADR-053 item 7, docs/03:768): profile wrap, SQLCipher key, backup key, backup wrap
+STORE_WRAP = b"SecMP-STORE/1 wrap"
+STORE_DB = b"SecMP-STORE/1 db"
+STORE_BACKUP = b"SecMP-STORE/1 backup"
+STORE_BWRAP = b"SecMP-STORE/1 bwrap"
 
 # Appendix A, line 11: "test-vector seed derivation only, vectors/SCHEMA.md"
 VECTORS = b"SecMP-vectors/1"
@@ -99,6 +104,7 @@ APPENDIX_A = (
     Q_QUEUE_NEW, Q_SEND, Q_FETCH, Q_MFETCH, Q_QUEUE_DEL, Q_LINK_PUT, Q_LINK_GET,
     STORE_IDENTITY, STORE_PREKEYS, STORE_RELAYS, STORE_CONTACTS, STORE_SESSIONS,
     STORE_OUTBOX, STORE_MESSAGES, STORE_INVITATIONS, STORE_SETTINGS,
+    STORE_WRAP, STORE_DB, STORE_BACKUP, STORE_BWRAP,
     VECTORS,
 )
 

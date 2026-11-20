@@ -1,0 +1,29 @@
+   Compiling xtask v0.0.0 (/work/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+     Running `target/debug/xtask step --strict policy`
+
+=== [2] policy ===
+### gate `policy`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | unsafe-attrs: 43 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe` |
+| line 2 | lints-table: 12 manifests |
+| line 3 | lint-allows: 157 relaxing attributes (all sanctioned) |
+| line 4 | build-scripts: 12 crates, none |
+| line 5 | spdx: 476 files |
+| line 6 | relay-events: 7 names as expect::RELAY_TRACE_ALLOW |
+| line 7 | normal-deps: 6 crates within expect::NORMAL_DEPENDENCY_ALLOW |
+| line 8 | secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted |
+| line 9 | tracked exemptions elsewhere: 328 |
+| line 10 | workflows: 5 files, triggers/SHA pins/flow style/continue-on-error/permissions ok |
+| line 11 | pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani, fuzz, harness, ci-verdict) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, mutation shard matrix 0…23 in both workflows, delegations mapped (accident guard, not tamper-proof) |
+| line 12 | large-files: 3518 tracked files, none over 2 MiB except 5 allowlisted (hard cap 8 MiB) |
+| line 13 | mutants-profile: mutants-harness starts m0_early::* first (priority 100) |
+
+
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   2 policy          PASS          1s  unsafe-attrs: 43 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 157 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 476 files; relay-events: 7 names as expect::RELAY_TRACE_ALLOW; normal-deps: 6 crates within expect::NORMAL_DEPENDENCY_ALLOW; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted; tracked exemptions elsewhere: 328; workflows: 5 files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani, fuzz, harness, ci-verdict) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, mutation shard matrix 0…23 in both workflows, delegations mapped (accident guard, not tamper-proof); large-files: 3518 tracked files, none over 2 MiB except 5 allowlisted (hard cap 8 MiB); mutants-profile: mutants-harness starts m0_early::* first (priority 100)
+step: PASS

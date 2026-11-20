@@ -722,4 +722,11 @@ fn absent_answers_keep_one_put_chain() {
         .collect();
     let gap = min_gap(&all);
     assert!(gap >= MIN_MS, "min_gap {gap} ms over {} starts", all.len());
+    let puts = starts(&d, host.idx, ControlKind::LinkPut(n));
+    assert!(puts.len() >= 8, "{} put attempts in 24 h", puts.len());
+    let last = puts.iter().copied().max().unwrap_or(0);
+    assert!(
+        last >= start.saturating_add(18 * 3_600_000),
+        "the put chain still runs in the last 6 h: last start {last}"
+    );
 }

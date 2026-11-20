@@ -2134,7 +2134,7 @@ impl Scheduler {
     }
 
     /// Queue a control operation (spec §10.6 (2)).
-    /// A `LINK_PUT` or owner-status `LINK_GET` that joins the operation already queued for its link data (Q304, `ControlOps::coalesced`) returns that operation's id; no id is taken and nothing is drawn.
+    /// A `LINK_PUT` or owner-status `LINK_GET` that joins the operation of its kind already waiting for its link data (Q304, `ControlOps::coalesced`) returns that operation's id; no id is taken and nothing is drawn.
     ///
     /// # Errors
     /// [`SchedError::Unavailable`].
@@ -2146,7 +2146,7 @@ impl Scheduler {
         related: u64,
         when: When,
     ) -> Result<OpId, SchedError> {
-        // Q304 (EXT3b-4): it joins the link data's waiting or running operation
+        // Q304 (EXT3b-4): it joins the link data's waiting operation of its kind
         if let Some(op) = self.world.control.coalesced(kind, relay) {
             return Ok(op);
         }

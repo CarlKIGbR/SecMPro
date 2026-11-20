@@ -118,13 +118,11 @@ impl ControlOps {
         });
     }
 
-    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A `LINK_PUT` joins one that waits or runs (its outcome restores the link data, or it is queued again, or its invitation is no longer offered, Q298); an owner query joins one that waits only (the answer of a running one queues its successor, possibly before it is done). `None` for every other kind.
+    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (at most one running and one waiting per link data and relay) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
     #[must_use]
     pub fn coalesced(&self, kind: ControlKind, relay: RelayId) -> Option<OpId> {
-        let joins = |o: &Op| match kind {
-            ControlKind::LinkPut(_) => true,
-            ControlKind::LinkGetOwner(_) => !o.running,
-            _ => false,
+        let joins = |o: &Op| {
+            matches!(kind, ControlKind::LinkPut(_) | ControlKind::LinkGetOwner(_)) && !o.running
         };
         self.ops
             .iter()
@@ -602,9 +600,9 @@ mod tests {
         Ok(())
     }
 
-    /// UA1 — Q304 (EXT3b-4; V-EXT3b-34 T4-1): a `LINK_PUT` of a link data that has one waiting or running joins it — nothing is queued and nothing is drawn (Q301), also without randomness; another link data's put is queued.
+    /// UA1 — Q304 (EXT3b-4; V-EXT3b-34 T4-1): a `LINK_PUT` of a link data that has one WAITING joins it — nothing is queued and nothing is drawn (Q301), also without randomness; one requested while the put runs is queued (S9, EXT3c-2); another link data is its own chain.
     #[test]
-    fn link_put_joins_the_waiting_or_running_put() -> Result<(), Unavailable> {
+    fn link_put_joins_only_a_waiting_put() -> Result<(), Unavailable> {
         let params = Params::default();
         let (mut rng, mut none, mut ops) = (
             TimingRng::seeded(43),
@@ -627,9 +625,34 @@ mod tests {
         let again = ops.due_of(OpId(1)).ok_or(Unavailable)?;
         assert_eq!(ops.take_due(again).len(), 1);
         ops.schedule(&params, &mut none, OpId(3), again, put(7, When::Prompt))?;
-        assert_eq!((ops.len(), ops.kind_of(OpId(3))), (1, None), "running");
+        assert_eq!(
+            (ops.len(), ops.kind_of(OpId(3))),
+            (2, Some(ControlKind::LinkPut(7))),
+            "running: queued"
+        );
         ops.schedule(&params, &mut rng, OpId(4), again, put(8, When::Delayed))?;
-        assert_eq!(ops.len(), 2, "another link data");
+        assert_eq!(ops.len(), 3, "another link data");
+        Ok(())
+    }
+
+    /// S9 — Q304 (A) (EXT3c-2): a `LINK_PUT` requested while the link data's put RUNS is queued; when the running one ends done, the queued one is still there and due.
+    #[test]
+    fn reput_requested_while_a_put_runs_is_queued() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let (mut rng, mut ops) = (TimingRng::seeded(44), ControlOps::new());
+        let put = spec(ControlKind::LinkPut(7), 7, When::Delayed);
+        ops.schedule(&params, &mut rng, OpId(1), 0, put)?;
+        let due = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+        assert_eq!(ops.take_due(due).len(), 1);
+        ops.schedule(&params, &mut rng, OpId(2), due.saturating_add(1_000), put)?;
+        assert_eq!(
+            (ops.len(), ops.kind_of(OpId(2))),
+            (2, Some(ControlKind::LinkPut(7)))
+        );
+        ops.done(OpId(1));
+        assert_eq!(ops.len(), 1);
+        let d = ops.due_of(OpId(2)).ok_or(Unavailable)?;
+        assert!(d >= due.saturating_add(61_000), "due {d}");
         Ok(())
     }
 

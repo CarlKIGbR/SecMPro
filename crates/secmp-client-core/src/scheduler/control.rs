@@ -531,12 +531,9 @@ mod tests {
     /// The least difference of consecutive start times of `starts` (in start order; `u64::MAX` for fewer than two).
     fn min_gap(starts: &[(OpId, u64)]) -> u64 {
         starts
-            .windows(2)
-            .filter_map(|w| {
-                w.get(1)
-                    .zip(w.first())
-                    .map(|(b, a)| b.1.saturating_sub(a.1))
-            })
+            .iter()
+            .zip(starts.iter().skip(1))
+            .map(|(a, b)| b.1.saturating_sub(a.1))
             .min()
             .unwrap_or(u64::MAX)
     }

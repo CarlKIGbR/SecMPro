@@ -2726,8 +2726,8 @@ Deviations: the `Result` of `job_hub` is spelled through a type alias `JobHub` (
 
 **Not in this unit.** EXT3b-1 (ii) (HB-64); EXT3b-2 (M7-S8, HB-29); EXT3b-6; the residual of HB-30 (an ordinary queue added between a creation's planning and its `OK`).
 
-**Gates.** pending
+**Gates.** fmt and clippy (`-D warnings`) clean; `secmp-client-core --features kat` 390/390 (381 + 9); harness subset (`m7_owner`, `m6_control`, `m6_mut`, `m7_pool`, `m6_driver_fix`, `m6_reconnect`, `m7_accept`) 109/109; `cargo xtask step --strict policy` PASS.
 
-**ci-fast.** pending
+**ci-fast.** (run on 39eb90b, the second run; the first was red on the scan `scheduler_reads_no_ui_state` only) `ci-fast: PASS`, workspace 1682/1682 (1673 + 9), harness 350/350 (349 + T4-3; harness step 1792 s), 0 skipped; evidence `docs/reviews/M07-evidence/s7-ci-fast.txt`.
 
-Deviations: pending
+Deviations: the dictated `min_gap` helper used `.windows(2)`, refused by the scan `scheduler_reads_no_ui_state`; rewritten without it (WEISUNG M7-S7b); the first ci-fast run was red on that scan only. Also: the red-first run used `--no-fail-fast`; the `queue_new` helper names `OpId` by path (not imported in the core tests); S5-1's local `send` is `added` (clippy `similar_names`); `cargo fmt` laid out the dictated code; `git add -u` was used because `scheduler/core` matches a `.gitignore` pattern.

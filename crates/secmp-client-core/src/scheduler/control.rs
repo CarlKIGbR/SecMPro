@@ -8,6 +8,7 @@
 
 use crate::scheduler::core::backoff::reconnect_delay;
 use crate::scheduler::params::Params;
+use crate::scheduler::run::CONNECT_TIMEOUT_MS;
 use crate::scheduler::types::{ControlKind, OpId, QueueId, RelayId};
 use crate::timing::{TimingRng, Unavailable};
 
@@ -118,7 +119,7 @@ impl ControlOps {
         });
     }
 
-    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (at most one running and one waiting per link data and relay) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
+    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; an attempt lasts up to `CONNECT_TIMEOUT_MS` and delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
     #[must_use]
     pub fn coalesced(&self, kind: ControlKind, relay: RelayId) -> Option<OpId> {
         let joins = |o: &Op| {
@@ -307,8 +308,9 @@ impl ControlOps {
     }
 
     /// A `FETCH` of `queue` returned no present cell at `now`: the operations that waited for it start their delay
-    /// `U[1 min, 60 min]` from `max(now, the latest related start)`. Without randomness they keep waiting (fail closed:
-    /// nothing is deleted without its delay).
+    /// `U[1 min, 60 min]` from `max(now, the latest related start)`; when an operation of the same correlation runs, from
+    /// `now + CONNECT_TIMEOUT_MS` — its command may still leave until then (EXT3c-1, M7-S9b). Without randomness they keep
+    /// waiting (fail closed: nothing is deleted without its delay).
     pub fn note_empty_fetch(
         &mut self,
         params: &Params,
@@ -322,12 +324,18 @@ impl ControlOps {
                 continue;
             }
             let related = op.related;
+            let running = self.ops.iter().any(|o| o.related == related && o.running);
+            let floor = if running {
+                now.saturating_add(CONNECT_TIMEOUT_MS)
+            } else {
+                now
+            };
             let started = self
                 .last_start
                 .iter()
                 .filter(|(r, _)| *r == related)
                 .map(|(_, t)| *t)
-                .fold(now, u64::max);
+                .fold(floor, u64::max);
             let (lo, hi) = params.control_delay_ms;
             let Ok(drawn) = rng.uniform(lo, hi) else {
                 continue;
@@ -653,6 +661,43 @@ mod tests {
         assert_eq!(ops.len(), 1);
         let d = ops.due_of(OpId(2)).ok_or(Unavailable)?;
         assert!(d >= due.saturating_add(61_000), "due {d}");
+        Ok(())
+    }
+
+    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + CONNECT_TIMEOUT_MS` — the running one may still send its command until then; with none running, from `now` or the latest related start, as before.
+    #[test]
+    fn deletion_armed_while_a_related_operation_runs_waits_out_the_attempt()
+    -> Result<(), Unavailable> {
+        let params = Params {
+            control_delay_ms: (60_000, 60_000),
+            ..Params::default()
+        };
+        // the second operation's due time after the first (`first`, correlation 7) started at `t0`, the deletion of `q` was
+        // queued at `t0 + 1 000` and armed at `t0 + 2 000`; `finish` ends the first before the arming
+        let armed = |first: ControlKind, finish: bool| -> Result<(Option<u64>, u64), Unavailable> {
+            let (mut rng, mut ops, q) = (TimingRng::seeded(45), ControlOps::new(), QueueId(5));
+            ops.schedule(&params, &mut rng, OpId(1), 0, spec(first, 7, When::Delayed))?;
+            let t0 = ops.due_of(OpId(1)).ok_or(Unavailable)?;
+            assert_eq!(ops.take_due(t0).len(), 1);
+            let del = spec(ControlKind::QueueDel(q), 7, When::AfterEmptyFetch(q));
+            ops.schedule(&params, &mut rng, OpId(2), t0.saturating_add(1_000), del)?;
+            if finish {
+                ops.done(OpId(1));
+            }
+            ops.note_empty_fetch(&params, &mut rng, q, t0.saturating_add(2_000));
+            Ok((ops.due_of(OpId(2)), t0))
+        };
+        let (due, t0) = armed(ControlKind::LinkPut(7), false)?;
+        let running = t0.saturating_add(2_000 + 120_000 + 60_000);
+        assert_eq!(due, Some(running), "c) a put runs");
+        let (due, t0) = armed(ControlKind::LinkPut(7), true)?;
+        assert_eq!(due, Some(t0.saturating_add(2_000 + 60_000)), "d) done");
+        let (due, t0) = armed(ControlKind::LinkGetOwner(7), false)?;
+        assert_eq!(
+            due,
+            Some(t0.saturating_add(2_000 + 120_000 + 60_000)),
+            "e) a query runs"
+        );
         Ok(())
     }
 

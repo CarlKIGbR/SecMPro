@@ -280,23 +280,17 @@ fn content_is_locked_until_protection_is_verified() -> Test {
 }
 
 /// T11: the per-session override shows the content; it is held in the model only, so a second model on the same profile
-/// directory starts locked and nothing was written.
-#[cfg(not(windows))]
+/// directory starts locked and no file under the profile directory changed (names, sizes, modification times).
+#[cfg(target_os = "linux")]
 #[test]
 fn session_override_shows_content_and_is_not_persisted() -> Test {
     i_slint_backend_testing::init_no_event_loop();
     let ui = MainWindow::new()?;
     let root = scratch("t11");
-    std::fs::create_dir_all(root.join("alice"))?;
-    let listing = |dir: &Path| -> Result<Vec<String>, std::io::Error> {
-        let mut names = Vec::new();
-        for entry in std::fs::read_dir(dir)? {
-            names.push(entry?.file_name().to_string_lossy().into_owned());
-        }
-        names.sort();
-        Ok(names)
-    };
-    let before = listing(&root.join("alice"))?;
+    std::fs::create_dir_all(&root)?;
+    create_profile(&root.join("alice"), b"right", None).map_err(|_| "create alice")?;
+    let before = snapshot(&root.join("alice"))?;
+    assert!(!before.is_empty());
     let (mut vm, bridge) = zed(Protection::Locked);
     assert!(vm.override_available());
     vm.override_session();
@@ -311,9 +305,29 @@ fn session_override_shows_content_and_is_not_persisted() -> Test {
     bridge.shutdown();
     let second = Vm::new(Lang::En, Screen::Unlock, "alice");
     assert_eq!(second.protection(), Protection::Locked);
-    assert_eq!(listing(&root.join("alice"))?, before);
+    assert_eq!(snapshot(&root.join("alice"))?, before);
     remove(&root);
     Ok(())
+}
+
+/// Every file under `dir` with its size and modification time, in path order.
+#[cfg(target_os = "linux")]
+fn snapshot(dir: &Path) -> Result<Vec<(PathBuf, u64, std::time::SystemTime)>, std::io::Error> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next)? {
+            let entry = entry?;
+            let meta = entry.metadata()?;
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                found.push((entry.path(), meta.len(), meta.modified()?));
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
 }
 
 /// A window whose three calls give the scripted outcomes.

@@ -2469,28 +2469,40 @@ mod tests {
     /// window of `secmp-ui` is the literal `"SecMPro"`, assigned once, on every screen state — no property or binding feeds it.
     #[test]
     fn window_title_is_constant_product_name() -> Result<()> {
-        let src = repo_file("crates/secmp-ui/src/screens.rs")?;
-        let titles: Vec<&str> = src
-            .lines()
-            .map(str::trim)
-            .filter(|l| l.starts_with("title:") || l.starts_with("title :"))
-            .collect();
-        assert_eq!(titles, ["title: \"SecMPro\";"]);
-        // nothing sets a window title at run time
-        for file in [
-            "app.rs",
-            "probe.rs",
-            "capture.rs",
-            "vm.rs",
-            "core_backend.rs",
-            "bridge.rs",
-        ] {
-            let text = repo_file(&format!("crates/secmp-ui/src/{file}"))?;
+        // every source file of the crate: nothing sets a window title at run time, and the only binding of a `title` is the
+        // literal (a `title` property that something could feed, or a second binding, is a finding)
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-ui/src");
+        let mut titles = Vec::new();
+        let mut files = 0_usize;
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            files += 1;
+            let text = lf(&std::fs::read_to_string(&path)?);
             assert!(
                 !text.contains("set_title") && !text.contains("with_title"),
-                "{file}"
+                "{}",
+                path.display()
             );
+            for line in text.lines().map(str::trim) {
+                let binds = line.strip_prefix("title").is_some_and(|rest| {
+                    let rest = rest.trim_start();
+                    rest.starts_with(':') || rest.starts_with("<=>") || rest.starts_with('=')
+                });
+                assert!(
+                    !line.contains("<string> title"),
+                    "{}: a title property",
+                    path.display()
+                );
+                if binds {
+                    titles.push(line.to_owned());
+                }
+            }
         }
+        assert!(files >= 8, "the scan found {files} files");
+        assert_eq!(titles, ["title: \"SecMPro\";"]);
         Ok(())
     }
 

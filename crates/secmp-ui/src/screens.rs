@@ -33,6 +33,7 @@ slint::slint! {
         in property <bool> busy: false;
         in property <string> busy-text;
         in property <string> error-text;
+        in property <string> unavailable-text;
 
         // onboarding
         in property <string> onboarding-title;
@@ -95,6 +96,13 @@ slint::slint! {
                 color: #b3261e;
                 wrap: word-wrap;
                 visible: root.error-text != "";
+                accessible-role: text;
+            }
+            Text {
+                text: root.unavailable-text;
+                color: #8a5a00;
+                wrap: word-wrap;
+                visible: root.unavailable-text != "";
                 accessible-role: text;
             }
             Text {

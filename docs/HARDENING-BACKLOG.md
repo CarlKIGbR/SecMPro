@@ -79,5 +79,7 @@ Items deferred under ADR-062 (build phase M8–M10). Every item is closed in the
 | HB-73 | Slint `unstable-winit-030` handle access — re-evaluate against a stable API at each Slint upgrade (used only to obtain the native window handle for capture exclusion, `capture.rs`; ADR-063). | M8 U1 (ADR-063) | Open |
 | HB-74 | `vm::same_secret` compares the two passphrase fields with a hand-written constant-time loop: `secmp-crypto` exposes constant-time equality only for fixed-size `SecretBytes<N>`, none for slices. Replace it when `secmp-crypto` gets a slice comparison (no API is added for M8). | M8 cross-review | Open |
 | HB-75 | The relay-view lines of the onboarding screen are the core's English strings (`relay_view::relay_view`): not localised. The core should return keys, the UI the text. | M8 cross-review | Open |
+| HB-76 | The protection state is verified once per window; re-verify when the native window is recreated (M9). | M8 delta review | Open |
+| HB-77 | The unlock screen shows the profile name before the protection is verified. | M8 delta review | Open |
 
 Rules: new rows get the next HB number and name their source; a row is closed with the commit or review that closes it, or marked "Accepted (Owner, date)".

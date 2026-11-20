@@ -51,7 +51,8 @@ fn event_of(notice: &Notice) -> Option<CoreEvent> {
     let stamped = match notice {
         Notice::Event(stamped) => stamped,
         // the loop ended or could not work: the UI shows nothing more (fail closed)
-        Notice::Stopped | Notice::Unavailable => return Some(CoreEvent::Stopped),
+        Notice::Stopped => return Some(CoreEvent::Stopped),
+        Notice::Unavailable => return Some(CoreEvent::Unavailable),
         _ => return None,
     };
     match stamped.event {
@@ -132,9 +133,8 @@ impl CoreBackend {
         if let Some(Ok(_)) = set {
             UiResponse::Opened
         } else {
-            // the mode was not stored: close the runtime, the profile is unlocked by the user (default mode Strict)
-            self.host = None;
-            UiResponse::NotOpened
+            // the profile is open and runs in the default mode (Strict); the user is told the choice was not stored
+            UiResponse::OpenedModeNotSaved
         }
     }
 
@@ -228,7 +228,7 @@ mod tests {
         );
         assert_eq!(event_of(&at(Event::InvitationUsedElsewhere)), None);
         assert_eq!(event_of(&Notice::Stopped), Some(CoreEvent::Stopped));
-        assert_eq!(event_of(&Notice::Unavailable), Some(CoreEvent::Stopped));
+        assert_eq!(event_of(&Notice::Unavailable), Some(CoreEvent::Unavailable));
         assert_eq!(event_of(&Notice::Refused), None);
     }
 }

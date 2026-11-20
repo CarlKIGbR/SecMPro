@@ -85,6 +85,8 @@ pub enum Failure {
     Busy,
     /// The engine or the bridge's thread is gone.
     Stopped,
+    /// The profile was created, but the chosen mode was not stored.
+    ModeNotSaved,
 }
 
 impl Failure {
@@ -99,6 +101,7 @@ impl Failure {
             Self::Unlock => key::ERROR_UNLOCK,
             Self::Busy => key::ERROR_BUSY,
             Self::Stopped => key::ERROR_STOPPED,
+            Self::ModeNotSaved => key::ONBOARDING_MODE_NOT_SAVED,
         }
     }
 }
@@ -172,6 +175,7 @@ pub struct Vm {
     relay_lines: Vec<String>,
     failure: Option<Failure>,
     busy: bool,
+    unavailable: bool,
     protection: Protection,
 }
 
@@ -187,6 +191,7 @@ impl Vm {
             relay_lines: Vec::new(),
             failure: None,
             busy: false,
+            unavailable: false,
             protection: Protection::Locked,
         }
     }
@@ -208,14 +213,23 @@ impl Vm {
         !matches!(self.protection, Protection::Locked)
     }
 
-    /// Whether the per-session override of CS-1.9 is offered: only while locked, and not on Windows (where M8 has none).
+    /// Whether the per-session override of CS-1.9 is offered: only while locked, and only on Linux (M8 has none elsewhere).
+    #[cfg(target_os = "linux")]
     #[must_use]
     pub const fn override_available(&self) -> bool {
-        !cfg!(windows) && matches!(self.protection, Protection::Locked)
+        matches!(self.protection, Protection::Locked)
+    }
+
+    /// The per-session override of CS-1.9 is not offered on this platform.
+    #[cfg(not(target_os = "linux"))]
+    #[must_use]
+    pub const fn override_available(&self) -> bool {
+        false
     }
 
     /// The user chose to show content on an unprotected display for this process. Held in memory only: nothing is written,
     /// and no file, flag or environment variable can set it.
+    #[cfg(target_os = "linux")]
     pub fn override_session(&mut self) {
         if self.override_available() {
             self.protection = Protection::Overridden;
@@ -268,6 +282,16 @@ impl Vm {
         &self.relay_lines
     }
 
+    /// The banner for a transient engine notice, or empty.
+    #[must_use]
+    pub fn unavailable_text(&self) -> &'static str {
+        if self.unavailable {
+            locale::text(self.lang, key::ENGINE_UNAVAILABLE)
+        } else {
+            ""
+        }
+    }
+
     /// The message of the last failure, in the language of the interface; the same text for every cause of
     /// [`Failure::Unlock`].
     #[must_use]
@@ -280,17 +304,13 @@ impl Vm {
     #[must_use]
     pub fn rows(&self) -> Vec<RowText> {
         if !self.content_visible() {
-            // fail closed: one placeholder per row, nothing of the contact
-            return self
-                .contacts
-                .iter()
-                .map(|_| RowText {
-                    name: locale::text(self.lang, key::CONTENT_LOCKED).to_owned(),
-                    key: String::new(),
-                    status: String::new(),
-                    verified: false,
-                })
-                .collect();
+            // fail closed: one placeholder line, whatever the number of contacts (the count is content)
+            return vec![RowText {
+                name: locale::text(self.lang, key::CONTENT_LOCKED).to_owned(),
+                key: String::new(),
+                status: String::new(),
+                verified: false,
+            }];
         }
         self.contacts
             .iter()
@@ -377,12 +397,24 @@ impl Vm {
 
     /// Take one response (or event) of the bridge.
     pub fn apply(&mut self, response: Response, bridge: &Bridge) {
+        // an answer means the engine is working; a notice does not say so
+        if !matches!(response, Response::Event(_)) {
+            self.unavailable = false;
+        }
         match response {
             Response::Opened => {
                 self.busy = false;
                 self.failure = None;
                 self.screen = Screen::Contacts;
                 self.submit(bridge, Request::Contacts);
+            }
+            Response::OpenedModeNotSaved => {
+                self.busy = false;
+                self.screen = Screen::Contacts;
+                self.submit(bridge, Request::Contacts);
+                if self.failure.is_none() {
+                    self.failure = Some(Failure::ModeNotSaved);
+                }
             }
             Response::NotOpened => {
                 // the profile exists: unlock it instead of creating it again
@@ -396,6 +428,7 @@ impl Vm {
             }
             Response::Contacts(rows) => self.contacts = rows,
             Response::RelayView(lines) => self.relay_lines = lines,
+            Response::Event(CoreEvent::Unavailable) => self.unavailable = true,
             Response::Event(CoreEvent::Stopped) => {
                 self.busy = false;
                 self.screen = Screen::Stopped;

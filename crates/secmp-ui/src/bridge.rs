@@ -60,8 +60,10 @@ pub enum CoreEvent {
     ContactRemoved(i64),
     /// A contact's key changed.
     KeyChanged(i64),
-    /// The core's loop stopped or could not work: nothing more is shown.
+    /// The core's loop stopped for good, or the bridge's thread ended: nothing more is shown.
     Stopped,
+    /// The core could not finish something just now and tries again: a transient notice, the screen stays.
+    Unavailable,
 }
 
 /// What comes back to the UI.
@@ -71,6 +73,8 @@ pub enum Response {
     Opened,
     /// The profile was created but could not be opened: it is to be unlocked.
     NotOpened,
+    /// The profile is open, but the mode chosen at creation was not stored.
+    OpenedModeNotSaved,
     /// The request did not go through.
     Failed(Failure),
     /// The contacts.
@@ -143,9 +147,27 @@ impl Bridge {
     }
 }
 
+/// Tells the UI that the bridge's thread ended while the bridge was still wanted (a backend that panicked after it had
+/// accepted a request): the request would never be answered otherwise.
+struct Dying<'a> {
+    sink: &'a Sink,
+    armed: bool,
+}
+
+impl Drop for Dying<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            (self.sink)(Response::Event(CoreEvent::Stopped));
+        }
+    }
+}
+
 fn serve(mut backend: impl Backend, inbox: &Receiver<Request>, sink: &Sink) {
+    let mut guard = Dying { sink, armed: true };
     while let Ok(request) = inbox.recv() {
         let response = backend.handle(request, sink);
         sink(response);
     }
+    // the bridge was dropped: an orderly end
+    guard.armed = false;
 }

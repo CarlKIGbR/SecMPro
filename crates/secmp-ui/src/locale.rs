@@ -101,16 +101,20 @@ pub mod key {
     pub const OVERRIDE_SHOW: &str = "override.show";
     /// The engine ended or its thread is gone.
     pub const ERROR_STOPPED: &str = "error.stopped";
+    /// The engine could not work on something just now; it tries again.
+    pub const ENGINE_UNAVAILABLE: &str = "engine.unavailable";
+    /// The profile was created but the traffic mode was not stored.
+    pub const ONBOARDING_MODE_NOT_SAVED: &str = "onboarding.mode_not_saved";
 }
 
 use key::{
     APP_TAGLINE, CONTACTS_EMPTY, CONTACTS_REINVITE, CONTACTS_REMOVED, CONTACTS_TITLE,
-    CONTACTS_UNNAMED, CONTACTS_UNVERIFIED, CONTACTS_VERIFIED, CONTENT_LOCKED, ERROR_BUSY,
-    ERROR_CREATE, ERROR_EMPTY_PASS, ERROR_MISMATCH, ERROR_NAME, ERROR_STOPPED, ERROR_UNLOCK,
-    INDICATOR_LOCKED, INDICATOR_OVERRIDDEN, INDICATOR_PROTECTED, MODE_BALANCED, MODE_LOWBW,
-    MODE_STRICT, ONBOARDING_CREATE, ONBOARDING_MODE, ONBOARDING_NAME, ONBOARDING_PASS,
-    ONBOARDING_PASS_AGAIN, ONBOARDING_RELAY_VIEW, ONBOARDING_TITLE, OVERRIDE_SHOW, UNLOCK_BUTTON,
-    UNLOCK_PASS, UNLOCK_TITLE, WORKING,
+    CONTACTS_UNNAMED, CONTACTS_UNVERIFIED, CONTACTS_VERIFIED, CONTENT_LOCKED, ENGINE_UNAVAILABLE,
+    ERROR_BUSY, ERROR_CREATE, ERROR_EMPTY_PASS, ERROR_MISMATCH, ERROR_NAME, ERROR_STOPPED,
+    ERROR_UNLOCK, INDICATOR_LOCKED, INDICATOR_OVERRIDDEN, INDICATOR_PROTECTED, MODE_BALANCED,
+    MODE_LOWBW, MODE_STRICT, ONBOARDING_CREATE, ONBOARDING_MODE, ONBOARDING_MODE_NOT_SAVED,
+    ONBOARDING_NAME, ONBOARDING_PASS, ONBOARDING_PASS_AGAIN, ONBOARDING_RELAY_VIEW,
+    ONBOARDING_TITLE, OVERRIDE_SHOW, UNLOCK_BUTTON, UNLOCK_PASS, UNLOCK_TITLE, WORKING,
 };
 
 /// The English table.
@@ -157,6 +161,14 @@ pub static EN: &[(&str, &str)] = &[
     (
         ERROR_STOPPED,
         "The engine has stopped. Close and start the application again.",
+    ),
+    (
+        ENGINE_UNAVAILABLE,
+        "The engine could not finish something just now and will try again.",
+    ),
+    (
+        ONBOARDING_MODE_NOT_SAVED,
+        "The profile was created, but the traffic mode was not saved. The default (Strict) is in use.",
     ),
 ];
 
@@ -207,6 +219,14 @@ pub static DE: &[(&str, &str)] = &[
     (
         ERROR_STOPPED,
         "Die Verarbeitung wurde beendet. Schließen Sie die Anwendung und starten Sie sie neu.",
+    ),
+    (
+        ENGINE_UNAVAILABLE,
+        "Die Verarbeitung konnte etwas gerade nicht abschließen und versucht es erneut.",
+    ),
+    (
+        ONBOARDING_MODE_NOT_SAVED,
+        "Das Profil wurde angelegt, aber der Verkehrsmodus wurde nicht gespeichert. Es gilt der Standard (Strikt).",
     ),
 ];
 

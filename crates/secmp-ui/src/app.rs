@@ -64,6 +64,7 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
     ui.set_busy(vm.busy());
     ui.set_busy_text(t(key::WORKING));
     ui.set_error_text(SharedString::from(vm.error_text()));
+    ui.set_unavailable_text(SharedString::from(vm.unavailable_text()));
 
     ui.set_onboarding_title(t(key::ONBOARDING_TITLE));
     ui.set_name_label(t(key::ONBOARDING_NAME));
@@ -125,6 +126,7 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
             render(&sh.ui, &sh.vm);
         });
     });
+    #[cfg(target_os = "linux")]
     ui.on_override_requested(|| {
         with_shell(|sh| {
             sh.vm.override_session();
@@ -238,7 +240,8 @@ pub fn run(root: &Path, direct: bool) -> ExitCode {
     // other platform, leaves the display locked (fail closed)
     let armed = capture::arm(&ui, |outcome| {
         let protection = outcome.map_or(Protection::Locked, |report| report.protection());
-        let _ = slint::invoke_from_event_loop(move || deliver_protection(protection));
+        // the task runs on the UI thread: the outcome is taken there, directly
+        deliver_protection(protection);
     });
     if armed.is_err() {
         // the model starts locked and stays so; the window is still shown, without content

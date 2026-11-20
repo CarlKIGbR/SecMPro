@@ -2,23 +2,45 @@
 
 Branch: `m08-desktop-ui` · Base: `d3799116ebc54f325667b0c172e5e2ea09e70356` · Author: Claude Code (Sonnet 5.5) · Date: 2026-11-20 · Regime: ADR-062 (build phase)
 
-## 1. Plan (written before implementation, updated during)
+## 1. Plan
 
-| Step | What | Proves | Status |
-|---|---|---|---|
-| U0 | CI: jobs `miri` and `coverage` out of `linux-full` (+ dispatch twins, `ci-verdict` needs, xtask pins, `harness` required) | `cargo xtask policy` / xtask tests | open |
-| U1.1–3 | Slint pins (femtovg + software, no Skia), `windows-sys` for WDA, vet/deny/advisory handling, ADR-063 | `cargo xtask ci-fast` deny/vet/audit/cooldown | open |
-| U1.4 | `slint!` main window, `--probe`, `set_exclude_from_capture`/`display_affinity` (`cfg(windows)`), fail-closed before first show | T1, T5; xwin cross-build | open |
-| U1.5–6 | `docs/reviews/M8-spike.md`, mechanical go/no-go gate | T1–T4, ci-fast, xwin step | open |
-| U2 | `bridge`/`vm`/`screens`/`locale`; onboarding, unlock, contacts; HB line for Slint passphrase copies | T2, T3, T6–T9 | open |
-| Tests | exactly T1–T9 of the brief | — | open |
+| Step | What | Status |
+|---|---|---|
+| U0 | `miri` and `coverage` jobs out of `linux-full`; `harness` required | done (`29124e3`) |
+| U1 | Slint pins, supply chain, ADR-063, WDA bindings, probe, `M8-spike.md` | done (`0ceb1ab`, `815933d`); xwin step could not run here (below) |
+| U2 | bridge / vm / screens / locale; onboarding, unlock, contacts | done (`815933d`) |
 
-Status 2026-11-20: U0 done (commit `29124e3`; `cargo nextest run -p xtask`: 330/330, `cargo xtask policy` PASS). U1 code written, **not committed**, build blocked (§8).
+Not in this brief: invitations, conversation, safety number, settings, Tor status, indicators, retention, screen security beyond the two probes (M9).
 
-Not in this brief: invitations, conversation, safety number, settings, Tor status, indicators, retention, screen-security beyond the two probes (M9).
+## 3. Evidence
 
-## 8. Blocked / questions
+| Item | Command | Result |
+|---|---|---|
+| U0 | `cargo nextest run -p xtask`; `cargo xtask policy` | 332/332; PASS |
+| T1, T2, T6–T9 | `cargo nextest run -p secmp-ui` | 8 passed (incl. T3 and the M0 `hello` test with `--version`) |
+| T3 | `locale::tests::locale_tables_en_de_have_identical_key_sets` | pass |
+| T4 | `policy::tests::ui_crate_dependencies_are_allowlisted` | pass |
+| T5 | `secmp-sys-desktop` `capture_exclusion_rejects_null_window`, `cfg(windows)` | not run on this host; compiled and linted: `cargo clippy -p secmp-sys-desktop --target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings` PASS; runs in `windows-native` |
+| fontconfig switch | `util::tests::child_cargo_env_sets_fontconfig_dlopen` | pass |
+| ci-fast | `cargo xtask ci-fast --delegated harness` | PASS (fmt, clippy, policy, deny, vet 586 exemptions, audit, cooldown, nextest, doctest, hello, kat, fuzz-check) |
+| xwin | `cargo xtask step windows-cross` | FAIL, environment: `cargo xwin` gets proxy 403 for `https://aka.ms/vs/17/release/channel` (MSVC CRT). Not run: `windows-native` after the push |
+| `--probe` | `cargo run -p secmp-ui -- --probe` | no display (`WAYLAND_DISPLAY`/`DISPLAY` unset), no Xvfb/weston installed: P1 FAIL, P2–P5 NOT-RUN, P6 FAIL (session unknown) |
 
-**U1 build blocked (STOP: a system library the host lacks for building).** `cargo build -p secmp-ui` fails in the build script of `yeslogic-fontconfig-sys v6.0.1` (a transitive crate of `slint` 1.18.1, text stack): `pkg-config --libs --cflags fontconfig` finds no `fontconfig.pc` (package `libfontconfig-dev`). Slint/crate versions are not the cause; the host lacks the development files. Options for the planner/owner: (a) install `libfontconfig-dev` on the host and on the CI runner images that build `secmp-ui` (`ubuntu-latest` has to be checked); (b) build with `RUST_FONTCONFIG_DLOPEN=1` (the crate's own switch: no link-time need, library loaded at run time) — an environment setting in xtask/CI, needs the reviewer's acceptance as an engineering ADR item. Not done: neither was applied, the brief says STOP. Further system libraries may surface after this one (the build stopped at the first failure).
+## 5. Deviations from the brief / WEISUNG
 
-The U1/U2 sources are in the working tree of branch `m08-desktop-ui`, uncommitted, uncompiled against Slint. Also open: after U2, `secmp-ui` depends on `secmp-client-core` (store, vendored OpenSSL), which `cargo xwin` cannot build (ADR-034 Amendment 1, `XWIN_EXCLUDE` lists `secmp-ui`); the brief's U1 gate line "the xwin step builds `secmp-ui`" is only reachable before that dependency is added. Also: HWND access needs Slint feature `unstable-winit-030` (not in the brief's list); `raw-window-handle-06` would need a direct `raw-window-handle` dependency, which T4 forbids.
+- fontconfig: `RUST_FONTCONFIG_DLOPEN=1` set by xtask is not sufficient (`fontique` needs its feature `fontconfig-dlopen`, not forwarded by Slint). `secmp-sys-desktop` enables `i-slint-common/fontconfig-dlopen` on Linux (new direct dependency, in the allowlist row of `secmp-sys-desktop`; `secmp-ui` keeps its three). xtask still sets the variable. ADR-063 (4).
+- `cargo update -p … --precise` pinned `zcheapstr 1.2.0`, `vtable(-macro) 0.5.0`, `nix 0.31.3` (cooldown, younger than 7 days).
+- Licences: only `BSL-1.0` added to the allowlist; the Slint family takes per-crate `GPL-3.0-only` exceptions (10 crates), the two `LicenseRef` ids are not needed.
+- Slint macro output triggers `missing_docs`; `mod screens` is private (no allow).
+- Commit split: the U1 commit has no `secmp-ui` sources; they are in the U2 commit (one module graph).
+- The xwin U1 gate line could not be evidenced (above).
+
+## 6. Dependencies
+
+See ADR-063 (`docs/08-decisions.md`): slint, i-slint-backend-testing (dev), i-slint-common (feature only), windows-sys features; 316 crates added to `Cargo.lock`, 281 vet exemptions added / 23 dropped, 22 `skip` entries, 6 advisory ignores (HB-66…HB-71).
+
+## 7. Open risks
+
+- Windows code of `secmp-ui` (`capture.rs`) compiles only in `windows-native`.
+- The window is created inside `show()`; the exclusion call cannot be ordered strictly before the first frame; the `content_protected` window attribute is the layer that closes it. To be confirmed on the Windows VM (`--probe` P5).
+- HB-72, HB-73 (passphrase copies in Slint, `unstable-winit-030`).

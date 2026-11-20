@@ -1991,6 +1991,8 @@ pub(crate) const REQUIRED_JOBS: &[&str] = &[
     "windows-native",
     "xwin-cross",
     "linux-full",
+    // TEST-SPEC-M7 G7-07: required check of the ruleset since 2026-11-20 (owner)
+    "harness",
     // ADR-045 Amendment 2 (OWNER-M6-02): the aggregate of every other gate job
     "ci-verdict",
 ];
@@ -2017,6 +2019,9 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "fuzz",
     // TEST-SPEC-M7 G7-07 (ADR-045 Amendment 12): the testkit harness binary out of `linux-fast` and `linux-full`
     "harness",
+    // F-37 (M8 U0): the Miri subset and the coverage step out of `linux-full`
+    "miri",
+    "coverage",
     // ADR-045 Amendment 2: the one required check that fails when any other gate job did not succeed
     "ci-verdict",
 ];
@@ -2037,6 +2042,8 @@ pub(crate) const CI_VERDICT_NEEDS: &[&str] = &[
     "windows-native",
     "xwin-cross",
     "linux-full",
+    "miri",
+    "coverage",
     "ct",
     "proverif-hx",
     "proverif-link",
@@ -2069,6 +2076,9 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("fuzz", "fuzz"),
     // TEST-SPEC-M7 G7-07: the `ci-fast`/`ci-full` step `harness` runs in the job of the same name
     ("harness", "harness"),
+    // F-37 (M8 U0): the `ci-full` steps `miri` and `coverage` run in the jobs of the same name
+    ("miri", "miri"),
+    ("coverage", "coverage"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -2093,7 +2103,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
         // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --delegated miri --delegated coverage --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -2117,6 +2127,9 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("fuzz", &["cargo xtask step --strict fuzz"]),
     // TEST-SPEC-M7 G7-07: the testkit harness binary in its own job
     ("harness", &["cargo xtask step --strict harness"]),
+    // F-37 (M8 U0): the Miri subset and the coverage step in their own jobs
+    ("miri", &["cargo xtask step --strict miri"]),
+    ("coverage", &["cargo xtask step --strict coverage"]),
     // ADR-045 Amendment 2: the verdict over the needs of every other gate job
     ("ci-verdict", &["cargo xtask step --strict ci-verdict"]),
 ];
@@ -2170,6 +2183,15 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ),
     // TEST-SPEC-M7 G7-07: on every event, like `linux-fast`, which delegates its step here
     ("harness", None),
+    // F-37 (M8 U0): like `linux-full`, which delegates the steps here
+    (
+        "miri",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "coverage",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
     // ADR-045 Amendment 2: after every gate job whatever its outcome, on the events the gate jobs run on
     (
         "ci-verdict",
@@ -2198,6 +2220,9 @@ pub(crate) const JOB_BUDGETS: &[(&str, u64)] = &[
     ("fuzz", 120),
     // TEST-SPEC-M7 G7-07 (OPEN-M7-18 A)
     ("harness", 150),
+    // F-37 (M8 U0)
+    ("miri", 150),
+    ("coverage", 150),
     ("ci-verdict", 15),
 ];
 
@@ -2220,6 +2245,9 @@ pub(crate) const DISPATCH_TWINS: &[(&str, &str)] = &[
     ("dispatch-fuzz", "fuzz"),
     // TEST-SPEC-M7 G7-07
     ("dispatch-harness", "harness"),
+    // F-37 (M8 U0)
+    ("dispatch-miri", "miri"),
+    ("dispatch-coverage", "coverage"),
 ];
 
 /// TEST-SPEC-M7 G7-00 (TEST-SPEC-M7:286; ADR-015 exception list (3)): the `ctutils` 0.4.4 cooldown exception expired on

@@ -249,7 +249,80 @@ jobs:
       # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1), step 9
       # `kani` in the `kani` job (WEISUNG M6-11)
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --delegated miri --delegated coverage --models tr
+
+  # F-37 (M8 U0): `linux-full` took 262 of 300 min on the M7 head. The Miri subset (step 9 `miri`) and the coverage
+  # step (step 7 `coverage`) run as their own jobs; `linux-full` delegates them (`--delegated miri --delegated coverage`).
+  # Same events, runner, tool install and caches as `linux-full`; the jobs run exactly the steps, unchanged.
+  miri:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-pv-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (Miri, fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Miri subset (step 9 miri)
+        run: cargo xtask step --strict miri
+
+  coverage:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-pv-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (Miri, fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Coverage (step 7 coverage)
+        run: cargo xtask step --strict coverage
 
   # docs/06 §5 step 9 `kani` as its own job (WEISUNG M6-11, VD-M6-A-23): on main the step took 66.8 min inside
   # `linux-full`; with the seven `secmp-client-core` harnesses of M6 (9.8 min on the runner) `linux-full` passed its
@@ -584,6 +657,8 @@ jobs:
       - windows-native
       - xwin-cross
       - linux-full
+      - miri
+      - coverage
       - ct
       - proverif-hx
       - proverif-link

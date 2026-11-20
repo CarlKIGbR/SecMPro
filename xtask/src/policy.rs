@@ -3121,14 +3121,14 @@ mod tests {
     /// TEST-SPEC-M7 G7-07 (OPEN-M7-18 A, ADR-045 Amendment 12): the testkit `harness` binary runs in the pinned job
     /// `harness` (gate line, 150 min, every event) and its dispatch twin `dispatch-harness`; `linux-fast` and `linux-full`
     /// delegate the step there, `windows-native` runs it by name; the job is in `PINNED_JOBS`, `CI_VERDICT_NEEDS`,
-    /// `DELEGATED_TO` and `REQUIRED_GATE_RUNS` (not yet a required check: G7-20 follows the owner's ruleset change) and
+    /// `DELEGATED_TO` and `REQUIRED_GATE_RUNS` (a required check since the owner's ruleset change of 2026-11-20, F-37) and
     /// in the docs/06 §4 job table; the `kat` step no longer runs the binary, and the three runs together still cover
     /// every test: the workspace run and the kat run of the testkit leave out exactly the binary the harness step selects.
     #[test]
     fn harness_job_is_pinned() -> Result<()> {
         assert!(expect::PINNED_JOBS.contains(&"harness"));
         assert!(expect::CI_VERDICT_NEEDS.contains(&"harness"));
-        assert!(!expect::REQUIRED_JOBS.contains(&"harness"));
+        assert!(expect::REQUIRED_JOBS.contains(&"harness"));
         assert!(expect::DELEGATED_TO.contains(&("harness", "harness")));
         assert!(expect::REQUIRED_JOB_CONDITIONS.contains(&("harness", None)));
         let runs = |job: &str| -> Vec<&str> {

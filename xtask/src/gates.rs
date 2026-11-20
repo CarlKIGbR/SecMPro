@@ -7353,7 +7353,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\n  mutants:\n    needs: mutants-shard\n    if: always() && github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/24\n  mutants:\n    needs: mutants-shard\n    if: always() && github.event_name == 'schedule' && github.event.schedule == '17 2 * * 0'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  miri:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict miri\n  coverage:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict coverage\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - miri\n      - coverage\n      - ct\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -7621,11 +7621,11 @@ mod tests {
                 &ci.replace("|| github.event_name == 'pull_request'", "")
             ))
             .len(),
-            7
+            9
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 14);
+        assert_eq!(parsed.len(), 16);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -7655,7 +7655,7 @@ mod tests {
 
     /// TEST-SPEC-M6 X-07 `optional_jobs_are_not_required` [O-20][O-21]: `tor-smoke` and `ks-hour` exist only in
     /// `ci-dispatch.yml`, once each, under their own suite only (never in `all`); `REQUIRED_JOBS` is unchanged against the C1
-    /// head (re-dictated: the five names including `ci-verdict`, ADR-045 Amendment 2); `ci.yml` — the required checks and what
+    /// head (re-dictated: the six names including `harness` (owner, 2026-11-20) and `ci-verdict`, ADR-045 Amendment 2); `ci.yml` — the required checks and what
     /// they delegate to — names neither job and starts neither program, so no required job reaches a host beyond the
     /// loopback. Planted variants are findings.
     #[test]
@@ -7667,6 +7667,7 @@ mod tests {
                 "windows-native",
                 "xwin-cross",
                 "linux-full",
+                "harness",
                 "ci-verdict"
             ]
         );
@@ -8061,7 +8062,7 @@ mod tests {
     /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat harness hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr\n{PINNED_EXTRA}"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat harness hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --delegated miri --delegated coverage --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -8226,7 +8227,7 @@ mod tests {
                 ),
                 (
                     "linux-full without --delegated proverif-link",
-                    ci.replacen(" --delegated proverif-link --delegated harness --models tr", " --delegated harness --models tr", 1),
+                    ci.replacen(" --delegated proverif-link --delegated harness", " --delegated harness", 1),
                 ),
                 // TEST-SPEC-M7 G7-07: the harness job deleted, its gate line changed, or a delegation dropped
                 ("delete harness", without_job(ci, "harness")),
@@ -8240,7 +8241,7 @@ mod tests {
                 ),
                 (
                     "linux-full without --delegated harness",
-                    ci.replacen(" --delegated harness --models tr", " --models tr", 1),
+                    ci.replacen(" --delegated harness --delegated miri", " --delegated miri", 1),
                 ),
                 (
                     "harness skipped on push",

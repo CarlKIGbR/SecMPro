@@ -1218,6 +1218,32 @@ reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
 
 **Consequences.** Defects found in the hardening phase sit under more code and cost more to fix. Security evidence for build-phase code is weaker until the hardening phase is done; alpha users must treat the product as unaudited. Mitigations: (2a) the suite and gates stay green, (2c) one cross-review per push, (3) the end-to-end test per milestone, (4) full rigour for crypto, protocol, wire and `unsafe` changes. DoD (docs/06 §8) item 8 and the milestone-sequence rule are relaxed for M8–M10 only; from M11 on they apply again. The backlog is a release gate, so it cannot be forgotten.
 
+### ADR-063 — Slint and platform binding pins for M8 (engineering)
+
+**Context.** ADR-013 chose Slint for the desktop UI; ADR-033 fixed how `secmp-ui` carries it (`deny(unsafe_code)`, no build script). M8 adds it to the workspace, with the Windows capture-exclusion bindings (WDA) in `secmp-sys-desktop`.
+
+**Decision.** (1) Pins: `slint =1.18.1` (1.19.0 of 2026-11-16 is younger than 7 days) with `default-features = false` and the features `std`, `compat-1-18` (the one the release requires), `backend-winit`, `renderer-femtovg`, `renderer-software`, `accessibility`, `unstable-winit-030`; dev-dependency `i-slint-backend-testing =1.18.1`; `windows-sys =0.61.2` (already in the lock) with `Win32_UI_WindowsAndMessaging` for `secmp-sys-desktop` on `cfg(windows)`; `i-slint-common =1.18.1` with `fontconfig-dlopen` for `secmp-ui`. 289 unique crate names are added to `Cargo.lock` (316 package entries, as several crates appear in two versions), none removed. (2) Renderer: femtovg + software, no Skia: no prebuilt-binary download in the build; no Qt, no `slint-build`, no interpreter. (3) `unstable-winit-030` is used to obtain the native window handle for capture exclusion (and the content-protection window attribute) and to observe window focus loss (view-once release); it is semver-exempt in Slint, hence the exact pin; every Slint upgrade re-checks this call site (HB-73). (4) fontconfig is loaded at run time instead of linked at build time; the build needs no fontconfig development files and no environment variable. `yeslogic-fontconfig-sys` offers the switch `RUST_FONTCONFIG_DLOPEN=1`, but alone it does not compile (`fontique` needs its own feature `fontconfig-dlopen`, which Slint does not forward); `secmp-ui` therefore depends directly on `i-slint-common` (same exact pin as `slint`) with that feature, a crate no code uses. `secmp-ui`'s direct dependencies are {`secmp-client-core`, `secmp-sys-desktop`, `slint`, `i-slint-common`} (`cargo xtask policy`, T4). Every Linux desktop the client targets ships fontconfig; a missing library is a start-up error, not a silent fallback. (5) Licences: `BSL-1.0` is added to the allowlist of `deny.toml`; the ten Slint-family crates (`slint`, `slint-macros`, `i-slint-{backend-selector,backend-winit,common,compiler,core,core-macros,renderer-femtovg,renderer-software}`) take the `GPL-3.0-only` alternative of "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0" as per-crate exceptions (ADR-013's single copyleft exception; the two LicenseRef ids are not needed and not added). (6) Supply chain: `cargo vet regenerate imports` refreshed the imported audits; 281 tracked exemptions added (23 stale ones dropped; 586 in total), each noted as a transitive dependency of Slint; the normal closure of `secmp-crypto`/`secmp-proto` still has 0. 22 `skip` entries for duplicate versions in `deny.toml`. (7) RustSec: six informational "unmaintained" advisories on transitive crates are ignored with reason and a backlog row: RUSTSEC-2026-0543 `chrono` (HB-66, already ignored, now also compiled via `i-slint-core`), RUSTSEC-2026-0441 `pin-utils` (HB-67), RUSTSEC-2026-0192 `ttf-parser` (HB-68), RUSTSEC-2026-0371 `zbus_names` (HB-69), RUSTSEC-2026-0370 `zvariant` (HB-70), RUSTSEC-2026-0372 `zvariant_derive` (HB-71); no vulnerability advisory. (8) `secmp-ui` stays in `XWIN_EXCLUDE` (ADR-034 Amendment 1, through `secmp-client-core`); its Windows build will be evidenced by the `windows-native` run of the push (pending). `secmp-ui` and its dependency closure, including the GPL-3.0 Slint crates, link only into the `secmp-ui` binary.
+
+Panic policy: the release profile uses `panic = "abort"`; a panic in the bridge thread ends the process (fail closed). The `Dying` guard only serves unwinding test builds.
+
+**Alternatives.** Skia renderer (downloads a prebuilt binary at build time: rejected); egui stays the fallback of ADR-013; `raw-window-handle-06` for the window handle (needs a direct `raw-window-handle` dependency of `secmp-ui`: rejected); installing the fontconfig development files on host and runners (rejected by the reviewer).
+
+**Consequences.** The Slint closure adds 289 crate names, 281 tracked exemptions and six accepted advisories to review at the hardening phase.
+
+**Status.** Accepted (reviewer, 2026-11-20; pins and build settings that execute ADR-013; owner delegations of 2026-10-29 and 2026-11-10; BSL-1.0 allowed by the reviewer in BRIEF_M8).
+
+### ADR-064 — QR code generation in the UI (engineering)
+
+**Context.** The M8 screens show a QR code for the invitation URI and for the safety number (BRIEF M8-P2 U4, U5). The toolkit has no QR encoder.
+
+**Decision.** `qrcode =0.14.1` with `default-features = false`: pure Rust, no dependencies (no `image`, no `svg`), licence `MIT OR Apache-2.0` (already allowed). 0.15.0 (2026-11-19) is younger than 7 days; 0.14.1 (2024-07-05) is the newest older one. `secmp-ui` renders the module matrix into a Slint image itself. `cargo vet`: one tracked exemption added (`safe-to-deploy`), none dropped; the crate is outside the `secmp-crypto`/`secmp-proto` closure. `secmp-ui`'s direct dependencies become {`secmp-client-core`, `secmp-sys-desktop`, `slint`, `i-slint-common`, `qrcode`} (`cargo xtask policy`).
+
+**Alternatives.** An encoder of our own — rejected: an untested encoder that silently produces unreadable codes.
+
+**Consequences.** One crate added to `Cargo.lock` and to the review list of the hardening phase.
+
+**Status.** Accepted (reviewer, 2026-11-21; engineering, delegation of 2026-09-30).
+
 ---
 
 *Template for new entries:*

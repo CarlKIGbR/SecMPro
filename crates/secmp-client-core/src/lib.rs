@@ -13,6 +13,10 @@
 //! [`runtime`] (re-exported as `api::runtime`) connects the hub, the tokio driver and the transport providers for a host.
 #![forbid(unsafe_code)]
 
+/// The zeroising wrapper for the secrets a host hands in (a passphrase), so that a host needs no crypto crate of its own.
+#[cfg(not(kani))]
+pub use secmp_crypto::Zeroizing;
+
 #[cfg(not(kani))]
 pub mod api;
 pub mod clock;

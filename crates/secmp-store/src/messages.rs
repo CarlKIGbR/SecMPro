@@ -75,6 +75,31 @@ pub struct StoredMessage {
     pub payload: Zeroizing<Vec<u8>>,
 }
 
+/// The statement of [`Store::history`]: a view-once row (kind 3: none is ever written, `insert_message` refuses it) is read
+/// without its payload, whatever a row holds.
+pub(crate) const HISTORY_SQL: &str = "SELECT id, msg_id, direction, kind, ts_ms, CASE WHEN kind = 3 THEN x'' ELSE payload END \
+     FROM messages WHERE contact_id = ?1 AND id < ?2 AND (expire_at_ms IS NULL OR expire_at_ms > ?3) \
+     ORDER BY id DESC LIMIT ?4";
+
+/// The most rows one [`Store::history`] call returns.
+pub const HISTORY_MAX: u16 = 200;
+
+/// One row of the history as [`Store::history`] reads it (no `Debug`: the payload is the user's text).
+pub struct HistoryRow {
+    /// The row's id: the cursor to pass as `before` for the page of older messages.
+    pub cursor: i64,
+    /// The message id.
+    pub msg_id: [u8; 16],
+    /// In or out.
+    pub direction: Direction,
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// When (milliseconds of the store's clock).
+    pub ts_ms: u64,
+    /// The payload; empty for a view-once.
+    pub payload: Zeroizing<Vec<u8>>,
+}
+
 /// A held view-once message.
 struct Held {
     msg_id: [u8; 16],
@@ -190,6 +215,63 @@ impl Store {
             ts_ms: u64::try_from(ts).map_err(|_| Error::Unavailable)?,
             payload,
         }))
+    }
+
+    /// The history of `contact_id`, newest first: at most `limit` (at most [`HISTORY_MAX`]) messages older than the row
+    /// `before` (`None`: from the newest), without those whose `expire_after` has run out at `now_ms`. A view-once is never in
+    /// the history; a row of kind 3 would be returned without its payload. Read only.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails or a row does not fit the types.
+    pub fn history(
+        &self,
+        contact_id: i64,
+        before: Option<i64>,
+        limit: u16,
+        now_ms: u64,
+    ) -> Result<Vec<HistoryRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(HISTORY_SQL)
+            .map_err(|_| Error::Unavailable)?;
+        let rows = stmt
+            .query_map(
+                params![
+                    contact_id,
+                    before.unwrap_or(i64::MAX),
+                    i64_of(now_ms)?,
+                    i64::from(limit.min(HISTORY_MAX))
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, Vec<u8>>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, i64>(4)?,
+                        Zeroizing::new(r.get::<_, Vec<u8>>(5)?),
+                    ))
+                },
+            )
+            .map_err(|_| Error::Unavailable)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (cursor, id, direction, kind, ts, payload) = row.map_err(|_| Error::Unavailable)?;
+            out.push(HistoryRow {
+                cursor,
+                msg_id: <[u8; 16]>::try_from(id.as_slice()).map_err(|_| Error::Unavailable)?,
+                direction: match direction {
+                    0 => Direction::In,
+                    1 => Direction::Out,
+                    // no writer stores another value: the uniform error
+                    _ => return Err(Error::Unavailable),
+                },
+                kind: u8::try_from(kind).map_err(|_| Error::Unavailable)?,
+                ts_ms: u64::try_from(ts).map_err(|_| Error::Unavailable)?,
+                payload,
+            });
+        }
+        Ok(out)
     }
 
     /// Delete every message whose `expire_after` has run out at `now_ms` (§7.6); returns how many.
@@ -553,6 +635,33 @@ mod tests {
             Some(b"in".as_slice())
         );
         assert!(store.view_once_held(&received, 0));
+        Ok(())
+    }
+
+    /// X1 (M8 U9): a history row whose direction is neither 0 nor 1 makes the read fail with the uniform error.
+    #[test]
+    fn history_rejects_unknown_direction_value() -> R {
+        let dir = TempDir::new("x1-direction")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.insert_message(&NewMessage {
+            contact_id: 1,
+            msg_id: [1; 16],
+            direction: Direction::In,
+            kind: 1,
+            ts_ms: 1,
+            expire_after: 0,
+            payload: b"ok",
+        })?;
+        assert_eq!(store.history(1, None, 10, 0)?.len(), 1);
+        store.connection_kat().execute(
+            "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+             VALUES (1, x'02020202020202020202020202020202', 2, 1, 2, NULL, x'00')",
+            [],
+        )?;
+        assert!(matches!(
+            store.history(1, None, 10, 0),
+            Err(Error::Unavailable)
+        ));
         Ok(())
     }
 

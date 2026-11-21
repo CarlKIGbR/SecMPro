@@ -9,5 +9,21 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# docs/02 §3, ADR-063: the client core, the desktop system layer and the toolkit; nothing else (`cargo xtask policy`).
+[dependencies]
+secmp-client-core.workspace = true
+secmp-sys-desktop.workspace = true
+slint.workspace = true
+# ADR-063: only to switch on its feature `fontconfig-dlopen` (fontconfig is loaded at run time); no code uses the crate.
+i-slint-common.workspace = true
+# ADR-064: the module matrix of the invitation's and the safety number's QR code.
+qrcode.workspace = true
+
+[dev-dependencies]
+i-slint-backend-testing.workspace = true
+# The relay process and the profile helpers of the end-to-end test `two_profiles_exchange_invitation_and_messages_…` (as for
+# `secmp-cli`'s `cli_it`); never in a shipped build.
+secmp-testkit = { workspace = true, features = ["harness"] }
+
 [lints]
 workspace = true

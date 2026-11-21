@@ -800,7 +800,7 @@ fn driver_deletion_armed_while_put_prepare_stalls_keeps_60s() {
         x.control
             .lock()
             .unwrap()
-            .prepare_wait_kind
+            .prepare_wait_once
             .push((put, 170_000));
         let op = x
             .sched
@@ -827,19 +827,36 @@ fn driver_deletion_armed_while_put_prepare_stalls_keeps_60s() {
                 .map(|(_, t)| *t)
                 .collect()
         };
-        let puts = at(put);
-        assert!(
-            puts.iter().all(|t| *t <= t_a + L),
-            "put commands {puts:?}, t_a {t_a}"
+        let (puts, dels) = (at(put), at(del));
+        let log = x.driver.log().unwrap();
+        let starts: Vec<u64> = log
+            .admitted
+            .iter()
+            .filter(|(o, _)| *o == op)
+            .map(|(_, t)| *t)
+            .collect();
+        let ctx = format!(
+            "t_a {t_a}, L {L}, put starts {puts:?}, deletion starts {dels:?}, admissions {starts:?}"
         );
-        let dels = at(del);
+        // (a) the retried put issued a command
+        assert!(!puts.is_empty(), "no put command: {ctx}");
+        // (b) the first attempt issued none: it was cut at t_a + L, and no put command lies between that and the retry's
+        // admission
+        let retry = *starts.get(1).expect("the put was retried");
+        assert!(retry >= t_a + L, "retry before the deadline: {ctx}");
+        assert!(
+            puts.iter().all(|p| *p >= retry),
+            "a put command of the first attempt: {ctx}"
+        );
+        // (c) every put command and every deletion command are at least 60 s apart; the deletion starts no earlier than
+        // t_a + L + 60 s
+        for p in &puts {
+            for q in &dels {
+                assert!(p.abs_diff(*q) >= 60_000, "p {p}, q {q}: {ctx}");
+            }
+        }
         let first_del = *dels.first().expect("the deletion ran");
-        let last_put = puts.iter().copied().max().unwrap_or(t_a);
-        assert!(
-            first_del >= last_put + 60_000,
-            "gap {} ms",
-            first_del - last_put
-        );
+        assert!(first_del >= t_a + L + 60_000, "{ctx}");
     });
 }
 
@@ -857,4 +874,111 @@ fn driver_prompt_link_put_obeys_the_limit() {
     assert!(r.runs(kind).is_empty(), "run entered");
     assert!(r.setup.provider.connects().is_empty(), "connected");
     r.assert_first_end(ControlEnd::LinkFailed(false));
+}
+
+/// A clock that follows the paused tokio time plus a settable offset (ms): the host clock jumps ahead of the timer.
+struct Skewed {
+    inner: secmp_client_core::clock::TokioClock,
+    offset: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl secmp_client_core::clock::Clock for Skewed {
+    fn mono_ms(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+        self.inner
+            .mono_ms()
+            .saturating_add(self.offset.load(Ordering::SeqCst))
+    }
+
+    fn unix_secs(&self) -> u64 {
+        self.inner.unix_secs()
+    }
+}
+
+/// T9: the explicit clock check decides when the timer lags. The handshake completes at `t_a + L − 1 s` by tokio time, while
+/// the clock — jumped ahead by 5 s — reads past `t_a + L`: `run` is not entered, the link failed before it was up. (Without
+/// the clock predicate of `before_deadline` and the check before `up = true` the command is written: shown red locally.)
+#[test]
+fn driver_control_clock_check_blocks_run_when_timer_lags() {
+    use secmp_client_core::clock::Clock;
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::core::Scheduler;
+    use secmp_client_core::scheduler::run::{ControlEnd, Driver, Only};
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId, Transport};
+    use secmp_client_core::sessions::actor::Conversations;
+    use secmp_client_core::timing::TimingRng;
+    use secmp_testkit::harness::{CostedWorker, Costs, TestControl, TestDirectory, TestHandshakes};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let relay = &setup.relay;
+        let offset = Arc::new(AtomicU64::new(0));
+        let clock = Arc::new(Skewed {
+            inner: relay.clock(),
+            offset: Arc::clone(&offset),
+        });
+        let late = Late {
+            inner: setup.provider.clone(),
+            delay_ms: L - 11_000,
+        };
+        let worker = CostedWorker::new(
+            Arc::new(Mutex::new(Conversations::new())),
+            Costs::default(),
+            relay.clock(),
+        );
+        let control =
+            TestControl::new(relay.access_key(), "m6-tokio-ctl", 0).with_clock(relay.clock());
+        let material = Arc::clone(&control.material);
+        let mut driver = Driver::new(
+            Arc::new(Only::new(late, Transport::Tor)),
+            Arc::new(TestDirectory::new(relay.relay_ref(), relay.access_key())),
+            Arc::new(control),
+            TestHandshakes::new("m6-tokio-hs", 0),
+            worker,
+            Arc::clone(&clock),
+        )
+        .with_log();
+        let params = Params {
+            control_delay_ms: (60_000, 60_000),
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(67));
+        let kind = ControlKind::LinkPut(9);
+        material
+            .lock()
+            .unwrap()
+            .prepare_wait_kind
+            .push((kind, 10_000));
+        let t0 = clock.mono_ms();
+        let op = sched
+            .schedule_control(t0, kind, RelayId(0), 1, When::Prompt)
+            .unwrap();
+        driver.run_until(&mut sched, t0 + 1_000).await.unwrap();
+        let t_a = driver
+            .log()
+            .unwrap()
+            .admitted
+            .iter()
+            .find_map(|(o, t)| (*o == op).then_some(*t))
+            .unwrap();
+        driver.run_until(&mut sched, t_a + 100_000).await.unwrap();
+        // the clock jumps ahead; the timer (tokio time) still has 20 s to go
+        offset.store(5_000, Ordering::SeqCst);
+        driver
+            .run_until(&mut sched, t_a + L + 10_000)
+            .await
+            .unwrap();
+        assert!(
+            material.lock().unwrap().run_entered.is_empty(),
+            "run entered"
+        );
+        let first = driver
+            .log()
+            .unwrap()
+            .controls
+            .iter()
+            .find_map(|(_, o, e)| (*o == op).then_some(*e));
+        assert_eq!(first, Some(ControlEnd::LinkFailed(false)));
+    });
 }

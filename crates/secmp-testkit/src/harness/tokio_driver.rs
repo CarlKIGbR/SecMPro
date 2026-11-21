@@ -99,6 +99,8 @@ pub struct ControlMaterial {
     /// EXT3d-1 test hook: `prepare` of this kind awaits a tokio timer for these virtual ms — every call, as a hub lock held
     /// (not `spawn_blocking`: paused time does not drive it).
     pub prepare_wait_kind: Vec<(ControlKind, u64)>,
+    /// EXT3d-1 test hook: as `prepare_wait_kind`, but only the FIRST `prepare` of the kind waits (the entry is used up).
+    pub prepare_wait_once: Vec<(ControlKind, u64)>,
     /// EXT3d-1 record: every entry of `run` — kind and the clock's monotonic ms (needs [`TestControl::with_clock`]).
     pub run_entered: Vec<(ControlKind, u64)>,
 }
@@ -147,11 +149,17 @@ impl ControlRunner for TestControl {
         relay: RelayId,
     ) -> Result<Option<Self::Prepared>, TransportError> {
         let (wait, skip) = {
-            let m = self.material.lock().unwrap();
-            let by_kind = m
-                .prepare_wait_kind
+            let mut m = self.material.lock().unwrap();
+            let once = m
+                .prepare_wait_once
                 .iter()
-                .find_map(|(k, w)| (*k == kind).then_some(*w));
+                .position(|(k, _)| *k == kind)
+                .map(|i| m.prepare_wait_once.remove(i).1);
+            let by_kind = once.or_else(|| {
+                m.prepare_wait_kind
+                    .iter()
+                    .find_map(|(k, w)| (*k == kind).then_some(*w))
+            });
             (by_kind.unwrap_or(m.prepare_wait_ms), m.skip.contains(&kind))
         };
         if wait > 0 {

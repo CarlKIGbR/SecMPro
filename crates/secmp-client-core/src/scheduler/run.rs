@@ -804,11 +804,14 @@ pub const WRITE_STALL_MS: u64 = 10_000;
 /// (HB-64: no command write starts at or after the deadline).
 async fn before_deadline<F: Future>(
     mut deadline: std::pin::Pin<&mut tokio::time::Sleep>,
+    expired: impl Fn() -> bool,
     fut: F,
 ) -> Option<F::Output> {
     let mut fut = std::pin::pin!(fut);
     core::future::poll_fn(|cx| {
-        if deadline.as_mut().poll(cx).is_ready() {
+        // the timer is polled first so that its waker is registered
+        let timer = deadline.as_mut().poll(cx).is_ready();
+        if timer || expired() {
             return core::task::Poll::Ready(None);
         }
         fut.as_mut().poll(cx).map(Some)
@@ -860,7 +863,8 @@ where
         }
     }
 
-    /// Change the connect timeout (default [`CONNECT_TIMEOUT_MS`]).
+    /// Change the connect timeout (default [`CONNECT_TIMEOUT_MS`]). A larger value does not extend the limit of a control
+    /// operation, which never exceeds [`CONNECT_TIMEOUT_MS`] (HB-64, the S-9b floor counts with that constant).
     #[must_use]
     pub const fn with_connect_timeout(mut self, ms: u64) -> Self {
         self.connect_timeout = Duration::from_millis(ms);
@@ -1368,19 +1372,26 @@ where
         let runner = Arc::clone(&self.runner);
         let clock = Arc::clone(&self.clock);
         let mut entropy = self.entropy.next();
-        let limit_ms = u64::try_from(self.connect_timeout.as_millis()).unwrap_or(u64::MAX);
+        // D1: never above the constant the S-9b floor of `ControlOps::note_empty_fetch` uses
+        let limit_ms = u64::try_from(self.connect_timeout.as_millis())
+            .unwrap_or(u64::MAX)
+            .min(CONNECT_TIMEOUT_MS);
         self.controls.retain(|t| !t.is_finished());
         self.controls.push(tokio::spawn(async move {
             // HB-64 (EXT3d-1): one deadline from the admission for `prepare`, the connect, the handshake and the command; an
             // overflow counts as expired
             let deadline = admitted.checked_add(limit_ms);
-            let expired = |clock: &C| deadline.is_none_or(|d| clock.mono_ms() >= d);
+            let expired = || deadline.is_none_or(|d| clock.mono_ms() >= d);
             let remaining = deadline.map_or(0, |d| d.saturating_sub(clock.mono_ms()));
             let mut deadline_sleep =
                 std::pin::pin!(tokio::time::sleep(Duration::from_millis(remaining)));
             // the deadline is polled first: a `prepare` that stalls past it sends nothing
-            let prepared =
-                before_deadline(deadline_sleep.as_mut(), runner.prepare(op, kind, relay)).await;
+            let prepared = before_deadline(
+                deadline_sleep.as_mut(),
+                &expired,
+                runner.prepare(op, kind, relay),
+            )
+            .await;
             let result = match prepared {
                 // Q300 (EXT3-1 Repro B, HB-55): the host's material before any link opens; nothing to do opens no link
                 Some(Ok(None)) => ControlResult::Done(ControlEffect::None),
@@ -1414,7 +1425,7 @@ where
                         };
                         let mut t = AsyncRelayQueueTransport::new(session);
                         // no command write starts at or after the deadline (HB-64)
-                        if expired(&clock) {
+                        if expired() {
                             return Err(false);
                         }
                         up = true;
@@ -1425,7 +1436,7 @@ where
                     };
                     // the link's life under the limit counted from admission: a hanging relay fails it, never stalls it; the
                     // deadline is polled before the attempt
-                    let outcome = before_deadline(deadline_sleep.as_mut(), attempt).await;
+                    let outcome = before_deadline(deadline_sleep.as_mut(), &expired, attempt).await;
                     match outcome {
                         Some(Ok(Ok(answer))) => match runner.commit(answer).await {
                             Ok(effect) => ControlResult::Done(effect),

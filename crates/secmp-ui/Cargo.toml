@@ -21,6 +21,9 @@ qrcode.workspace = true
 
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
+# The relay process and the profile helpers of the end-to-end test `two_profiles_exchange_invitation_and_messages_…` (as for
+# `secmp-cli`'s `cli_it`); never in a shipped build.
+secmp-testkit = { workspace = true, features = ["harness"] }
 
 [lints]
 workspace = true

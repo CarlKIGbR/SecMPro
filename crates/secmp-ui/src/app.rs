@@ -7,20 +7,23 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
-use slint::{ComponentHandle as _, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::bridge::{Bridge, Request, Response, Sink};
 use crate::capture;
 use crate::core_backend::CoreBackend;
 use crate::locale::{self, Lang, key};
-use crate::screens::{ContactRowData, MainWindow};
-use crate::vm::{ModeChoice, Protection, Screen, Vm, name_is_valid};
+use crate::screens::{ContactRowData, MainWindow, MessageRowData};
+use crate::vm::{ModeChoice, Protection, REVEAL_MAX_S, Screen, Vm, name_is_valid};
 
 struct Shell {
     ui: MainWindow,
     vm: Vm,
     bridge: Bridge,
+    /// Ends a reveal after [`REVEAL_MAX_S`] seconds, whatever the user does.
+    reveal_timer: Timer,
 }
 
 thread_local! {
@@ -45,6 +48,27 @@ fn strings(lang: Lang, keys: &[&'static str]) -> ModelRc<SharedString> {
     ))
 }
 
+/// Bring the message rows of `ui` to `rows` row by row: the rows stay the same elements while their data changes, so a
+/// view-once under the user's finger keeps its touch area when its text arrives (a new model would rebuild every row and lose
+/// the release).
+fn sync_messages(ui: &MainWindow, rows: Vec<MessageRowData>) {
+    let current = ui.get_conv_messages();
+    let Some(model) = current.as_any().downcast_ref::<VecModel<MessageRowData>>() else {
+        ui.set_conv_messages(ModelRc::new(VecModel::from(rows)));
+        return;
+    };
+    for (index, row) in rows.iter().enumerate() {
+        match model.row_data(index) {
+            Some(shown) if shown == *row => {}
+            Some(_) => model.set_row_data(index, row.clone()),
+            None => model.push(row.clone()),
+        }
+    }
+    while model.row_count() > rows.len() {
+        model.remove(model.row_count().saturating_sub(1));
+    }
+}
+
 /// Show `vm` in `ui`: the screen, every string of the screen in the language of the model, the contact rows and the state of
 /// the request. The title stays the product name (a constant of the component).
 pub fn render(ui: &MainWindow, vm: &Vm) {
@@ -56,6 +80,8 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
         Screen::Contacts => 2,
         Screen::Stopped => 3,
         Screen::Invitations => 4,
+        Screen::Conversation => 5,
+        Screen::Safety => 6,
     });
     ui.set_indicator_text(t(vm.indicator_key()));
     ui.set_indicator_locked(!matches!(vm.protection(), Protection::Verified));
@@ -103,6 +129,39 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
     ui.set_invite_qr(vm.invite_qr().map(|m| m.image()).unwrap_or_default());
     ui.set_invite_status(SharedString::from(vm.invite_status()));
 
+    ui.set_conv_title(SharedString::from(vm.conv_title()));
+    ui.set_conv_banners(ModelRc::new(VecModel::from(
+        vm.conv_banners()
+            .into_iter()
+            .map(SharedString::from)
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_conv_input_enabled(vm.conv_input_enabled());
+    ui.set_conv_empty(t(key::CONV_EMPTY));
+    ui.set_conv_input_label(t(key::CONV_INPUT_LABEL));
+    ui.set_conv_send_text(t(key::CONV_SEND));
+    ui.set_conv_safety_text(t(key::CONV_SAFETY));
+    sync_messages(
+        ui,
+        vm.conv_rows()
+            .into_iter()
+            .map(|m| MessageRowData {
+                text: m.text.into(),
+                meta: m.meta.into(),
+                incoming: m.incoming,
+                hold: m.hold,
+            })
+            .collect(),
+    );
+
+    ui.set_safety_title(t(key::SAFETY_TITLE));
+    ui.set_safety_hint(t(key::SAFETY_HINT));
+    ui.set_safety_verify_text(t(key::SAFETY_VERIFY));
+    ui.set_safety_digits(SharedString::from(vm.safety_text()));
+    ui.set_safety_qr(vm.safety_qr().map(|m| m.image()).unwrap_or_default());
+    ui.set_safety_can_verify(vm.safety_can_verify());
+    ui.set_safety_status(SharedString::from(vm.safety_status()));
+
     ui.set_contacts(ModelRc::new(VecModel::from(
         vm.rows()
             .into_iter()
@@ -114,6 +173,62 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
             })
             .collect::<Vec<_>>(),
     )));
+}
+
+/// The callbacks of the conversation and the safety number screens.
+fn wire_conversation(ui: &MainWindow) {
+    ui.on_open_contact(|index| {
+        with_shell(|sh| {
+            sh.vm
+                .open_contact(usize::try_from(index).unwrap_or(usize::MAX));
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_conv_send(|text| {
+        with_shell(|sh| {
+            // the field keeps the text until the core has taken it
+            sh.vm.send(&sh.bridge, &text);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_reveal_pressed(|index| {
+        with_shell(|sh| {
+            sh.vm
+                .reveal_press(&sh.bridge, usize::try_from(index).unwrap_or(usize::MAX));
+            if sh.vm.revealing() {
+                sh.reveal_timer.start(
+                    TimerMode::SingleShot,
+                    Duration::from_secs(REVEAL_MAX_S),
+                    || {
+                        with_shell(|sh| {
+                            sh.vm.reveal_release();
+                            render(&sh.ui, &sh.vm);
+                        });
+                    },
+                );
+            }
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_reveal_released(|| {
+        with_shell(|sh| {
+            sh.reveal_timer.stop();
+            sh.vm.reveal_release();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_open_safety(|| {
+        with_shell(|sh| {
+            sh.vm.open_safety(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_safety_verify(|| {
+        with_shell(|sh| {
+            sh.vm.verify(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
 }
 
 /// Put `vm` and `bridge` behind `ui`: the window's callbacks drive the model, which renders after every step.
@@ -149,12 +264,18 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
     });
     ui.on_back(|| {
         with_shell(|sh| {
+            let was = sh.vm.screen();
             sh.vm.leave();
-            // the field is emptied with the model's copy
+            // the fields are emptied with the model's copy
             sh.ui.set_invite_input(SharedString::new());
+            if was == Screen::Conversation {
+                sh.ui.set_conv_draft(SharedString::new());
+                sh.reveal_timer.stop();
+            }
             render(&sh.ui, &sh.vm);
         });
     });
+    wire_conversation(ui);
     ui.on_invite_create(|| {
         with_shell(|sh| {
             sh.vm.create_invitation(&sh.bridge);
@@ -182,6 +303,7 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
             ui: ui.clone_strong(),
             vm,
             bridge,
+            reveal_timer: Timer::default(),
         });
     });
 }
@@ -189,7 +311,12 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
 /// Take one response of the bridge on the UI thread.
 fn deliver(response: Response) {
     with_shell(|sh| {
+        let sent = matches!(response, Response::Sent { .. });
         sh.vm.apply(response, &sh.bridge);
+        if sent {
+            // the core took the text: the field is emptied
+            sh.ui.set_conv_draft(SharedString::new());
+        }
         render(&sh.ui, &sh.vm);
     });
 }

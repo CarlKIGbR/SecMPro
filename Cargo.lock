@@ -6266,6 +6266,7 @@ dependencies = [
  "qrcode",
  "secmp-client-core",
  "secmp-sys-desktop",
+ "secmp-testkit",
  "slint",
 ]
 

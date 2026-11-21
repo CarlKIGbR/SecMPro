@@ -3,10 +3,11 @@
 //! runs under Slint's testing backend (no display); the real core runs on a temporary directory.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
-type Test = Result<(), Box<dyn std::error::Error>>;
+pub(crate) type Test = Result<(), Box<dyn std::error::Error>>;
 
 use secmp_client_core::Zeroizing;
 use secmp_client_core::api::runtime::create_profile;
@@ -22,7 +23,7 @@ use crate::screens::MainWindow;
 use crate::vm::{ContactRow, Failure, ModeChoice, Protection, RowState, Screen, Vm};
 
 /// A sink that queues what the bridge sends, to be taken on the test's thread (the "UI thread").
-fn queue() -> (Sink, Receiver<Response>) {
+pub(crate) fn queue() -> (Sink, Receiver<Response>) {
     let (tx, rx) = channel();
     let tx = Mutex::new(tx);
     let sink: Sink = Arc::new(move |response| {
@@ -34,7 +35,12 @@ fn queue() -> (Sink, Receiver<Response>) {
 }
 
 /// Apply responses to `vm` until `done` holds.
-fn pump(vm: &mut Vm, bridge: &Bridge, rx: &Receiver<Response>, done: impl Fn(&Vm) -> bool) {
+pub(crate) fn pump(
+    vm: &mut Vm,
+    bridge: &Bridge,
+    rx: &Receiver<Response>,
+    done: impl Fn(&Vm) -> bool,
+) {
     while !done(vm) {
         let Ok(response) = rx.recv() else {
             return;
@@ -43,13 +49,13 @@ fn pump(vm: &mut Vm, bridge: &Bridge, rx: &Receiver<Response>, done: impl Fn(&Vm
     }
 }
 
-fn scratch(name: &str) -> PathBuf {
+pub(crate) fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("secmp-ui-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
 }
 
-fn row(id: i64, name: &str, verified: bool) -> ContactRow {
+pub(crate) fn row(id: i64, name: &str, verified: bool) -> ContactRow {
     ContactRow {
         id,
         name: name.to_owned(),
@@ -60,13 +66,23 @@ fn row(id: i64, name: &str, verified: bool) -> ContactRow {
 }
 
 /// The invitation the stub issues.
-const INVITE_URI: &str = "secmp://i/QWJjZGVmZ2hpamtsbW5vcA";
+pub(crate) const INVITE_URI: &str = "secmp://i/QWJjZGVmZ2hpamtsbW5vcA";
+
+/// The id of the message the stub queues.
+pub(crate) const SENT_ID: [u8; 16] = [7; 16];
+
+/// The text of a received message, the text of a view-once and the digits of the safety number, as the stub gives them.
+pub(crate) const HELLO: &str = "hello";
+pub(crate) const SECRET: &str = "the-view-once-secret";
+pub(crate) const DIGITS: &str = "12345 67890 13579 24680 11223 34455";
 
 /// A backend with scripted answers: the contacts it lists are shared with the test; with a gate it holds every
 /// `Contacts` answer until the test sends on the gate.
-struct Stub {
+pub(crate) struct Stub {
     contacts: Arc<Mutex<Vec<ContactRow>>>,
     gate: Option<Receiver<()>>,
+    /// How many `Reveal` requests reached the backend.
+    pub(crate) reveals: Arc<AtomicUsize>,
 }
 
 impl Backend for Stub {
@@ -87,16 +103,43 @@ impl Backend for Stub {
             }
             Request::RelayView(_) => Response::RelayView(Vec::new()),
             Request::Create { .. } | Request::Unlock { .. } => Response::Opened,
+            Request::Send { contact, .. } => Response::Sent {
+                contact,
+                msg_id: SENT_ID,
+            },
+            Request::Load { contact, msg_id } => Response::Message {
+                contact,
+                msg_id,
+                at_ms: 3_600_000,
+                text: Zeroizing::new(HELLO.to_owned()),
+            },
+            Request::Reveal { contact, msg_id } => {
+                self.reveals.fetch_add(1, Ordering::SeqCst);
+                Response::Revealed {
+                    contact,
+                    msg_id,
+                    text: Zeroizing::new(SECRET.to_owned()),
+                }
+            }
+            Request::SafetyNumber(contact) => Response::SafetyNumber {
+                contact,
+                digits: Zeroizing::new(DIGITS.to_owned()),
+            },
+            Request::Verify { contact, .. } => Response::Verified { contact, ok: true },
         }
     }
 }
 
-fn stub(rows: Vec<ContactRow>, gate: Option<Receiver<()>>) -> (Stub, Arc<Mutex<Vec<ContactRow>>>) {
+pub(crate) fn stub(
+    rows: Vec<ContactRow>,
+    gate: Option<Receiver<()>>,
+) -> (Stub, Arc<Mutex<Vec<ContactRow>>>) {
     let contacts = Arc::new(Mutex::new(rows));
     (
         Stub {
             contacts: contacts.clone(),
             gate,
+            reveals: Arc::new(AtomicUsize::new(0)),
         },
         contacts,
     )
@@ -115,7 +158,7 @@ fn spike_window_instantiates_under_testing_backend() -> Test {
     Ok(())
 }
 
-fn remove(dir: &Path) {
+pub(crate) fn remove(dir: &Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 

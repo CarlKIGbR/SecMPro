@@ -16,8 +16,11 @@ use secmp_client_core::api::{
 use secmp_client_core::relay_view::relay_view;
 use secmp_client_core::settings::Settings;
 
-use crate::bridge::{Backend, CoreEvent, Request as UiRequest, Response as UiResponse, Sink};
-use crate::vm::{ContactRow, Failure, ModeChoice, RowState, name_is_valid};
+use crate::bridge::{
+    Backend, CoreEvent, MsgId, Request as UiRequest, Response as UiResponse, Sink,
+};
+use crate::convo::KIND_TEXT;
+use crate::vm::{ContactRow, Failure, ModeChoice, RowState, SendReason, name_is_valid};
 
 /// How many hex digits of the fingerprint a row shows.
 const KEY_DIGITS: usize = 16;
@@ -67,7 +70,54 @@ fn event_of(notice: &Notice) -> Option<CoreEvent> {
         Event::InviteFailed(_) => Some(CoreEvent::InviteFailed),
         Event::InvitationRetired { .. } => Some(CoreEvent::InvitationRetired),
         Event::InvitationUsedElsewhere => Some(CoreEvent::InvitationUsedElsewhere),
+        Event::MessageReceived {
+            contact: ContactId(contact),
+            msg_id,
+            kind,
+        } => Some(CoreEvent::MessageReceived {
+            contact,
+            msg_id,
+            kind,
+            at_ms: stamped.at_ms,
+        }),
+        Event::Relayed {
+            contact: ContactId(contact),
+            msg_id,
+        } => Some(CoreEvent::Relayed(contact, msg_id)),
+        Event::Delivered {
+            contact: ContactId(contact),
+            msg_id,
+        } => Some(CoreEvent::Delivered(contact, msg_id)),
+        Event::NotConfirmed {
+            contact: ContactId(contact),
+            msg_id,
+        } => Some(CoreEvent::NotConfirmed(contact, msg_id)),
+        Event::ViewOnceLost(msg_id) => Some(CoreEvent::ViewOnceLost(msg_id)),
+        Event::KeyChangeInvalid(ContactId(id)) => Some(CoreEvent::KeyChangeInvalid(id)),
+        Event::ResetRequested(ContactId(id)) => Some(CoreEvent::ResetRequested(id)),
+        Event::DuplicateIdentity {
+            existing: ContactId(existing),
+            new: ContactId(new),
+        } => Some(CoreEvent::DuplicateIdentity { existing, new }),
+        Event::SuccessionPending(ContactId(id)) => Some(CoreEvent::SuccessionPending(id)),
+        Event::RotationDeferred(ContactId(id)) => Some(CoreEvent::RotationDeferred(id)),
         _ => None,
+    }
+}
+
+/// The text of a payload: the core only delivers UTF-8 (SE-20), anything else is shown with replacement characters.
+fn text_of(payload: &[u8]) -> Zeroizing<String> {
+    Zeroizing::new(String::from_utf8_lossy(payload).into_owned())
+}
+
+/// What the core said about a refused send, as far as the user is told.
+fn send_reason(error: Error) -> SendReason {
+    match error {
+        Error::Unsupported => SendReason::Unsupported,
+        Error::Blocked | Error::Unverified => SendReason::Blocked,
+        Error::Frozen => SendReason::Frozen,
+        Error::ReinviteRequired | Error::ResetRequested => SendReason::Reinvite,
+        _ => SendReason::Other,
     }
 }
 
@@ -173,6 +223,84 @@ impl CoreBackend {
         }
     }
 
+    /// One request of the core's API; every failure, and any answer that is not the core's, is [`Error::Unavailable`].
+    fn core(&self, request: Request) -> Result<Response, Error> {
+        let host = self.host.as_ref().ok_or(Error::Unavailable)?;
+        match ask(host, Call::Core(request))? {
+            Answer::Core(response) => Ok(response),
+            _ => Err(Error::Unavailable),
+        }
+    }
+
+    fn send(&self, contact: i64, text: &Zeroizing<String>) -> UiResponse {
+        let request = Request::Send {
+            contact: ContactId(contact),
+            kind: KIND_TEXT,
+            payload: Zeroizing::new(text.as_bytes().to_vec()),
+            expire_after: 0,
+        };
+        match self.core(request) {
+            Ok(Response::Sent(msg_id)) => UiResponse::Sent { contact, msg_id },
+            Err(error) => UiResponse::Failed(Failure::Send(send_reason(error))),
+            Ok(_) => UiResponse::Failed(Failure::Send(SendReason::Other)),
+        }
+    }
+
+    /// A message of the history.
+    fn load(&self, contact: i64, msg_id: MsgId) -> UiResponse {
+        let request = Request::Message {
+            contact: ContactId(contact),
+            msg_id,
+        };
+        match self.core(request) {
+            Ok(Response::Message { ts_ms, payload, .. }) => UiResponse::Message {
+                contact,
+                msg_id,
+                at_ms: ts_ms,
+                text: text_of(&payload),
+            },
+            _ => UiResponse::MessageMissing { contact, msg_id },
+        }
+    }
+
+    fn reveal(&self, contact: i64, msg_id: MsgId) -> UiResponse {
+        let request = Request::Reveal {
+            contact: ContactId(contact),
+            msg_id,
+        };
+        match self.core(request) {
+            Ok(Response::Revealed(payload)) => UiResponse::Revealed {
+                contact,
+                msg_id,
+                text: text_of(&payload),
+            },
+            _ => UiResponse::Failed(Failure::Reveal),
+        }
+    }
+
+    fn safety_number(&self, contact: i64) -> UiResponse {
+        match self.core(Request::SafetyNumber {
+            contact: ContactId(contact),
+        }) {
+            Ok(Response::SafetyNumber(digits)) => UiResponse::SafetyNumber {
+                contact,
+                digits: Zeroizing::new(digits),
+            },
+            _ => UiResponse::Failed(Failure::Safety),
+        }
+    }
+
+    fn verify(&self, contact: i64, digits: &Zeroizing<String>) -> UiResponse {
+        let request = Request::Verify {
+            contact: ContactId(contact),
+            digits: digits.as_str().to_owned(),
+        };
+        match self.core(request) {
+            Ok(Response::Verified(ok)) => UiResponse::Verified { contact, ok },
+            _ => UiResponse::Failed(Failure::Verify),
+        }
+    }
+
     fn contacts(&self) -> UiResponse {
         let Some(host) = &self.host else {
             return UiResponse::Contacts(Vec::new());
@@ -201,6 +329,11 @@ impl Backend for CoreBackend {
             UiRequest::Contacts => self.contacts(),
             UiRequest::InviteCreate => self.invite_create(),
             UiRequest::InviteAccept(uri) => self.invite_accept(uri),
+            UiRequest::Send { contact, text } => self.send(contact, &text),
+            UiRequest::Load { contact, msg_id } => self.load(contact, msg_id),
+            UiRequest::Reveal { contact, msg_id } => self.reveal(contact, msg_id),
+            UiRequest::SafetyNumber(contact) => self.safety_number(contact),
+            UiRequest::Verify { contact, digits } => self.verify(contact, &digits),
             UiRequest::RelayView(mode) => UiResponse::RelayView(
                 relay_view(mode_of(mode), self.direct)
                     .into_iter()

@@ -12,6 +12,9 @@ use secmp_client_core::Zeroizing;
 
 use crate::vm::{ContactRow, Failure, ModeChoice};
 
+/// A message id.
+pub type MsgId = [u8; 16];
+
 /// How many requests may wait for the backend; a request beyond that is refused ([`Busy`]) instead of blocking the UI.
 pub const QUEUE_DEPTH: usize = 8;
 
@@ -41,6 +44,36 @@ pub enum Request {
     InviteCreate,
     /// Accept the invitation `uri` (a capability: a secret).
     InviteAccept(Zeroizing<String>),
+    /// Send `text` to `contact`, as the core takes it (batching and fragmenting are the core's).
+    Send {
+        /// The contact.
+        contact: i64,
+        /// The text (content).
+        text: Zeroizing<String>,
+    },
+    /// Read a message of the history by its id.
+    Load {
+        /// The contact.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+    },
+    /// Show a received view-once.
+    Reveal {
+        /// The contact.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+    },
+    /// The safety number of `contact`.
+    SafetyNumber(i64),
+    /// Verify `contact` by the digits shown.
+    Verify {
+        /// The contact.
+        contact: i64,
+        /// The digits (content).
+        digits: Zeroizing<String>,
+    },
 }
 
 impl core::fmt::Debug for Request {
@@ -53,6 +86,11 @@ impl core::fmt::Debug for Request {
             Self::RelayView(_) => "RelayView",
             Self::InviteCreate => "InviteCreate",
             Self::InviteAccept(_) => "InviteAccept",
+            Self::Send { .. } => "Send",
+            Self::Load { .. } => "Load",
+            Self::Reveal { .. } => "Reveal",
+            Self::SafetyNumber(_) => "SafetyNumber",
+            Self::Verify { .. } => "Verify",
         })
     }
 }
@@ -66,6 +104,40 @@ pub enum CoreEvent {
     ContactRemoved(i64),
     /// A contact's key changed.
     KeyChanged(i64),
+    /// A message arrived (`kind` is `AppMessage.kind`; `at_ms` the core's time stamp).
+    MessageReceived {
+        /// The sender.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+        /// `AppMessage.kind`.
+        kind: u8,
+        /// When (Unix milliseconds).
+        at_ms: u64,
+    },
+    /// A message was relayed.
+    Relayed(i64, MsgId),
+    /// A message was acknowledged by the contact.
+    Delivered(i64, MsgId),
+    /// A message was relayed but no receipt came in time.
+    NotConfirmed(i64, MsgId),
+    /// A view-once was lost with the run that held it.
+    ViewOnceLost(MsgId),
+    /// The contact's key change did not verify: the session is frozen.
+    KeyChangeInvalid(i64),
+    /// The contact asked for a new session.
+    ResetRequested(i64),
+    /// A handshake presented the identity of `existing` and made `new`.
+    DuplicateIdentity {
+        /// The contact that held the identity.
+        existing: i64,
+        /// The contact the handshake created.
+        new: i64,
+    },
+    /// An identity succession towards the contact is pending.
+    SuccessionPending(i64),
+    /// A queue rotation of the contact was deferred.
+    RotationDeferred(i64),
     /// An invitation the user accepted was refused, whatever the class (it is never shown).
     InviteFailed,
     /// An invitation was retired (expired, used up or replaced).
@@ -96,6 +168,54 @@ pub enum Response {
     Invitation(Zeroizing<String>),
     /// The accept of an invitation is under way: [`CoreEvent::ContactAdded`] or [`CoreEvent::InviteFailed`] follows.
     Accepting,
+    /// The message was queued: its id.
+    Sent {
+        /// The contact.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+    },
+    /// A message of the history.
+    Message {
+        /// The contact.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+        /// When (Unix milliseconds of the store's clock).
+        at_ms: u64,
+        /// The text (content).
+        text: Zeroizing<String>,
+    },
+    /// The core has no such message in the history.
+    MessageMissing {
+        /// The contact.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+    },
+    /// The text of a view-once, to be shown while the user holds.
+    Revealed {
+        /// The contact.
+        contact: i64,
+        /// The message.
+        msg_id: MsgId,
+        /// The text (content).
+        text: Zeroizing<String>,
+    },
+    /// The safety number.
+    SafetyNumber {
+        /// The contact.
+        contact: i64,
+        /// The digits (content).
+        digits: Zeroizing<String>,
+    },
+    /// Whether the digits matched (the contact is verified then).
+    Verified {
+        /// The contact.
+        contact: i64,
+        /// The answer.
+        ok: bool,
+    },
     /// An event of the core.
     Event(CoreEvent),
 }
@@ -111,6 +231,12 @@ impl core::fmt::Debug for Response {
             Self::RelayView(_) => "RelayView",
             Self::Invitation(_) => "Invitation",
             Self::Accepting => "Accepting",
+            Self::Sent { .. } => "Sent",
+            Self::Message { .. } => "Message",
+            Self::MessageMissing { .. } => "MessageMissing",
+            Self::Revealed { .. } => "Revealed",
+            Self::SafetyNumber { .. } => "SafetyNumber",
+            Self::Verified { .. } => "Verified",
             Self::Event(_) => "Event",
         })
     }

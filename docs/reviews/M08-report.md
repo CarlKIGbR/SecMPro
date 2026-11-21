@@ -46,3 +46,26 @@ See ADR-063 (`docs/08-decisions.md`): slint, i-slint-backend-testing (dev), i-sl
 - Windows code of `secmp-ui` (`capture.rs`) compiles only in `windows-native`.
 - The window is created inside `show()`; the exclusion call cannot be ordered strictly before the first frame; the `content_protected` window attribute is the layer that closes it. To be confirmed on the Windows VM (`--probe` P5a, P5b).
 - HB-72, HB-73 (passphrase copies in Slint, `unstable-winit-030`).
+
+## 8. Part 2 (BRIEF M8-P2) — U3, U4, U5
+
+| Unit | Commit | Content |
+|---|---|---|
+| U3 | `49c61e5` | delta-review fixes 1–8 (HB-76, HB-77) |
+| U4 | `6ab8960` | invitation create/accept, QR (`qrcode =0.14.1`, ADR-064, one vet exemption, no new licence) |
+| U5 | this commit | conversation, view-once, safety number, key-change warnings |
+
+Evidence (`cargo nextest run -p secmp-ui`; `cargo xtask ci-fast --delegated harness`: PASS after U3, U4, U5):
+
+| Test | Name | Result |
+|---|---|---|
+| P1 | `tests_conv::two_profiles_exchange_invitation_and_messages_through_view_models` (relay process of `E2eRelay`, direct TLS, no Tor; both sides verify before the send, because receipts go to verified contacts only, §10.4) | pass (137 s) |
+| P2 | `tests::invite_accept_rejected_uris_show_one_message` | pass |
+| P3 | `tests::invitation_uri_is_hidden_while_locked_and_cleared_on_leave` | pass |
+| P4 | `qr::tests::qr_matrix_roundtrips_known_string` | pass |
+| P5 | `tests_conv::view_once_reveal_is_refused_unless_verified` | pass |
+| P6 | `tests_conv::key_changed_freezes_conversation_until_verified` | pass |
+| P7 | `tests_conv::no_content_strings_while_locked_on_any_screen` | pass |
+| P8 | `locale::tests::locale_tables_en_de_have_identical_key_sets` | pass |
+
+Functions added to `secmp-client-core`: none. Core gaps: no list of the message history (`Request::Message` is by id), so the conversation shows this run's messages only and a view-once lost with an earlier run has no placeholder; no accessor for persisted warning state after a restart; times are shown in UTC (no time-zone source). The invitation URI and message text leave their zeroising buffers when shown (HB-78). Not run on this host: the screens under a real display; the 20 s reveal timer and the hold area (touch events) have no test under the testing backend.

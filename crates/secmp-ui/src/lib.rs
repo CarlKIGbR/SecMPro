@@ -24,6 +24,7 @@
 pub mod app;
 pub mod bridge;
 pub mod capture;
+pub mod convo;
 pub mod core_backend;
 pub mod locale;
 pub mod probe;
@@ -31,4 +32,6 @@ pub mod qr;
 mod screens;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_conv;
 pub mod vm;

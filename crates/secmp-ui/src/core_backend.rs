@@ -11,16 +11,20 @@ use secmp_client_core::api::runtime::{
     Answer, Call, Host, Notice, RuntimeConfig, create_profile, spawn_host,
 };
 use secmp_client_core::api::{
-    Contact, ContactId, ContactState, Error, Event, Mode, Request, Response,
+    Contact, ContactId, ContactState, DisplayState, Error, Event, Mode, Request, Response,
 };
 use secmp_client_core::relay_view::relay_view;
-use secmp_client_core::settings::Settings;
+use secmp_client_core::settings::{DeliveredReceipts, Retention, Settings};
 
 use crate::bridge::{
-    Backend, CoreEvent, MsgId, Request as UiRequest, Response as UiResponse, Sink,
+    Backend, CoreEvent, HistoryItem, LinkReport, MsgId, Request as UiRequest,
+    Response as UiResponse, Sink,
 };
 use crate::convo::KIND_TEXT;
-use crate::vm::{ContactRow, Failure, ModeChoice, RowState, SendReason, name_is_valid};
+use crate::vm::{
+    ActionKind, ContactRow, Failure, ModeChoice, Protection, ReceiptChoice, RetentionChoice,
+    RowState, SendReason, SettingsView, name_is_valid,
+};
 
 /// How many hex digits of the fingerprint a row shows.
 const KEY_DIGITS: usize = 16;
@@ -29,13 +33,79 @@ const KEY_DIGITS: usize = 16;
 const INVITE_LIFETIME_S: u64 = 86_400;
 
 /// The core's mode of the user's choice.
-const fn mode_of(choice: ModeChoice) -> Mode {
+pub(crate) const fn mode_of(choice: ModeChoice) -> Mode {
     match choice {
         ModeChoice::Strict => Mode::Strict,
         ModeChoice::Balanced => Mode::Balanced,
         ModeChoice::LowBw => Mode::LowBw,
     }
 }
+
+/// The mode the UI shows for the core's.
+const fn choice_of(mode: Mode) -> ModeChoice {
+    match mode {
+        Mode::Strict => ModeChoice::Strict,
+        Mode::Balanced => ModeChoice::Balanced,
+        Mode::LowBw => ModeChoice::LowBw,
+    }
+}
+
+/// The settings as the UI shows them.
+const fn view_of(s: &Settings) -> SettingsView {
+    SettingsView {
+        mode: choice_of(s.mode),
+        retention: match s.retention {
+            Retention::Keep => RetentionChoice::Keep,
+            Retention::Days(d) => RetentionChoice::Days(d),
+        },
+        delivered: match s.delivered_receipts {
+            DeliveredReceipts::Off => ReceiptChoice::Off,
+            DeliveredReceipts::VerifiedOnly => ReceiptChoice::VerifiedOnly,
+            DeliveredReceipts::All => ReceiptChoice::All,
+        },
+        read_receipts: s.read_receipts,
+    }
+}
+
+/// The core's settings for what the UI shows.
+const fn settings_of(v: &SettingsView) -> Settings {
+    Settings {
+        mode: mode_of(v.mode),
+        retention: match v.retention {
+            RetentionChoice::Keep => Retention::Keep,
+            RetentionChoice::Days(d) => Retention::Days(d),
+        },
+        delivered_receipts: match v.delivered {
+            ReceiptChoice::Off => DeliveredReceipts::Off,
+            ReceiptChoice::VerifiedOnly => DeliveredReceipts::VerifiedOnly,
+            ReceiptChoice::All => DeliveredReceipts::All,
+        },
+        read_receipts: v.read_receipts,
+    }
+}
+
+/// The core's display state for the UI's protection state (CS-1.18).
+const fn display_of(p: Protection) -> DisplayState {
+    match p {
+        Protection::Verified => DisplayState::Protected,
+        Protection::Partial => DisplayState::PartiallyProtected,
+        Protection::Locked => DisplayState::Locked,
+        Protection::Overridden => DisplayState::Overridden,
+    }
+}
+
+/// The protection state for the core's display state.
+const fn protection_of(d: DisplayState) -> Protection {
+    match d {
+        DisplayState::Protected => Protection::Verified,
+        DisplayState::PartiallyProtected => Protection::Partial,
+        DisplayState::Locked => Protection::Locked,
+        DisplayState::Overridden => Protection::Overridden,
+    }
+}
+
+/// The relay whose spare pool a rotation takes its queue from: the profile's first (as `secmp-cli rotate`).
+const ROTATE_RELAY: u32 = 1;
 
 /// The row a contact is shown as.
 fn row_of(contact: &Contact) -> ContactRow {
@@ -263,6 +333,112 @@ impl CoreBackend {
         }
     }
 
+    /// A page of the history, newest first. Only a text has its payload shown; a view-once never has one.
+    fn history(&self, contact: i64, before: Option<i64>, limit: u16) -> UiResponse {
+        let request = Request::History {
+            contact: ContactId(contact),
+            before,
+            limit,
+        };
+        match self.core(request) {
+            Ok(Response::History(entries)) => UiResponse::History {
+                contact,
+                before,
+                limit,
+                items: entries
+                    .into_iter()
+                    .map(|e| HistoryItem {
+                        cursor: e.cursor,
+                        msg_id: e.msg_id,
+                        incoming: e.incoming,
+                        kind: e.kind,
+                        at_ms: e.ts_ms,
+                        text: (e.kind == KIND_TEXT).then(|| text_of(&e.payload)),
+                    })
+                    .collect(),
+            },
+            _ => UiResponse::HistoryFailed(contact),
+        }
+    }
+
+    fn settings(&self) -> UiResponse {
+        match self.core(Request::Settings) {
+            Ok(Response::Settings(s)) => UiResponse::Settings(view_of(&s)),
+            _ => UiResponse::Failed(Failure::Settings),
+        }
+    }
+
+    /// Store the settings; the answer is what the core holds afterwards.
+    fn set_settings(&self, view: &SettingsView) -> UiResponse {
+        match self.core(Request::SetSettings(settings_of(view))) {
+            Ok(Response::Done) => self.settings(),
+            _ => UiResponse::Failed(Failure::Settings),
+        }
+    }
+
+    /// A contact or profile action; every refusal is one failure.
+    fn action(&self, request: Request, kind: ActionKind) -> UiResponse {
+        match (self.core(request), kind) {
+            (Ok(Response::Rotated(true)), ActionKind::Rotate)
+            | (Ok(Response::Done), ActionKind::Reset | ActionKind::Remove)
+            | (Ok(Response::IdentityRotated(_)), ActionKind::Identity) => {
+                UiResponse::ActionDone(kind)
+            }
+            // a rotation the core put off is told as an event (a banner); here it did not go through
+            _ => UiResponse::Failed(Failure::Action),
+        }
+    }
+
+    /// Write the backup the user confirmed. The key derivation and the file are written off the core's loop.
+    fn export(&self, path: String, passphrase: Zeroizing<Vec<u8>>) -> UiResponse {
+        let Some(host) = &self.host else {
+            return UiResponse::Failed(Failure::Export);
+        };
+        let call = Call::Export {
+            path: PathBuf::from(path),
+            passphrase,
+            confirm: true,
+            force: false,
+        };
+        match ask(host, call) {
+            Ok(Answer::Core(Response::Done)) => UiResponse::ActionDone(ActionKind::Export),
+            Err(Error::CloudFolder) => UiResponse::Failed(Failure::ExportCloud),
+            _ => UiResponse::Failed(Failure::Export),
+        }
+    }
+
+    /// The connection as the user sees it: the transport, and whether a link is up.
+    fn status(&self) -> UiResponse {
+        let down = LinkReport {
+            direct: self.direct,
+            connected: false,
+        };
+        let Some(host) = &self.host else {
+            return UiResponse::Status(down);
+        };
+        match ask(host, Call::Status) {
+            Ok(Answer::Status(view)) => UiResponse::Status(LinkReport {
+                direct: view.direct,
+                connected: view.links > 0,
+            }),
+            _ => UiResponse::Status(down),
+        }
+    }
+
+    fn set_display(&self, protection: Protection) -> UiResponse {
+        match self.core(Request::SetDisplayState(display_of(protection))) {
+            Ok(Response::Done) => UiResponse::Display(protection),
+            _ => UiResponse::Event(CoreEvent::Unavailable),
+        }
+    }
+
+    fn display(&self) -> UiResponse {
+        match self.core(Request::DisplayState) {
+            Ok(Response::DisplayState(d)) => UiResponse::Display(protection_of(d)),
+            _ => UiResponse::Event(CoreEvent::Unavailable),
+        }
+    }
+
     fn reveal(&self, contact: i64, msg_id: MsgId) -> UiResponse {
         let request = Request::Reveal {
             contact: ContactId(contact),
@@ -334,6 +510,37 @@ impl Backend for CoreBackend {
             UiRequest::Reveal { contact, msg_id } => self.reveal(contact, msg_id),
             UiRequest::SafetyNumber(contact) => self.safety_number(contact),
             UiRequest::Verify { contact, digits } => self.verify(contact, &digits),
+            UiRequest::History {
+                contact,
+                before,
+                limit,
+            } => self.history(contact, before, limit),
+            UiRequest::Settings => self.settings(),
+            UiRequest::SetSettings(view) => self.set_settings(&view),
+            UiRequest::Rotate(contact) => self.action(
+                Request::Rotate {
+                    contact: ContactId(contact),
+                    relay: ROTATE_RELAY,
+                },
+                ActionKind::Rotate,
+            ),
+            UiRequest::ResetSession(contact) => self.action(
+                Request::ResetSession {
+                    contact: ContactId(contact),
+                },
+                ActionKind::Reset,
+            ),
+            UiRequest::Remove(contact) => self.action(
+                Request::Remove {
+                    contact: ContactId(contact),
+                },
+                ActionKind::Remove,
+            ),
+            UiRequest::RotateIdentity => self.action(Request::RotateIdentity, ActionKind::Identity),
+            UiRequest::Export { path, passphrase } => self.export(path, passphrase),
+            UiRequest::Status => self.status(),
+            UiRequest::SetDisplayState(protection) => self.set_display(protection),
+            UiRequest::DisplayState => self.display(),
             UiRequest::RelayView(mode) => UiResponse::RelayView(
                 relay_view(mode_of(mode), self.direct)
                     .into_iter()

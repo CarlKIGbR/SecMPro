@@ -10,7 +10,7 @@ use std::thread::JoinHandle;
 
 use secmp_client_core::Zeroizing;
 
-use crate::vm::{ContactRow, Failure, ModeChoice};
+use crate::vm::{ActionKind, ContactRow, Failure, ModeChoice, Protection, SettingsView};
 
 /// A message id.
 pub type MsgId = [u8; 16];
@@ -58,6 +58,15 @@ pub enum Request {
         /// The message.
         msg_id: MsgId,
     },
+    /// The messages of `contact` older than the history row `before` (`None`: from the newest), newest first, at most `limit`.
+    History {
+        /// The contact.
+        contact: i64,
+        /// The cursor of the oldest message the model has.
+        before: Option<i64>,
+        /// How many at most.
+        limit: u16,
+    },
     /// Show a received view-once.
     Reveal {
         /// The contact.
@@ -74,6 +83,31 @@ pub enum Request {
         /// The digits (content).
         digits: Zeroizing<String>,
     },
+    /// The settings of the open profile.
+    Settings,
+    /// Store the settings.
+    SetSettings(SettingsView),
+    /// Rotate the session keys with `contact`.
+    Rotate(i64),
+    /// Ask `contact` for a new session.
+    ResetSession(i64),
+    /// Remove `contact`.
+    Remove(i64),
+    /// Rotate the user's identity.
+    RotateIdentity,
+    /// Write a backup file to `path` (confirmed by the user).
+    Export {
+        /// Where.
+        path: String,
+        /// The backup passphrase (a secret).
+        passphrase: Zeroizing<Vec<u8>>,
+    },
+    /// What the connection looks like.
+    Status,
+    /// Report the display state to the core (CS-1.18).
+    SetDisplayState(Protection),
+    /// Read the display state back from the core.
+    DisplayState,
 }
 
 impl core::fmt::Debug for Request {
@@ -88,11 +122,47 @@ impl core::fmt::Debug for Request {
             Self::InviteAccept(_) => "InviteAccept",
             Self::Send { .. } => "Send",
             Self::Load { .. } => "Load",
+            Self::History { .. } => "History",
             Self::Reveal { .. } => "Reveal",
             Self::SafetyNumber(_) => "SafetyNumber",
             Self::Verify { .. } => "Verify",
+            Self::Settings => "Settings",
+            Self::SetSettings(_) => "SetSettings",
+            Self::Rotate(_) => "Rotate",
+            Self::ResetSession(_) => "ResetSession",
+            Self::Remove(_) => "Remove",
+            Self::RotateIdentity => "RotateIdentity",
+            Self::Export { .. } => "Export",
+            Self::Status => "Status",
+            Self::SetDisplayState(_) => "SetDisplayState",
+            Self::DisplayState => "DisplayState",
         })
     }
+}
+
+/// One message of a history page.
+pub struct HistoryItem {
+    /// The cursor of the row (the `before` of the next page).
+    pub cursor: i64,
+    /// The message.
+    pub msg_id: MsgId,
+    /// Whether it was received.
+    pub incoming: bool,
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// When (Unix milliseconds of the store's clock).
+    pub at_ms: u64,
+    /// The text (content); `None` for anything that is not a text (a view-once never has one).
+    pub text: Option<Zeroizing<String>>,
+}
+
+/// What the connection looks like to the user: no address, no counter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkReport {
+    /// Direct TLS instead of Tor.
+    pub direct: bool,
+    /// At least one link to a relay is up.
+    pub connected: bool,
 }
 
 /// What the core reports besides answers.
@@ -186,6 +256,27 @@ pub enum Response {
         /// The text (content).
         text: Zeroizing<String>,
     },
+    /// A page of the history, newest first.
+    History {
+        /// The contact.
+        contact: i64,
+        /// The cursor the page was asked for.
+        before: Option<i64>,
+        /// How many were asked for.
+        limit: u16,
+        /// The messages.
+        items: Vec<HistoryItem>,
+    },
+    /// The history could not be read.
+    HistoryFailed(i64),
+    /// The settings.
+    Settings(SettingsView),
+    /// A contact or profile action went through.
+    ActionDone(ActionKind),
+    /// The connection.
+    Status(LinkReport),
+    /// The display state as the core holds it.
+    Display(Protection),
     /// The core has no such message in the history.
     MessageMissing {
         /// The contact.
@@ -233,6 +324,12 @@ impl core::fmt::Debug for Response {
             Self::Accepting => "Accepting",
             Self::Sent { .. } => "Sent",
             Self::Message { .. } => "Message",
+            Self::History { .. } => "History",
+            Self::HistoryFailed(_) => "HistoryFailed",
+            Self::Settings(_) => "Settings",
+            Self::ActionDone(_) => "ActionDone",
+            Self::Status(_) => "Status",
+            Self::Display(_) => "Display",
             Self::MessageMissing { .. } => "MessageMissing",
             Self::Revealed { .. } => "Revealed",
             Self::SafetyNumber { .. } => "SafetyNumber",

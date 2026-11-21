@@ -4,7 +4,7 @@
 //! passphrase fields are cleared by the application after use.
 
 slint::slint! {
-    import { Button, LineEdit, ComboBox, ListView, ScrollView } from "std-widgets.slint";
+    import { Button, LineEdit, ComboBox, ListView, ScrollView, CheckBox } from "std-widgets.slint";
 
     export struct ContactRowData {
         name: string,
@@ -41,6 +41,15 @@ slint::slint! {
         in property <string> busy-text;
         in property <string> error-text;
         in property <string> unavailable-text;
+        // the connection line and the notice of the last action
+        in property <string> status-text;
+        in property <string> notice-text;
+        // a pending action waits for its confirm click; nothing was sent before it
+        in property <string> confirm-text;
+        in property <string> confirm-button-text;
+        in property <string> cancel-button-text;
+        callback confirm-clicked();
+        callback cancel-clicked();
 
         // onboarding
         in property <string> onboarding-title;
@@ -74,6 +83,8 @@ slint::slint! {
         callback open-contact(int);
         in property <string> contacts-invite-text;
         callback open-invitations();
+        in property <string> contacts-settings-text;
+        callback open-settings();
 
         // leaving a screen for the contact list
         in property <string> back-text;
@@ -87,6 +98,7 @@ slint::slint! {
         in property <string> invite-accept-label;
         in property <string> invite-accept-text;
         in property <string> invite-uri;
+        in property <bool> invite-input-enabled: false;
         in property <bool> invite-copyable: false;
         in property <image> invite-qr;
         in property <string> invite-status;
@@ -103,6 +115,11 @@ slint::slint! {
         in property <string> conv-input-label;
         in property <string> conv-send-text;
         in property <string> conv-safety-text;
+        in property <string> conv-options-text;
+        in property <string> conv-load-earlier-text;
+        in property <bool> conv-more: false;
+        callback conv-load-earlier();
+        callback open-options();
         in-out property <string> conv-draft;
         callback conv-send(string);
         callback reveal-pressed(int);
@@ -118,6 +135,44 @@ slint::slint! {
         in property <image> safety-qr;
         in property <bool> safety-can-verify: false;
         callback safety-verify();
+
+        // settings (7)
+        in property <string> settings-title;
+        in property <string> settings-relay-title;
+        in property <string> settings-retention-label;
+        in property <string> settings-delivered-label;
+        in property <string> settings-read-text;
+        in property <string> settings-screen-title;
+        in property <string> settings-screen-hint;
+        in property <string> settings-profile-title;
+        in property <string> identity-text;
+        in property <string> export-path-label;
+        in property <string> export-pass-label;
+        in property <string> export-text;
+        in property <[string]> retention-names;
+        in property <[string]> delivered-names;
+        in property <bool> settings-enabled: false;
+        in-out property <int> settings-mode-index: 0;
+        in-out property <int> retention-index: 0;
+        in-out property <int> delivered-index: 0;
+        in-out property <bool> settings-read: false;
+        in-out property <string> export-path;
+        in-out property <string> export-pass;
+        callback settings-mode-picked(int);
+        callback settings-retention-picked(int);
+        callback settings-delivered-picked(int);
+        callback settings-read-toggled(bool);
+        callback ask-identity();
+        callback ask-export(string, string);
+
+        // contact options (8)
+        in property <string> options-title;
+        in property <string> rotate-text;
+        in property <string> reset-text;
+        in property <string> remove-text;
+        callback ask-rotate();
+        callback ask-reset();
+        callback ask-remove();
 
         VerticalLayout {
             padding: 16px;
@@ -139,6 +194,11 @@ slint::slint! {
                 color: root.indicator-locked ? #b3261e : #1b6e2d;
                 font-weight: 700;
                 wrap: word-wrap;
+                accessible-role: text;
+            }
+            Text {
+                text: root.status-text;
+                visible: root.status-text != "";
                 accessible-role: text;
             }
             if root.show-override : Button {
@@ -232,9 +292,16 @@ slint::slint! {
             if root.screen == 2 : VerticalLayout {
                 spacing: 8px;
                 Text { text: root.contacts-title; font-size: 18px; font-weight: 700; }
-                Button {
-                    text: root.contacts-invite-text;
-                    clicked => { root.open-invitations(); }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button {
+                        text: root.contacts-invite-text;
+                        clicked => { root.open-invitations(); }
+                    }
+                    Button {
+                        text: root.contacts-settings-text;
+                        clicked => { root.open-settings(); }
+                    }
                 }
                 Text {
                     text: root.contacts-empty;
@@ -310,12 +377,12 @@ slint::slint! {
                 LineEdit {
                     text <=> root.invite-input;
                     accessible-label: root.invite-accept-label;
-                    enabled: !root.busy;
+                    enabled: root.invite-input-enabled;
                     accepted => { root.invite-accept(root.invite-input); }
                 }
                 Button {
                     text: root.invite-accept-text;
-                    enabled: !root.busy;
+                    enabled: root.invite-input-enabled;
                     clicked => { root.invite-accept(root.invite-input); }
                 }
                 Button {
@@ -337,8 +404,24 @@ slint::slint! {
                     text: root.conv-empty;
                     visible: root.conv-messages.length == 0;
                 }
-                ListView {
+                if root.conv-more : Button {
+                    text: root.conv-load-earlier-text;
+                    clicked => { root.conv-load-earlier(); }
+                }
+                conv-list := ListView {
                     height: 280px;
+                    // older messages load when the user scrolls back up to the top (not at the first view of the list)
+                    property <bool> armed: false;
+                    changed content-y => {
+                        if (self.content-y < -20px) {
+                            self.armed = true;
+                        } else if (self.content-y >= 0px && self.armed) {
+                            self.armed = false;
+                            if (root.conv-more) {
+                                root.conv-load-earlier();
+                            }
+                        }
+                    }
                     for message[index] in root.conv-messages : Rectangle {
                         height: message-body.preferred-height;
                         message-body := VerticalLayout {
@@ -395,6 +478,10 @@ slint::slint! {
                         clicked => { root.open-safety(); }
                     }
                     Button {
+                        text: root.conv-options-text;
+                        clicked => { root.open-options(); }
+                    }
+                    Button {
                         text: root.back-text;
                         clicked => { root.back(); }
                     }
@@ -428,6 +515,144 @@ slint::slint! {
                     text: root.safety-verify-text;
                     enabled: root.safety-can-verify && !root.busy;
                     clicked => { root.safety-verify(); }
+                }
+                Button {
+                    text: root.back-text;
+                    clicked => { root.back(); }
+                }
+            }
+
+            if root.confirm-text != "" : VerticalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.confirm-text;
+                    wrap: word-wrap;
+                    color: #8a5a00;
+                    font-weight: 700;
+                    accessible-role: text;
+                }
+                // the confirm button sits at the far end of its row, away from the buttons that asked for it
+                HorizontalLayout {
+                    spacing: 6px;
+                    Button {
+                        text: root.cancel-button-text;
+                        clicked => { root.cancel-clicked(); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button {
+                        text: root.confirm-button-text;
+                        enabled: !root.busy;
+                        clicked => { root.confirm-clicked(); }
+                    }
+                }
+            }
+            Text {
+                text: root.notice-text;
+                visible: root.notice-text != "";
+                color: #1b6e2d;
+                wrap: word-wrap;
+                accessible-role: text;
+            }
+
+            if root.screen == 7 : VerticalLayout {
+                spacing: 8px;
+                Text { text: root.settings-title; font-size: 18px; font-weight: 700; }
+                Text { text: root.mode-label; }
+                ComboBox {
+                    model: root.mode-names;
+                    current-index <=> root.settings-mode-index;
+                    accessible-label: root.mode-label;
+                    enabled: root.settings-enabled;
+                    selected => { root.settings-mode-picked(self.current-index); }
+                }
+                Text { text: root.settings-relay-title; font-weight: 700; }
+                for line in root.relay-lines : Text {
+                    text: "• " + line;
+                    wrap: word-wrap;
+                }
+                Text { text: root.settings-retention-label; }
+                ComboBox {
+                    model: root.retention-names;
+                    current-index <=> root.retention-index;
+                    accessible-label: root.settings-retention-label;
+                    enabled: root.settings-enabled;
+                    selected => { root.settings-retention-picked(self.current-index); }
+                }
+                Text { text: root.settings-delivered-label; }
+                ComboBox {
+                    model: root.delivered-names;
+                    current-index <=> root.delivered-index;
+                    accessible-label: root.settings-delivered-label;
+                    enabled: root.settings-enabled;
+                    selected => { root.settings-delivered-picked(self.current-index); }
+                }
+                CheckBox {
+                    text: root.settings-read-text;
+                    checked <=> root.settings-read;
+                    enabled: root.settings-enabled;
+                    toggled => { root.settings-read-toggled(self.checked); }
+                }
+                Text { text: root.settings-screen-title; font-weight: 700; }
+                Text { text: root.indicator-text; wrap: word-wrap; accessible-role: text; }
+                Text { text: root.settings-screen-hint; wrap: word-wrap; }
+                if root.show-override : Button {
+                    text: root.override-text;
+                    clicked => { root.override-requested(); }
+                }
+                Text { text: root.settings-profile-title; font-weight: 700; }
+                if root.confirm-text == "" : VerticalLayout {
+                    spacing: 6px;
+                    Button {
+                        text: root.identity-text;
+                        enabled: !root.busy;
+                        clicked => { root.ask-identity(); }
+                    }
+                    Text { text: root.export-path-label; }
+                    LineEdit {
+                        text <=> root.export-path;
+                        accessible-label: root.export-path-label;
+                        enabled: !root.busy;
+                    }
+                    Text { text: root.export-pass-label; }
+                    LineEdit {
+                        text <=> root.export-pass;
+                        input-type: password;
+                        accessible-label: root.export-pass-label;
+                        enabled: !root.busy;
+                    }
+                    Button {
+                        text: root.export-text;
+                        enabled: !root.busy;
+                        clicked => { root.ask-export(root.export-path, root.export-pass); }
+                    }
+                }
+                Button {
+                    text: root.back-text;
+                    clicked => { root.back(); }
+                }
+            }
+
+            if root.screen == 8 : VerticalLayout {
+                spacing: 8px;
+                Text { text: root.options-title; font-size: 18px; font-weight: 700; }
+                Text { text: root.conv-title; }
+                if root.confirm-text == "" : VerticalLayout {
+                    spacing: 6px;
+                    Button {
+                        text: root.rotate-text;
+                        enabled: !root.busy;
+                        clicked => { root.ask-rotate(); }
+                    }
+                    Button {
+                        text: root.reset-text;
+                        enabled: !root.busy;
+                        clicked => { root.ask-reset(); }
+                    }
+                    Button {
+                        text: root.remove-text;
+                        enabled: !root.busy;
+                        clicked => { root.ask-remove(); }
+                    }
                 }
                 Button {
                     text: root.back-text;

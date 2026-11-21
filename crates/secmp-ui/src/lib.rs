@@ -34,4 +34,6 @@ mod screens;
 mod tests;
 #[cfg(test)]
 mod tests_conv;
+#[cfg(test)]
+mod tests_p3;
 pub mod vm;

@@ -7,8 +7,9 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use slint::winit_030::{EventResult, WinitWindowAccessor as _, winit};
 use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 use crate::bridge::{Bridge, Request, Response, Sink};
@@ -16,14 +17,32 @@ use crate::capture;
 use crate::core_backend::CoreBackend;
 use crate::locale::{self, Lang, key};
 use crate::screens::{ContactRowData, MainWindow, MessageRowData};
-use crate::vm::{ModeChoice, Protection, REVEAL_MAX_S, Screen, Vm, name_is_valid};
+use crate::vm::{ModeChoice, Protection, ReceiptChoice, Screen, Vm, name_is_valid};
+
+/// How often the model's clock is read for the 20 seconds of a reveal (CS-1.14).
+const TICK: Duration = Duration::from_millis(250);
+
+/// How often the connection line is refreshed.
+const STATUS_EVERY: Duration = Duration::from_secs(5);
 
 struct Shell {
     ui: MainWindow,
     vm: Vm,
     bridge: Bridge,
-    /// Ends a reveal after [`REVEAL_MAX_S`] seconds, whatever the user does.
-    reveal_timer: Timer,
+    /// The model's clock starts here.
+    started: Instant,
+    /// Reads the clock for a reveal in progress: the model ends it after [`crate::vm::REVEAL_MAX_S`] seconds, whatever the
+    /// user does.
+    tick_timer: Timer,
+    /// Asks the core about the connection.
+    status_timer: Timer,
+}
+
+impl Shell {
+    /// The model's clock in milliseconds.
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
 }
 
 thread_local! {
@@ -82,6 +101,8 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
         Screen::Invitations => 4,
         Screen::Conversation => 5,
         Screen::Safety => 6,
+        Screen::Settings => 7,
+        Screen::Options => 8,
     });
     ui.set_indicator_text(t(vm.indicator_key()));
     ui.set_indicator_locked(!matches!(vm.protection(), Protection::Verified));
@@ -92,6 +113,16 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
     ui.set_busy_text(t(key::WORKING));
     ui.set_error_text(SharedString::from(vm.error_text()));
     ui.set_unavailable_text(SharedString::from(vm.unavailable_text()));
+    ui.set_status_text(SharedString::from(vm.status_text()));
+    ui.set_notice_text(SharedString::from(vm.notice_text()));
+    ui.set_confirm_text(SharedString::from(vm.confirm_text()));
+    ui.set_confirm_button_text(t(key::CONFIRM_BUTTON));
+    ui.set_cancel_button_text(t(key::CANCEL_BUTTON));
+    if !vm.content_visible() {
+        // the fields that hold what the user typed are emptied and disabled while content is locked
+        ui.set_conv_draft(SharedString::new());
+        ui.set_invite_input(SharedString::new());
+    }
 
     ui.set_onboarding_title(t(key::ONBOARDING_TITLE));
     ui.set_name_label(t(key::ONBOARDING_NAME));
@@ -116,17 +147,39 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
     ui.set_contacts_title(t(key::CONTACTS_TITLE));
     ui.set_contacts_empty(t(key::CONTACTS_EMPTY));
     ui.set_contacts_invite_text(t(key::CONTACTS_INVITE));
+    ui.set_contacts_settings_text(t(key::CONTACTS_SETTINGS));
     ui.set_back_text(t(key::NAV_BACK));
 
+    render_content(ui, vm);
+    render_settings(ui, vm);
+
+    ui.set_contacts(ModelRc::new(VecModel::from(
+        vm.rows()
+            .into_iter()
+            .map(|r| ContactRowData {
+                name: r.name.into(),
+                key: r.key.into(),
+                status: r.status.into(),
+                verified: r.verified,
+            })
+            .collect::<Vec<_>>(),
+    )));
+}
+
+/// The invitation, conversation and safety number screens.
+fn render_content(ui: &MainWindow, vm: &Vm) {
+    let lang = vm.lang();
+    let t = |k: &'static str| SharedString::from(locale::text(lang, k));
     ui.set_invite_title(t(key::INVITE_TITLE));
     ui.set_invite_create_text(t(key::INVITE_CREATE));
     ui.set_invite_uri_label(t(key::INVITE_URI_LABEL));
     ui.set_invite_copy_text(t(key::INVITE_COPY));
     ui.set_invite_accept_label(t(key::INVITE_ACCEPT_LABEL));
     ui.set_invite_accept_text(t(key::INVITE_ACCEPT));
+    ui.set_invite_input_enabled(vm.invite_input_enabled());
     ui.set_invite_uri(SharedString::from(vm.invite_text()));
     ui.set_invite_copyable(vm.invite_copyable());
-    ui.set_invite_qr(vm.invite_qr().map(|m| m.image()).unwrap_or_default());
+    ui.set_invite_qr(vm.invite_qr().cloned().unwrap_or_default());
     ui.set_invite_status(SharedString::from(vm.invite_status()));
 
     ui.set_conv_title(SharedString::from(vm.conv_title()));
@@ -141,6 +194,9 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
     ui.set_conv_input_label(t(key::CONV_INPUT_LABEL));
     ui.set_conv_send_text(t(key::CONV_SEND));
     ui.set_conv_safety_text(t(key::CONV_SAFETY));
+    ui.set_conv_options_text(t(key::CONV_OPTIONS));
+    ui.set_conv_load_earlier_text(t(key::CONV_LOAD_EARLIER));
+    ui.set_conv_more(vm.conv_more());
     sync_messages(
         ui,
         vm.conv_rows()
@@ -158,21 +214,132 @@ pub fn render(ui: &MainWindow, vm: &Vm) {
     ui.set_safety_hint(t(key::SAFETY_HINT));
     ui.set_safety_verify_text(t(key::SAFETY_VERIFY));
     ui.set_safety_digits(SharedString::from(vm.safety_text()));
-    ui.set_safety_qr(vm.safety_qr().map(|m| m.image()).unwrap_or_default());
+    ui.set_safety_qr(vm.safety_qr().cloned().unwrap_or_default());
     ui.set_safety_can_verify(vm.safety_can_verify());
     ui.set_safety_status(SharedString::from(vm.safety_status()));
+}
 
-    ui.set_contacts(ModelRc::new(VecModel::from(
-        vm.rows()
+/// The settings and the contact options screens.
+fn render_settings(ui: &MainWindow, vm: &Vm) {
+    let lang = vm.lang();
+    let t = |k: &'static str| SharedString::from(locale::text(lang, k));
+    ui.set_settings_title(t(key::SETTINGS_TITLE));
+    ui.set_settings_relay_title(t(key::SETTINGS_RELAY_VIEW));
+    ui.set_settings_retention_label(t(key::SETTINGS_RETENTION));
+    ui.set_settings_delivered_label(t(key::SETTINGS_DELIVERED));
+    ui.set_settings_read_text(t(key::SETTINGS_READ));
+    ui.set_settings_screen_title(t(key::SETTINGS_SCREEN));
+    ui.set_settings_screen_hint(t(key::SETTINGS_SCREEN_HINT));
+    ui.set_settings_profile_title(t(key::SETTINGS_PROFILE));
+    ui.set_identity_text(t(key::ACTION_IDENTITY));
+    ui.set_export_path_label(t(key::ACTION_EXPORT_PATH));
+    ui.set_export_pass_label(t(key::ACTION_EXPORT_PASS));
+    ui.set_export_text(t(key::ACTION_EXPORT));
+    ui.set_retention_names(ModelRc::new(VecModel::from(
+        vm.retention_names()
             .into_iter()
-            .map(|r| ContactRowData {
-                name: r.name.into(),
-                key: r.key.into(),
-                status: r.status.into(),
-                verified: r.verified,
-            })
+            .map(SharedString::from)
             .collect::<Vec<_>>(),
     )));
+    ui.set_delivered_names(strings(
+        lang,
+        &ReceiptChoice::ALL.map(ReceiptChoice::name_key),
+    ));
+    ui.set_settings_enabled(vm.settings_enabled());
+    if let Some(shown) = vm.settings_shown() {
+        ui.set_settings_mode_index(shown.mode.index());
+        ui.set_retention_index(vm.retention_index());
+        ui.set_delivered_index(vm.delivered_index());
+        ui.set_settings_read(shown.read_receipts);
+    }
+    ui.set_options_title(t(key::OPTIONS_TITLE));
+    ui.set_rotate_text(t(key::ACTION_ROTATE));
+    ui.set_reset_text(t(key::ACTION_RESET));
+    ui.set_remove_text(t(key::ACTION_REMOVE));
+}
+
+/// The callbacks of the settings and the contact options screens.
+fn wire_settings(ui: &MainWindow) {
+    ui.on_open_settings(|| {
+        with_shell(|sh| {
+            sh.vm.open_settings(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_settings_mode_picked(|index| {
+        with_shell(|sh| {
+            sh.vm.pick_mode(&sh.bridge, index);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_settings_retention_picked(|index| {
+        with_shell(|sh| {
+            sh.vm.pick_retention(&sh.bridge, index);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_settings_delivered_picked(|index| {
+        with_shell(|sh| {
+            sh.vm.pick_delivered(&sh.bridge, index);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_settings_read_toggled(|on| {
+        with_shell(|sh| {
+            sh.vm.set_read_receipts(&sh.bridge, on);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_ask_identity(|| {
+        with_shell(|sh| {
+            sh.vm.ask_identity();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_ask_export(|path, pass| {
+        with_shell(|sh| {
+            sh.vm.ask_export(&path, &pass);
+            // the model holds the passphrase in a zeroising buffer; the field is emptied
+            sh.ui.set_export_pass(SharedString::new());
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_open_options(|| {
+        with_shell(|sh| {
+            sh.vm.open_options();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_ask_rotate(|| {
+        with_shell(|sh| {
+            sh.vm.ask_rotate();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_ask_reset(|| {
+        with_shell(|sh| {
+            sh.vm.ask_reset();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_ask_remove(|| {
+        with_shell(|sh| {
+            sh.vm.ask_remove();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_confirm_clicked(|| {
+        with_shell(|sh| {
+            sh.vm.confirm(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_cancel_clicked(|| {
+        with_shell(|sh| {
+            sh.vm.cancel(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
 }
 
 /// The callbacks of the conversation and the safety number screens.
@@ -180,7 +347,7 @@ fn wire_conversation(ui: &MainWindow) {
     ui.on_open_contact(|index| {
         with_shell(|sh| {
             sh.vm
-                .open_contact(usize::try_from(index).unwrap_or(usize::MAX));
+                .open_contact(&sh.bridge, usize::try_from(index).unwrap_or(usize::MAX));
             render(&sh.ui, &sh.vm);
         });
     });
@@ -193,27 +360,25 @@ fn wire_conversation(ui: &MainWindow) {
     });
     ui.on_reveal_pressed(|index| {
         with_shell(|sh| {
-            sh.vm
-                .reveal_press(&sh.bridge, usize::try_from(index).unwrap_or(usize::MAX));
-            if sh.vm.revealing() {
-                sh.reveal_timer.start(
-                    TimerMode::SingleShot,
-                    Duration::from_secs(REVEAL_MAX_S),
-                    || {
-                        with_shell(|sh| {
-                            sh.vm.reveal_release();
-                            render(&sh.ui, &sh.vm);
-                        });
-                    },
-                );
-            }
+            // the 20 seconds run from the press that starts the reveal (the model's clock), a second press changes nothing
+            let now = sh.now_ms();
+            sh.vm.reveal_press(
+                &sh.bridge,
+                usize::try_from(index).unwrap_or(usize::MAX),
+                now,
+            );
             render(&sh.ui, &sh.vm);
         });
     });
     ui.on_reveal_released(|| {
         with_shell(|sh| {
-            sh.reveal_timer.stop();
             sh.vm.reveal_release();
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_conv_load_earlier(|| {
+        with_shell(|sh| {
+            sh.vm.load_earlier(&sh.bridge);
             render(&sh.ui, &sh.vm);
         });
     });
@@ -226,6 +391,24 @@ fn wire_conversation(ui: &MainWindow) {
     ui.on_safety_verify(|| {
         with_shell(|sh| {
             sh.vm.verify(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+}
+
+/// The callbacks of the invitation screen.
+fn wire_invitations(ui: &MainWindow) {
+    ui.on_invite_create(|| {
+        with_shell(|sh| {
+            sh.vm.create_invitation(&sh.bridge);
+            render(&sh.ui, &sh.vm);
+        });
+    });
+    ui.on_invite_accept(|uri| {
+        with_shell(|sh| {
+            sh.vm.accept_invitation(&sh.bridge, &uri);
+            // the field is emptied whatever came of the request; the model passed the URI on in a zeroising buffer
+            sh.ui.set_invite_input(SharedString::new());
             render(&sh.ui, &sh.vm);
         });
     });
@@ -270,30 +453,22 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
             sh.ui.set_invite_input(SharedString::new());
             if was == Screen::Conversation {
                 sh.ui.set_conv_draft(SharedString::new());
-                sh.reveal_timer.stop();
+            }
+            if was == Screen::Settings {
+                sh.ui.set_export_path(SharedString::new());
+                sh.ui.set_export_pass(SharedString::new());
             }
             render(&sh.ui, &sh.vm);
         });
     });
     wire_conversation(ui);
-    ui.on_invite_create(|| {
-        with_shell(|sh| {
-            sh.vm.create_invitation(&sh.bridge);
-            render(&sh.ui, &sh.vm);
-        });
-    });
-    ui.on_invite_accept(|uri| {
-        with_shell(|sh| {
-            sh.vm.accept_invitation(&sh.bridge, &uri);
-            // the field is emptied whatever came of the request; the model passed the URI on in a zeroising buffer
-            sh.ui.set_invite_input(SharedString::new());
-            render(&sh.ui, &sh.vm);
-        });
-    });
+    wire_settings(ui);
+    wire_invitations(ui);
     #[cfg(target_os = "linux")]
     ui.on_override_requested(|| {
         with_shell(|sh| {
             sh.vm.override_session();
+            sh.vm.sync_display(&sh.bridge);
             render(&sh.ui, &sh.vm);
         });
     });
@@ -303,8 +478,37 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
             ui: ui.clone_strong(),
             vm,
             bridge,
-            reveal_timer: Timer::default(),
+            started: Instant::now(),
+            tick_timer: Timer::default(),
+            status_timer: Timer::default(),
         });
+    });
+    with_shell(|sh| {
+        sh.tick_timer.start(TimerMode::Repeated, TICK, || {
+            with_shell(|sh| {
+                let now = sh.now_ms();
+                if sh.vm.tick(now) {
+                    render(&sh.ui, &sh.vm);
+                }
+            });
+        });
+        sh.status_timer
+            .start(TimerMode::Repeated, STATUS_EVERY, || {
+                with_shell(|sh| {
+                    sh.vm.poll_status(&sh.bridge);
+                    render(&sh.ui, &sh.vm);
+                });
+            });
+    });
+    // a window that loses the focus ends a reveal (CS-1.14)
+    ui.window().on_winit_window_event(|_, event| {
+        if matches!(event, winit::event::WindowEvent::Focused(false)) {
+            with_shell(|sh| {
+                sh.vm.focus_lost();
+                render(&sh.ui, &sh.vm);
+            });
+        }
+        EventResult::Propagate
     });
 }
 
@@ -325,6 +529,7 @@ fn deliver(response: Response) {
 fn deliver_protection(protection: Protection) {
     with_shell(|sh| {
         sh.vm.set_protection(protection);
+        sh.vm.sync_display(&sh.bridge);
         render(&sh.ui, &sh.vm);
     });
 }

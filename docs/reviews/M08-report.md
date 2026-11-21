@@ -69,3 +69,35 @@ Evidence (`cargo nextest run -p secmp-ui`; `cargo xtask ci-fast --delegated harn
 | P8 | `locale::tests::locale_tables_en_de_have_identical_key_sets` | pass |
 
 Functions added to `secmp-client-core`: none. Core gaps: no list of the message history (`Request::Message` is by id), so the conversation shows this run's messages only and a view-once lost with an earlier run has no placeholder; no accessor for persisted warning state after a restart; times are shown in UTC (no time-zone source). The invitation URI and message text leave their zeroising buffers when shown (HB-78). Not run on this host: the screens under a real display; the 20 s reveal timer and the hold area (touch events) have no test under the testing backend.
+
+## 9. Part 3 (BRIEF M8-P3) — U6, U7, U8
+
+Head before: `6d6f372`. One commit holds all three units (their changes share files; see the deviation below).
+
+| Unit | Content |
+|---|---|
+| U6 | cross-review fixes 1–12: banners and inputs withheld while locked; reveal clock (`Vm::tick`, `focus_lost`, release on protection loss and on leaving); warning epochs for `Verify`; safety number fetched again on `KeyChanged`; every submit through `Vm::submit` (full queue → `Failure::Busy`); `Chat.early` capped at 256; QR images built once; "Accepting…" from the submit on; T11 on a real profile; P1 attempts asserted; P7 extended; ADR-064 status, ADR-063 panic policy |
+| U7 | `Request::History` (core) / `Store::history` (read only), pages of 50, older pages on scroll or button; placeholders, never a payload, for view-once; banners from the contact record after a restart, freeze learned from a refused send (HB-79); times as `YYYY-MM-DD HH:MM UTC` (HB-80) |
+| U8 | settings screen (mode with relay view and confirm, retention, delivery and read receipts, screen security), contact options (rotate, reset, remove) and profile actions (rotate identity, export) behind a confirm click, connection line, security indicator with `Request::SetDisplayState` / `DisplayState` (CS-1.18) |
+
+Core boundary (no schema change, no migration, no write path, no new persistence): `secmp-client-core::api`: `Request::History{contact,before,limit}` → `Response::History(Vec<HistoryEntry>)`, `Request::SetDisplayState(DisplayState)`, `Request::DisplayState` → `Response::DisplayState`, types `HistoryEntry`, `DisplayState`, field `Core.display` (memory only); `runtime::admitted` classifies the three; `secmp-store::messages`: `Store::history`, `HistoryRow`, `HISTORY_MAX`. The `Message` and `History` arms of `Core::handle` are private helpers (`message`, `history`).
+
+Evidence: `cargo nextest run -p secmp-ui` (all pass, P1 with the attempt count asserted to be 1), `cargo nextest run -p secmp-client-core --features kat history_never_returns_view_once_payload` (S6), `cargo xtask ci-fast --delegated harness`: PASS (after the last change).
+
+| Test | Name | Result |
+|---|---|---|
+| S1 | `tests_p3::banners_and_inputs_are_withheld_while_locked` | pass |
+| S2 | `tests_p3::reveal_timer_is_not_extended_by_second_press_and_focus_loss_releases` | pass |
+| S3 | `tests_p3::verify_answer_does_not_clear_newer_key_change` | pass |
+| S4 | `tests_p3::full_queue_sets_busy_on_safety_and_history_requests` | pass |
+| S5 | `tests_conv::two_profiles_exchange_invitation_and_messages_through_view_models` (extended: A reopened, history lists "hello", still verified) | pass |
+| S6 | `secmp-client-core` `api::tests::history_never_returns_view_once_payload` | pass |
+| S7 | `tests_p3::settings_roundtrip_through_real_core` | pass |
+| S8 | `tests_p3::mode_change_needs_confirmation_and_shows_relay_view` | pass |
+| S9 | `tests_p3::contact_and_identity_actions_send_nothing_before_confirmation` | pass |
+| S10 | `tests_p3::indicator_text_follows_display_state_and_core_reports_it` | pass |
+| S11 | `tests_p3::status_line_shows_no_address_and_no_activity_counters` | pass |
+
+Core gaps: HB-79 (frozen session after a restart), HB-80 (no time zone), HB-81 (accessibility mode: no `Settings` field), HB-82 (held view-once and delivery state of earlier messages are not in the history), HB-83 (focus-loss event, scroll trigger and list position not testable under the testing backend), HB-84 (export path, relay of a rotation).
+
+Deviations: (1) one commit for U6–U8 instead of three, and `ci-fast` once at the end instead of after each unit: the units touch the same files (`vm.rs`, `convo.rs`, `app.rs`, `screens.rs`, tests). (2) The brief names `Request::Export`; the UI uses `Call::Export`, because the runtime refuses `Request::Export` on `Call::Core` (`admitted`). (3) S6 lives in `secmp-client-core` (the UI crate has no store dependency, ADR-063 allow-list); a held view-once is not in the `messages` table at all, so the placeholder of a view-once in the history is the model's own (from the event of this run), and a row of kind 3 that some tool wrote comes back without payload. (4) The relay-view stub of the UI tests returns the core's text for the non-direct transport, because direct mode lists the same lines for every mode.

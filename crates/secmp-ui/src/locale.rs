@@ -209,6 +209,104 @@ pub mod key {
     pub const SAFETY_VERIFY: &str = "safety.verify";
     /// The contact is verified.
     pub const SAFETY_VERIFIED: &str = "safety.verified";
+    /// The indicator while the display is only partly protected (set by nothing before M9).
+    pub const INDICATOR_PARTIAL: &str = "indicator.partial";
+    /// The earlier messages could not be read.
+    pub const ERROR_HISTORY: &str = "error.history";
+    /// The button that loads older messages.
+    pub const CONV_LOAD_EARLIER: &str = "conv.load_earlier";
+    /// The button that opens the options of a contact.
+    pub const CONV_OPTIONS: &str = "conv.options";
+    /// The button that opens the settings.
+    pub const CONTACTS_SETTINGS: &str = "contacts.settings";
+    /// The title of the settings screen.
+    pub const SETTINGS_TITLE: &str = "settings.title";
+    /// The label of the traffic mode choice.
+    pub const SETTINGS_MODE: &str = "settings.mode";
+    /// The heading of the list of what the relay can see in the mode picked.
+    pub const SETTINGS_RELAY_VIEW: &str = "settings.relay_view";
+    /// The label of the retention choice.
+    pub const SETTINGS_RETENTION: &str = "settings.retention";
+    /// Keep the history.
+    pub const RETENTION_KEEP: &str = "retention.keep";
+    /// Delete messages after N days (`{n}` is replaced).
+    pub const RETENTION_DAYS: &str = "retention.days";
+    /// The label of the delivery receipts choice.
+    pub const SETTINGS_DELIVERED: &str = "settings.delivered";
+    /// No delivery receipts.
+    pub const RECEIPTS_OFF: &str = "receipts.off";
+    /// Delivery receipts to verified contacts.
+    pub const RECEIPTS_VERIFIED: &str = "receipts.verified";
+    /// Delivery receipts to every contact.
+    pub const RECEIPTS_ALL: &str = "receipts.all";
+    /// The read receipts switch.
+    pub const SETTINGS_READ: &str = "settings.read";
+    /// The heading of the screen security section.
+    pub const SETTINGS_SCREEN: &str = "settings.screen";
+    /// What the screen security state means.
+    pub const SETTINGS_SCREEN_HINT: &str = "settings.screen_hint";
+    /// The settings could not be read or stored.
+    pub const ERROR_SETTINGS: &str = "error.settings";
+    /// The heading of the profile actions.
+    pub const SETTINGS_PROFILE: &str = "settings.profile";
+    /// The confirm button of a pending action.
+    pub const CONFIRM_BUTTON: &str = "confirm.button";
+    /// The cancel button of a pending action.
+    pub const CANCEL_BUTTON: &str = "confirm.cancel";
+    /// The question before a mode change.
+    pub const CONFIRM_MODE: &str = "confirm.mode";
+    /// The question before a session key rotation.
+    pub const CONFIRM_ROTATE: &str = "confirm.rotate";
+    /// The question before a session reset.
+    pub const CONFIRM_RESET: &str = "confirm.reset";
+    /// The question before the removal of a contact.
+    pub const CONFIRM_REMOVE: &str = "confirm.remove";
+    /// The warning before an identity rotation.
+    pub const CONFIRM_IDENTITY: &str = "confirm.identity";
+    /// The question before an export.
+    pub const CONFIRM_EXPORT: &str = "confirm.export";
+    /// The button that rotates the session keys.
+    pub const ACTION_ROTATE: &str = "action.rotate";
+    /// The button that resets the session.
+    pub const ACTION_RESET: &str = "action.reset";
+    /// The button that removes the contact.
+    pub const ACTION_REMOVE: &str = "action.remove";
+    /// The button that rotates the identity.
+    pub const ACTION_IDENTITY: &str = "action.identity";
+    /// The button that exports a backup.
+    pub const ACTION_EXPORT: &str = "action.export";
+    /// The label of the backup path field.
+    pub const ACTION_EXPORT_PATH: &str = "action.export_path";
+    /// The label of the backup passphrase field.
+    pub const ACTION_EXPORT_PASS: &str = "action.export_pass";
+    /// An action was carried out.
+    pub const ACTION_DONE: &str = "action.done";
+    /// The identity was rotated.
+    pub const ACTION_IDENTITY_DONE: &str = "action.identity_done";
+    /// The title of the contact options screen.
+    pub const OPTIONS_TITLE: &str = "options.title";
+    /// An action was refused.
+    pub const ERROR_ACTION: &str = "error.action";
+    /// The backup could not be written.
+    pub const ERROR_EXPORT: &str = "error.export";
+    /// The backup folder is synchronised to a cloud service.
+    pub const ERROR_EXPORT_CLOUD: &str = "error.export_cloud";
+    /// The path or passphrase of the backup is missing.
+    pub const ERROR_EXPORT_INPUT: &str = "error.export_input";
+    /// The transport is Tor.
+    pub const STATUS_TOR: &str = "status.tor";
+    /// The transport is a direct connection.
+    pub const STATUS_DIRECT: &str = "status.direct";
+    /// The engine is connected.
+    pub const STATUS_CONNECTED: &str = "status.connected";
+    /// The engine is connecting.
+    pub const STATUS_CONNECTING: &str = "status.connecting";
+    /// The engine cannot connect.
+    pub const STATUS_UNAVAILABLE: &str = "status.unavailable";
+    /// The conversation has been removed by the contact.
+    pub const BANNER_REMOVED: &str = "banner.removed";
+    /// The contact has to be invited again.
+    pub const BANNER_REINVITE: &str = "banner.reinvite";
 }
 
 /// The English table.
@@ -249,7 +347,7 @@ pub static EN: &[(&str, &str)] = &[
         key::INDICATOR_LOCKED,
         "Unprotected display — content locked",
     ),
-    (key::INDICATOR_PROTECTED, "Protected display"),
+    (key::INDICATOR_PROTECTED, "Protected"),
     (
         key::INDICATOR_OVERRIDDEN,
         "Unprotected display — shown by your choice for this session",
@@ -391,6 +489,94 @@ pub static EN: &[(&str, &str)] = &[
     (key::SAFETY_VERIFIED, "Verified."),
     (key::MSG_UNAVAILABLE, "The message is not available."),
     (key::MSG_UTC, "UTC"),
+    (key::INDICATOR_PARTIAL, "Partially protected"),
+    (
+        key::ERROR_HISTORY,
+        "The earlier messages could not be loaded.",
+    ),
+    (key::CONV_LOAD_EARLIER, "Load earlier messages"),
+    (key::CONV_OPTIONS, "Contact options"),
+    (key::CONTACTS_SETTINGS, "Settings"),
+    (key::SETTINGS_TITLE, "Settings"),
+    (key::SETTINGS_MODE, "Traffic mode"),
+    (
+        key::SETTINGS_RELAY_VIEW,
+        "What the relay can see in this mode",
+    ),
+    (key::SETTINGS_RETENTION, "Keep the message history"),
+    (key::RETENTION_KEEP, "Forever"),
+    (key::RETENTION_DAYS, "Delete after {n} days"),
+    (key::SETTINGS_DELIVERED, "Delivery receipts"),
+    (key::RECEIPTS_OFF, "Off"),
+    (key::RECEIPTS_VERIFIED, "Verified contacts only"),
+    (key::RECEIPTS_ALL, "Every contact"),
+    (key::SETTINGS_READ, "Send read receipts"),
+    (key::SETTINGS_SCREEN, "Screen security"),
+    (
+        key::SETTINGS_SCREEN_HINT,
+        "Content is shown only while the display is verified as protected against capture, or by your choice for this session.",
+    ),
+    (key::ERROR_SETTINGS, "The settings could not be saved."),
+    (key::SETTINGS_PROFILE, "Profile"),
+    (key::CONFIRM_BUTTON, "Confirm"),
+    (key::CANCEL_BUTTON, "Cancel"),
+    (
+        key::CONFIRM_MODE,
+        "Change the traffic mode? What the relay can see changes as listed above.",
+    ),
+    (
+        key::CONFIRM_ROTATE,
+        "Rotate the session keys with this contact?",
+    ),
+    (
+        key::CONFIRM_RESET,
+        "Reset the session with this contact? Messages stop until the contact accepts a new session.",
+    ),
+    (
+        key::CONFIRM_REMOVE,
+        "Remove this contact? The contact is told, and no real messages are sent to it any more.",
+    ),
+    (
+        key::CONFIRM_IDENTITY,
+        "Rotate your identity? Every contact has to verify your new safety number again.",
+    ),
+    (
+        key::CONFIRM_EXPORT,
+        "Write a backup of your profile to the path you typed? Keep the file and its passphrase safe.",
+    ),
+    (key::ACTION_ROTATE, "Rotate session keys"),
+    (key::ACTION_RESET, "Reset session"),
+    (key::ACTION_REMOVE, "Remove contact"),
+    (key::ACTION_IDENTITY, "Rotate identity"),
+    (key::ACTION_EXPORT, "Export backup"),
+    (key::ACTION_EXPORT_PATH, "Backup file path"),
+    (key::ACTION_EXPORT_PASS, "Backup passphrase"),
+    (key::ACTION_DONE, "Done."),
+    (
+        key::ACTION_IDENTITY_DONE,
+        "Identity rotated. Your contacts have to verify your new safety number.",
+    ),
+    (key::OPTIONS_TITLE, "Contact options"),
+    (key::ERROR_ACTION, "The action could not be carried out."),
+    (key::ERROR_EXPORT, "The backup could not be written."),
+    (
+        key::ERROR_EXPORT_CLOUD,
+        "That folder is synchronised to a cloud service. Choose another one.",
+    ),
+    (
+        key::ERROR_EXPORT_INPUT,
+        "Enter the path of the backup file and a passphrase for it.",
+    ),
+    (key::STATUS_TOR, "Tor"),
+    (key::STATUS_DIRECT, "Direct connection"),
+    (key::STATUS_CONNECTED, "connected"),
+    (key::STATUS_CONNECTING, "connecting"),
+    (key::STATUS_UNAVAILABLE, "unavailable"),
+    (key::BANNER_REMOVED, "This contact removed you."),
+    (
+        key::BANNER_REINVITE,
+        "This contact has to be invited again.",
+    ),
 ];
 
 /// The German table.
@@ -440,7 +626,7 @@ pub static DE: &[(&str, &str)] = &[
         key::INDICATOR_LOCKED,
         "Ungeschützte Anzeige — Inhalt gesperrt",
     ),
-    (key::INDICATOR_PROTECTED, "Geschützte Anzeige"),
+    (key::INDICATOR_PROTECTED, "Geschützt"),
     (
         key::INDICATOR_OVERRIDDEN,
         "Ungeschützte Anzeige — auf Ihren Wunsch für diese Sitzung angezeigt",
@@ -597,6 +783,103 @@ pub static DE: &[(&str, &str)] = &[
     (key::SAFETY_VERIFIED, "Verifiziert."),
     (key::MSG_UNAVAILABLE, "Die Nachricht ist nicht verfügbar."),
     (key::MSG_UTC, "UTC"),
+    (key::INDICATOR_PARTIAL, "Teilweise geschützt"),
+    (
+        key::ERROR_HISTORY,
+        "Frühere Nachrichten konnten nicht geladen werden.",
+    ),
+    (key::CONV_LOAD_EARLIER, "Frühere Nachrichten laden"),
+    (key::CONV_OPTIONS, "Kontaktoptionen"),
+    (key::CONTACTS_SETTINGS, "Einstellungen"),
+    (key::SETTINGS_TITLE, "Einstellungen"),
+    (key::SETTINGS_MODE, "Verkehrsmodus"),
+    (
+        key::SETTINGS_RELAY_VIEW,
+        "Was das Relay in diesem Modus sehen kann",
+    ),
+    (key::SETTINGS_RETENTION, "Nachrichtenverlauf aufbewahren"),
+    (key::RETENTION_KEEP, "Für immer"),
+    (key::RETENTION_DAYS, "Nach {n} Tagen löschen"),
+    (key::SETTINGS_DELIVERED, "Zustellbestätigungen"),
+    (key::RECEIPTS_OFF, "Aus"),
+    (key::RECEIPTS_VERIFIED, "Nur verifizierte Kontakte"),
+    (key::RECEIPTS_ALL, "Alle Kontakte"),
+    (key::SETTINGS_READ, "Lesebestätigungen senden"),
+    (key::SETTINGS_SCREEN, "Bildschirmschutz"),
+    (
+        key::SETTINGS_SCREEN_HINT,
+        "Inhalte werden nur angezeigt, solange die Anzeige als gegen Aufnahmen geschützt verifiziert ist, oder auf Ihren Wunsch für diese Sitzung.",
+    ),
+    (
+        key::ERROR_SETTINGS,
+        "Die Einstellungen konnten nicht gespeichert werden.",
+    ),
+    (key::SETTINGS_PROFILE, "Profil"),
+    (key::CONFIRM_BUTTON, "Bestätigen"),
+    (key::CANCEL_BUTTON, "Abbrechen"),
+    (
+        key::CONFIRM_MODE,
+        "Verkehrsmodus ändern? Was das Relay sehen kann, ändert sich wie oben aufgeführt.",
+    ),
+    (
+        key::CONFIRM_ROTATE,
+        "Sitzungsschlüssel mit diesem Kontakt erneuern?",
+    ),
+    (
+        key::CONFIRM_RESET,
+        "Sitzung mit diesem Kontakt zurücksetzen? Nachrichten ruhen, bis der Kontakt eine neue Sitzung annimmt.",
+    ),
+    (
+        key::CONFIRM_REMOVE,
+        "Diesen Kontakt entfernen? Der Kontakt wird benachrichtigt, und es werden keine echten Nachrichten mehr an ihn gesendet.",
+    ),
+    (
+        key::CONFIRM_IDENTITY,
+        "Ihre Identität erneuern? Jeder Kontakt muss Ihre neue Sicherheitsnummer erneut verifizieren.",
+    ),
+    (
+        key::CONFIRM_EXPORT,
+        "Eine Sicherung Ihres Profils in den eingegebenen Pfad schreiben? Bewahren Sie Datei und Passphrase sicher auf.",
+    ),
+    (key::ACTION_ROTATE, "Sitzungsschlüssel erneuern"),
+    (key::ACTION_RESET, "Sitzung zurücksetzen"),
+    (key::ACTION_REMOVE, "Kontakt entfernen"),
+    (key::ACTION_IDENTITY, "Identität erneuern"),
+    (key::ACTION_EXPORT, "Sicherung exportieren"),
+    (key::ACTION_EXPORT_PATH, "Pfad der Sicherungsdatei"),
+    (key::ACTION_EXPORT_PASS, "Passphrase der Sicherung"),
+    (key::ACTION_DONE, "Erledigt."),
+    (
+        key::ACTION_IDENTITY_DONE,
+        "Identität erneuert. Ihre Kontakte müssen Ihre neue Sicherheitsnummer verifizieren.",
+    ),
+    (key::OPTIONS_TITLE, "Kontaktoptionen"),
+    (
+        key::ERROR_ACTION,
+        "Die Aktion konnte nicht ausgeführt werden.",
+    ),
+    (
+        key::ERROR_EXPORT,
+        "Die Sicherung konnte nicht geschrieben werden.",
+    ),
+    (
+        key::ERROR_EXPORT_CLOUD,
+        "Dieser Ordner wird mit einem Cloud-Dienst synchronisiert. Wählen Sie einen anderen.",
+    ),
+    (
+        key::ERROR_EXPORT_INPUT,
+        "Geben Sie den Pfad der Sicherungsdatei und eine Passphrase dafür ein.",
+    ),
+    (key::STATUS_TOR, "Tor"),
+    (key::STATUS_DIRECT, "Direkte Verbindung"),
+    (key::STATUS_CONNECTED, "verbunden"),
+    (key::STATUS_CONNECTING, "verbindet"),
+    (key::STATUS_UNAVAILABLE, "nicht verfügbar"),
+    (key::BANNER_REMOVED, "Dieser Kontakt hat Sie entfernt."),
+    (
+        key::BANNER_REINVITE,
+        "Dieser Kontakt muss erneut eingeladen werden.",
+    ),
 ];
 
 /// The table of `lang`.

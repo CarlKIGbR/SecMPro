@@ -15,12 +15,17 @@ use secmp_client_core::api::runtime::create_profile;
 use slint::Model as _;
 
 use crate::app::render;
-use crate::bridge::{Backend, Bridge, CoreEvent, Request, Response, Sink};
+use secmp_client_core::relay_view::relay_view;
+
+use crate::bridge::{Backend, Bridge, CoreEvent, HistoryItem, LinkReport, Request, Response, Sink};
 use crate::capture::{EXCLUDED, Refused, Report, Surface, verify};
-use crate::core_backend::CoreBackend;
+use crate::core_backend::{CoreBackend, mode_of};
 use crate::locale::{self, Lang, key};
 use crate::screens::MainWindow;
-use crate::vm::{ContactRow, Failure, ModeChoice, Protection, RowState, Screen, Vm};
+use crate::vm::{
+    ActionKind, ContactRow, Failure, ModeChoice, Protection, ReceiptChoice, RetentionChoice,
+    RowState, Screen, SettingsView, Vm,
+};
 
 /// A sink that queues what the bridge sends, to be taken on the test's thread (the "UI thread").
 pub(crate) fn queue() -> (Sink, Receiver<Response>) {
@@ -83,7 +88,39 @@ pub(crate) struct Stub {
     gate: Option<Receiver<()>>,
     /// How many `Reveal` requests reached the backend.
     pub(crate) reveals: Arc<AtomicUsize>,
+    /// How many `Contacts` requests the backend has started on (one that waits at the gate counts).
+    pub(crate) entered: Arc<AtomicUsize>,
+    /// How many `SetSettings` requests reached the backend.
+    pub(crate) sets: Arc<AtomicUsize>,
+    /// How many contact or profile actions (`Rotate`, `ResetSession`, `Remove`, `RotateIdentity`, `Export`) reached it.
+    pub(crate) actions: Arc<AtomicUsize>,
+    /// The settings the stub holds.
+    settings: Arc<Mutex<SettingsView>>,
+    /// How many messages a history page of the stub holds (0: none).
+    pub(crate) page: Arc<AtomicUsize>,
 }
+
+/// The `i`-th message of a history page of the stub (newest first, texts, alternating direction).
+fn old_item(before: Option<i64>, i: usize) -> HistoryItem {
+    let at = i64::try_from(i).unwrap_or(0);
+    let id = u8::try_from(i).unwrap_or(0);
+    HistoryItem {
+        cursor: before.unwrap_or(1_000).saturating_sub(at).saturating_sub(1),
+        msg_id: [id.saturating_add(100); 16],
+        incoming: i.is_multiple_of(2),
+        kind: 1,
+        at_ms: 3_600_000,
+        text: Some(Zeroizing::new("old".to_owned())),
+    }
+}
+
+/// The settings a stub starts with.
+pub(crate) const STUB_SETTINGS: SettingsView = SettingsView {
+    mode: ModeChoice::Strict,
+    retention: RetentionChoice::Keep,
+    delivered: ReceiptChoice::VerifiedOnly,
+    read_receipts: false,
+};
 
 impl Backend for Stub {
     fn handle(&mut self, request: Request, _events: &Sink) -> Response {
@@ -96,12 +133,19 @@ impl Backend for Stub {
                 _ => Response::Failed(Failure::InviteAccept),
             },
             Request::Contacts => {
+                self.entered.fetch_add(1, Ordering::SeqCst);
                 if let Some(gate) = &self.gate {
                     let _ = gate.recv();
                 }
                 Response::Contacts(self.contacts.lock().map(|c| c.clone()).unwrap_or_default())
             }
-            Request::RelayView(_) => Response::RelayView(Vec::new()),
+            // the core's own text for the mode (not for direct mode, which adds to every mode)
+            Request::RelayView(mode) => Response::RelayView(
+                relay_view(mode_of(mode), false)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            ),
             Request::Create { .. } | Request::Unlock { .. } => Response::Opened,
             Request::Send { contact, .. } => Response::Sent {
                 contact,
@@ -126,7 +170,52 @@ impl Backend for Stub {
                 digits: Zeroizing::new(DIGITS.to_owned()),
             },
             Request::Verify { contact, .. } => Response::Verified { contact, ok: true },
+            Request::History {
+                contact,
+                before,
+                limit,
+            } => {
+                let n = if limit == 0 {
+                    0
+                } else {
+                    self.page.load(Ordering::SeqCst)
+                };
+                Response::History {
+                    contact,
+                    before,
+                    limit,
+                    items: (0..n).map(|i| old_item(before, i)).collect(),
+                }
+            }
+            Request::Settings => {
+                Response::Settings(self.settings.lock().map_or(STUB_SETTINGS, |s| *s))
+            }
+            Request::SetSettings(view) => {
+                self.sets.fetch_add(1, Ordering::SeqCst);
+                if let Ok(mut held) = self.settings.lock() {
+                    *held = view;
+                }
+                Response::Settings(view)
+            }
+            Request::Rotate(_) => self.acted(ActionKind::Rotate),
+            Request::ResetSession(_) => self.acted(ActionKind::Reset),
+            Request::Remove(_) => self.acted(ActionKind::Remove),
+            Request::RotateIdentity => self.acted(ActionKind::Identity),
+            Request::Export { .. } => self.acted(ActionKind::Export),
+            Request::Status => Response::Status(LinkReport {
+                direct: true,
+                connected: true,
+            }),
+            Request::SetDisplayState(p) => Response::Display(p),
+            Request::DisplayState => Response::Display(Protection::Locked),
         }
+    }
+}
+
+impl Stub {
+    fn acted(&self, kind: ActionKind) -> Response {
+        self.actions.fetch_add(1, Ordering::SeqCst);
+        Response::ActionDone(kind)
     }
 }
 
@@ -140,6 +229,11 @@ pub(crate) fn stub(
             contacts: contacts.clone(),
             gate,
             reveals: Arc::new(AtomicUsize::new(0)),
+            entered: Arc::new(AtomicUsize::new(0)),
+            sets: Arc::new(AtomicUsize::new(0)),
+            actions: Arc::new(AtomicUsize::new(0)),
+            settings: Arc::new(Mutex::new(STUB_SETTINGS)),
+            page: Arc::new(AtomicUsize::new(0)),
         },
         contacts,
     )
@@ -333,8 +427,49 @@ fn content_is_locked_until_protection_is_verified() -> Test {
     Ok(())
 }
 
-/// T11: the per-session override shows the content; it is held in the model only, so a second model on the same profile
-/// directory starts locked and no file under the profile directory changed (names, sizes, modification times).
+/// The marker request of [`settle`]: a history page of a contact no one has, which every backend answers in order and with
+/// nothing.
+pub(crate) fn marker() -> Request {
+    Request::History {
+        contact: -1,
+        before: Some(-7),
+        limit: 0,
+    }
+}
+
+/// Whether `response` answers the [`marker`].
+pub(crate) fn is_marker(response: &Response) -> bool {
+    matches!(response, Response::History { contact: -1, .. })
+}
+
+/// Submit the [`marker`], waiting for room in the bridge's queue (a test may leave requests behind it).
+pub(crate) fn submit_marker(bridge: &Bridge) -> Test {
+    for _ in 0..5_000 {
+        if bridge.submit(marker()).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    Err("the bridge's queue stayed full".into())
+}
+
+/// Everything submitted so far has been handled and its answer applied: the bridge answers in order, so the answer to the
+/// [`marker`] comes behind all earlier ones.
+pub(crate) fn settle(vm: &mut Vm, bridge: &Bridge, rx: &Receiver<Response>) -> Test {
+    submit_marker(bridge)?;
+    while let Ok(response) = rx.recv() {
+        let done = is_marker(&response);
+        vm.apply(response, bridge);
+        if done {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// T11: on a real profile (unlocked through the bridge), the per-session override shows the content; it is held in the model
+/// only: no file under the profile directory changes (names, sizes, modification times) when it is chosen and shown, and a
+/// second model on the same profile starts locked.
 #[cfg(target_os = "linux")]
 #[test]
 fn session_override_shows_content_and_is_not_persisted() -> Test {
@@ -343,23 +478,38 @@ fn session_override_shows_content_and_is_not_persisted() -> Test {
     let root = scratch("t11");
     std::fs::create_dir_all(&root)?;
     create_profile(&root.join("alice"), b"right", None).map_err(|_| "create alice")?;
+    let (sink, rx) = queue();
+    let bridge = Bridge::spawn(CoreBackend::new(root.clone(), true), sink);
+    let mut vm = Vm::new(Lang::En, Screen::Unlock, "alice");
+    vm.unlock(&bridge, "right");
+    pump(&mut vm, &bridge, &rx, |vm| vm.screen() == Screen::Contacts);
+    settle(&mut vm, &bridge, &rx)?;
+    assert_eq!(vm.protection(), Protection::Locked);
+    render(&ui, &vm);
+    let locked = locale::text(Lang::En, key::CONTENT_LOCKED);
+    assert_eq!(
+        rendered(&ui),
+        [(locked.to_owned(), String::new(), String::new())]
+    );
     let before = snapshot(&root.join("alice"))?;
     assert!(!before.is_empty());
-    let (mut vm, bridge) = zed(Protection::Locked);
     assert!(vm.override_available());
     vm.override_session();
+    vm.sync_display(&bridge);
     assert_eq!(vm.protection(), Protection::Overridden);
     render(&ui, &vm);
-    assert_eq!(rendered(&ui).first().map(|r| r.0.as_str()), Some("Zed"));
+    settle(&mut vm, &bridge, &rx)?;
+    // the placeholder row is gone: the profile has no contact to show
+    assert!(rendered(&ui).is_empty());
     assert_eq!(
         ui.get_indicator_text().as_str(),
         locale::text(Lang::En, key::INDICATOR_OVERRIDDEN)
     );
     assert!(!ui.get_show_override());
+    assert_eq!(snapshot(&root.join("alice"))?, before);
     bridge.shutdown();
     let second = Vm::new(Lang::En, Screen::Unlock, "alice");
     assert_eq!(second.protection(), Protection::Locked);
-    assert_eq!(snapshot(&root.join("alice"))?, before);
     remove(&root);
     Ok(())
 }

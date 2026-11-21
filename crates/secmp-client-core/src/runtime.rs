@@ -195,6 +195,9 @@ pub const fn admitted(request: &Request) -> bool {
         | Request::RelayView { .. }
         | Request::Send { .. }
         | Request::Message { .. }
+        | Request::History { .. }
+        | Request::SetDisplayState(_)
+        | Request::DisplayState
         | Request::Reveal { .. }
         | Request::Rotate { .. }
         | Request::ResetSession { .. }
@@ -1880,6 +1883,19 @@ mod tests {
                 },
                 true,
             ),
+            (
+                Request::History {
+                    contact,
+                    before: None,
+                    limit: 50,
+                },
+                true,
+            ),
+            (
+                Request::SetDisplayState(crate::api::DisplayState::Locked),
+                true,
+            ),
+            (Request::DisplayState, true),
             (Request::Rotate { contact, relay: 1 }, true),
             (Request::RotateIdentity, true),
             (Request::ResetSession { contact }, true),

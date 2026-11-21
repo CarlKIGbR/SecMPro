@@ -12,29 +12,36 @@ use secmp_testkit::harness::e2e::E2eRelay;
 use slint::Model as _;
 
 use crate::app::render;
-use crate::bridge::{Bridge, CoreEvent, Request, Response};
+use crate::bridge::{Bridge, CoreEvent, Response};
 use crate::core_backend::CoreBackend;
 use crate::locale::{self, Lang, key};
 use crate::screens::MainWindow;
 use crate::tests::{
-    DIGITS, HELLO, INVITE_URI, SECRET, Test, pump, queue, remove, row, scratch, stub,
+    DIGITS, HELLO, INVITE_URI, SECRET, Test, is_marker, pump, queue, remove, row, scratch, stub,
+    submit_marker,
 };
-use crate::vm::{ModeChoice, Protection, Screen, Vm};
+use crate::vm::{Protection, Screen, Vm};
 
 /// A view model on a stub core with one contact, "Zed" (id 1), and the receiving end of its bridge.
-struct Rig {
-    vm: Vm,
-    bridge: Bridge,
-    rx: Receiver<Response>,
-    reveals: Arc<AtomicUsize>,
+pub(crate) struct Rig {
+    pub(crate) vm: Vm,
+    pub(crate) bridge: Bridge,
+    pub(crate) rx: Receiver<Response>,
+    pub(crate) reveals: Arc<AtomicUsize>,
+    pub(crate) actions: Arc<AtomicUsize>,
+    pub(crate) sets: Arc<AtomicUsize>,
 }
 
 impl Rig {
     /// On the contact list, protection verified.
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (sink, rx) = queue();
         let (backend, _) = stub(vec![row(1, "Zed", true)], None);
-        let reveals = backend.reveals.clone();
+        let (reveals, actions, sets) = (
+            backend.reveals.clone(),
+            backend.actions.clone(),
+            backend.sets.clone(),
+        );
         let bridge = Bridge::spawn(backend, sink);
         let mut vm = Vm::new(Lang::En, Screen::Unlock, "alice");
         vm.set_protection(Protection::Verified);
@@ -45,26 +52,24 @@ impl Rig {
             bridge,
             rx,
             reveals,
+            actions,
+            sets,
         }
     }
 
     /// In the conversation with Zed.
-    fn conversation() -> Self {
+    pub(crate) fn conversation() -> Self {
         let mut rig = Self::new();
-        rig.vm.open_contact(0);
+        rig.vm.open_contact(&rig.bridge, 0);
         assert_eq!(rig.vm.screen(), Screen::Conversation);
         rig
     }
 
     /// Everything submitted so far has been handled and its answer applied (the bridge answers in order).
-    fn settle(&mut self) {
-        assert!(
-            self.bridge
-                .submit(Request::RelayView(ModeChoice::Strict))
-                .is_ok()
-        );
+    pub(crate) fn settle(&mut self) {
+        assert!(submit_marker(&self.bridge).is_ok());
         while let Ok(response) = self.rx.recv() {
-            let done = matches!(response, Response::RelayView(_));
+            let done = is_marker(&response);
             self.vm.apply(response, &self.bridge);
             if done {
                 break;
@@ -73,7 +78,7 @@ impl Rig {
     }
 
     /// A message of `kind` arrives from Zed, and its first row shows once the core has answered.
-    fn receive(&mut self, kind: u8) {
+    pub(crate) fn receive(&mut self, kind: u8) {
         self.vm.apply(
             Response::Event(CoreEvent::MessageReceived {
                 contact: 1,
@@ -108,6 +113,8 @@ fn all_text(ui: &MainWindow) -> String {
         ui.get_safety_status().to_string(),
         ui.get_error_text().to_string(),
         ui.get_unavailable_text().to_string(),
+        ui.get_conv_draft().to_string(),
+        ui.get_invite_input().to_string(),
     ]);
     out.join("\n")
 }
@@ -126,7 +133,7 @@ fn view_once_reveal_is_refused_unless_verified() {
 
     for protection in [Protection::Locked, Protection::Overridden] {
         rig.vm.set_protection(protection);
-        rig.vm.reveal_press(&rig.bridge, 0);
+        rig.vm.reveal_press(&rig.bridge, 0, 0);
         assert!(!rig.vm.revealing(), "{protection:?}");
         rig.settle();
         assert_eq!(rig.reveals.load(Ordering::SeqCst), 0, "{protection:?}");
@@ -142,7 +149,7 @@ fn view_once_reveal_is_refused_unless_verified() {
     );
 
     rig.vm.set_protection(Protection::Verified);
-    rig.vm.reveal_press(&rig.bridge, 0);
+    rig.vm.reveal_press(&rig.bridge, 0, 0);
     assert!(rig.vm.revealing());
     rig.settle();
     assert_eq!(rig.reveals.load(Ordering::SeqCst), 1);
@@ -159,7 +166,7 @@ fn view_once_reveal_is_refused_unless_verified() {
         ))
     );
     // it is gone: a second hold asks nothing
-    rig.vm.reveal_press(&rig.bridge, 0);
+    rig.vm.reveal_press(&rig.bridge, 0, 0);
     assert!(!rig.vm.revealing());
     rig.bridge.shutdown();
 }
@@ -217,18 +224,41 @@ fn no_content_strings_while_locked_on_any_screen() -> Test {
     i_slint_backend_testing::init_no_event_loop();
     let ui = MainWindow::new()?;
     let mut rig = Rig::new();
-    let needles = ["Zed", HELLO, INVITE_URI, DIGITS];
-    // locked: none of the contents is in any property; verified: `shows` is
+    let needles = [
+        "Zed",
+        HELLO,
+        INVITE_URI,
+        DIGITS,
+        "typed-draft",
+        "typed-input",
+    ];
+    // locked: none of the contents is in any property, the banners and both codes are gone, what the user typed is emptied and
+    // its fields are disabled; verified: `shows` is, and the banners and the codes are (the positive controls)
     let check = |rig: &mut Rig, shows: &str| {
         rig.vm.set_protection(Protection::Locked);
+        ui.set_conv_draft("typed-draft".into());
+        ui.set_invite_input("typed-input".into());
         render(&ui, &rig.vm);
         let locked = all_text(&ui);
         for needle in needles {
             assert!(!locked.contains(needle), "locked, {shows}: {needle}");
         }
+        assert_eq!(ui.get_conv_banners().row_count(), 0, "banners, {shows}");
+        assert_eq!(ui.get_invite_qr().size().width, 0, "invite code, {shows}");
+        assert_eq!(ui.get_safety_qr().size().width, 0, "safety code, {shows}");
+        assert!(!ui.get_conv_input_enabled() && !ui.get_invite_input_enabled());
         rig.vm.set_protection(Protection::Verified);
         render(&ui, &rig.vm);
         assert!(all_text(&ui).contains(shows), "verified: {shows}");
+        match rig.vm.screen() {
+            Screen::Invitations => {
+                assert!(ui.get_invite_qr().size().width > 0, "invite code shows");
+                assert!(ui.get_invite_input_enabled());
+            }
+            Screen::Conversation => assert!(ui.get_conv_banners().row_count() > 0, "banners show"),
+            Screen::Safety => assert!(ui.get_safety_qr().size().width > 0, "safety code shows"),
+            _ => {}
+        }
     };
 
     // the contact list
@@ -242,11 +272,15 @@ fn no_content_strings_while_locked_on_any_screen() -> Test {
     rig.vm.leave();
 
     // the conversation: the contact's name in the title, the message in a row
-    rig.vm.open_contact(0);
+    rig.vm.open_contact(&rig.bridge, 0);
     rig.receive(1);
     pump(&mut rig.vm, &rig.bridge, &rig.rx, |vm| {
         vm.conv_rows().first().is_some_and(|r| r.text == HELLO)
     });
+    // a key change: the banners (the warning and the frozen hint) are content of the conversation
+    rig.vm
+        .apply(Response::Event(CoreEvent::KeyChanged(1)), &rig.bridge);
+    rig.settle();
     check(&mut rig, "Zed");
     check(&mut rig, HELLO);
 
@@ -286,6 +320,11 @@ impl Side {
         let relay_text = std::fs::read_to_string(relay.ref_path())?;
         create_profile(&dir, PASS.as_bytes(), Some(&relay_text)).map_err(|_| "create profile")?;
         relay.seed_spares(&dir, PASS.as_bytes(), 2, name);
+        Self::unlock(root, name)
+    }
+
+    /// Unlock the existing profile `name` under `root`.
+    fn unlock(root: &std::path::Path, name: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let (sink, rx) = queue();
         let bridge = Bridge::spawn(CoreBackend::new(root.to_path_buf(), true), sink);
         let mut vm = Vm::new(Lang::En, Screen::Unlock, name);
@@ -332,10 +371,13 @@ fn two_profiles_exchange_invitation_and_messages_through_view_models() -> Test {
     let uri = a.vm.invite_text();
     assert!(uri.starts_with("secmp://i/"));
 
-    // B accepts it; the link data may reach the relay a moment after the invitation was shown, so a refusal is tried again
+    // B accepts it. One attempt is expected: the harness gives no reason for a retry (the invitation's link data is put on the
+    // relay before the URI is shown to the user); at most 3 attempts are made, and the count is asserted
     b.vm.open_invitations();
     let mut added = false;
-    for _ in 0..20 {
+    let mut attempts = 0_u32;
+    for _ in 0..3 {
+        attempts = attempts.saturating_add(1);
         b.vm.accept_invitation(&b.bridge, &uri);
         b.until(LONG, |vm| !vm.busy())?;
         b.until(ROW, |vm| {
@@ -348,6 +390,7 @@ fn two_profiles_exchange_invitation_and_messages_through_view_models() -> Test {
         std::thread::sleep(Duration::from_secs(2));
     }
     assert!(added, "B has no contact");
+    assert_eq!(attempts, 1, "B needed {attempts} accept attempts");
 
     // both see the contact
     a.until(ROW, |vm| !vm.contacts().is_empty())?;
@@ -356,7 +399,7 @@ fn two_profiles_exchange_invitation_and_messages_through_view_models() -> Test {
     // the safety numbers are equal; both mark the contact verified (receipts are sent for verified contacts only, spec §10.4)
     for side in [&mut a, &mut b] {
         side.vm.leave();
-        side.vm.open_contact(0);
+        side.vm.open_contact(&side.bridge, 0);
         side.vm.open_safety(&side.bridge);
         side.until(LONG, Vm::safety_can_verify)?;
     }
@@ -384,8 +427,21 @@ fn two_profiles_exchange_invitation_and_messages_through_view_models() -> Test {
             .is_some_and(|r| r.meta.ends_with(delivered))
     })?;
 
+    // S5: both view models are dropped; A is reopened. Its conversation with B lists "hello" from the history, and the contact
+    // is still verified
     a.bridge.shutdown();
     b.bridge.shutdown();
+    drop((a.vm, b.vm));
+    let mut a = Side::unlock(&profiles, "alice")?;
+    a.until(LONG, |vm| !vm.contacts().is_empty())?;
+    assert!(a.vm.rows().first().is_some_and(|r| r.verified));
+    a.vm.open_contact(&a.bridge, 0);
+    a.until(LONG, |vm| {
+        vm.conv_rows()
+            .iter()
+            .any(|r| r.text == "hello" && !r.incoming)
+    })?;
+    a.bridge.shutdown();
     remove(&root);
     Ok(())
 }

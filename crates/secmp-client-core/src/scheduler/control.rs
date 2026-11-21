@@ -120,7 +120,7 @@ impl ControlOps {
         });
     }
 
-    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; a link's life after `prepare` lasts up to `CONNECT_TIMEOUT_MS`; `prepare` and `commit` are outside that limit (HB-62 (3)), so the bound of three or four assumes a bounded `prepare`; delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
+    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; an attempt lasts up to `CONNECT_TIMEOUT_MS` from its admission, `prepare` included (HB-64, EXT3d-1; `commit` is outside that limit, HB-62 (3)); delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
     #[must_use]
     pub fn coalesced(&self, kind: ControlKind, relay: RelayId) -> Option<OpId> {
         let joins = |o: &Op| {
@@ -666,7 +666,7 @@ mod tests {
         Ok(())
     }
 
-    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + CONNECT_TIMEOUT_MS` — the running one may still send its command until then; with none running, from `now` or the latest related start, as before; an operation of another correlation does not move it.
+    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + CONNECT_TIMEOUT_MS` — the running one may send a command only until `CONNECT_TIMEOUT_MS` from its admission (HB-64, EXT3d-1), which is no later; with none running, from `now` or the latest related start, as before; an operation of another correlation does not move it.
     #[test]
     fn deletion_armed_while_a_related_operation_runs_waits_out_the_attempt()
     -> Result<(), Unavailable> {

@@ -608,7 +608,8 @@ impl Limited {
                 .sched
                 .schedule_control(t0, c.kind, RelayId(0), 1, c.when)
                 .unwrap();
-            x.run_until(t0 + c.delay_ms + 1_000).await;
+            x.run_until(t0.saturating_add(c.delay_ms).saturating_add(1_000))
+                .await;
             let t_a = x
                 .driver
                 .log()
@@ -617,7 +618,7 @@ impl Limited {
                 .iter()
                 .find_map(|(o, t)| (*o == op).then_some(*t))
                 .expect("admitted");
-            x.run_until(t_a + c.horizon_ms).await;
+            x.run_until(t_a.saturating_add(c.horizon_ms)).await;
             Limited { setup, x, op, t_a }
         })
     }
@@ -644,13 +645,13 @@ impl Limited {
 
     /// The first report is `want`, made at `t_a + L` (not before, not much after).
     fn assert_first_end(&self, want: secmp_client_core::scheduler::run::ControlEnd) {
-        let d = self.t_a + L;
+        let d = self.t_a.saturating_add(L);
         let (t, end) = *self.ends().first().expect("a report");
         assert_eq!(end, want);
         assert!(
-            t >= d && t <= d + 1_000,
+            t >= d && t <= d.saturating_add(1_000),
             "reported at t_a + {} ms",
-            t - self.t_a
+            t.saturating_sub(self.t_a)
         );
     }
 }
@@ -771,7 +772,9 @@ fn driver_control_stalled_prepare_reports_and_keeps_delay_floor() {
             .collect();
     assert!(starts.len() >= 2, "retried: {starts:?}");
     assert!(
-        starts[1] >= r.t_a + drawn,
+        starts
+            .get(1)
+            .is_some_and(|s| *s >= r.t_a.saturating_add(drawn)),
         "next start {starts:?} before t_a + {drawn}"
     );
 }

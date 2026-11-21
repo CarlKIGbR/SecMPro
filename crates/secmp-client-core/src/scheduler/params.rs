@@ -77,7 +77,9 @@ pub const FETCH_MULTI_LIMIT: usize = 32;
 
 /// How long a connection attempt (stream and SecMP-LINK handshake) may take before it counts as failed: a provider that
 /// never answers must not leave a link in `Connecting`, which has no deadline in the core (obligation (iii)). Two
-/// minutes: a Tor circuit to an onion service plus the handshake.
+/// minutes: a Tor circuit to an onion service plus the handshake. A control operation's limit (`prepare`, connect,
+/// handshake and command together) is counted from its admission, the `now` of `ControlOps::take_due` (HB-64, EXT3d-1): no
+/// command write starts at or after `admission + CONNECT_TIMEOUT_MS`.
 pub const CONNECT_TIMEOUT_MS: u64 = 120_000;
 
 impl Params {

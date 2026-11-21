@@ -690,6 +690,21 @@ pub struct RunLog {
     pub discarded: Vec<(u64, LinkId)>,
     /// The steps of the loop.
     pub steps: Vec<Step>,
+    /// The admission time of every control operation start (EXT3d-1).
+    pub admitted: Vec<(OpId, u64)>,
+    /// How every control attempt ended for the scheduler: time, operation, outcome (EXT3d-1).
+    pub controls: Vec<(u64, OpId, ControlEnd)>,
+}
+
+/// How a control attempt ended, as the log records it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlEnd {
+    /// Done.
+    Done,
+    /// The link failed (`closed_before`).
+    LinkFailed(bool),
+    /// Answered.
+    Answered,
 }
 
 enum Conn<S> {
@@ -784,7 +799,27 @@ pub use crate::scheduler::core::pure::FLUSH_WAIT_MS;
 /// pending): the shortest period of `PERIODS`, so no link ever writes a tick late (EXTB-3).
 pub const WRITE_STALL_MS: u64 = 10_000;
 
-/// The connection-attempt limit; defined in [`crate::scheduler::params`] so the pure control module can use it under Kani,
+/// `fut`'s output, or `None` once `deadline` has elapsed. Unlike `tokio::time::timeout` it polls the deadline first, so a
+/// future that is ready at the same instant does not win and one that is pending past the deadline is not polled again
+/// (HB-64: no command write starts at or after the deadline).
+async fn before_deadline<F: Future>(
+    mut deadline: std::pin::Pin<&mut tokio::time::Sleep>,
+    expired: impl Fn() -> bool,
+    fut: F,
+) -> Option<F::Output> {
+    let mut fut = std::pin::pin!(fut);
+    core::future::poll_fn(|cx| {
+        // the timer is polled first so that its waker is registered
+        let timer = deadline.as_mut().poll(cx).is_ready();
+        if timer || expired() {
+            return core::task::Poll::Ready(None);
+        }
+        fut.as_mut().poll(cx).map(Some)
+    })
+    .await
+}
+
+/// The limit of a connection attempt (and the default of `Params::control_limit_ms`, HB-64, EXT3d-1); defined in [`crate::scheduler::params`] so the pure control module can use it under Kani,
 /// where this module is compiled out (M7-S9d).
 pub use crate::scheduler::params::CONNECT_TIMEOUT_MS;
 
@@ -828,7 +863,8 @@ where
         }
     }
 
-    /// Change the connect timeout (default [`CONNECT_TIMEOUT_MS`]).
+    /// Change the connect timeout (default [`CONNECT_TIMEOUT_MS`]). It bounds the connects of data links only; it does not
+    /// change the limit of a control operation, which is `Params::control_limit_ms` of the scheduler (HB-64).
     #[must_use]
     pub const fn with_connect_timeout(mut self, ms: u64) -> Self {
         self.connect_timeout = Duration::from_millis(ms);
@@ -1093,6 +1129,16 @@ where
                 }
             }
             Event::Control(op, result) => {
+                if let Some(log) = &mut self.log {
+                    let end = match &result {
+                        ControlResult::Done(_) => ControlEnd::Done,
+                        ControlResult::LinkFailed { closed_before } => {
+                            ControlEnd::LinkFailed(*closed_before)
+                        }
+                        ControlResult::Answered => ControlEnd::Answered,
+                    };
+                    log.controls.push((now, op, end));
+                }
                 match result {
                     ControlResult::Done(effect) => {
                         match effect {
@@ -1195,8 +1241,11 @@ where
                     relay,
                     kind,
                     transport,
+                    admitted,
                 } => {
-                    self.control(now, op, key, relay, kind, transport);
+                    // the one value the S-9b floor reads too (HB-64)
+                    let limit_ms = sched.params().control_limit_ms;
+                    self.control((now, admitted, limit_ms), op, key, relay, kind, transport);
                 }
             }
         }
@@ -1307,7 +1356,7 @@ where
 
     fn control(
         &mut self,
-        now: u64,
+        (now, admitted, limit_ms): (u64, u64, u64),
         op: OpId,
         key: IsolationKey,
         relay: RelayId,
@@ -1317,6 +1366,7 @@ where
         let isolation = Isolation(key.0);
         if let Some(log) = &mut self.log {
             log.connects.push((now, Purpose::Control(op), isolation));
+            log.admitted.push((op, admitted));
         }
         let events = self.events_tx.clone();
         let providers = Arc::clone(&self.providers);
@@ -1324,16 +1374,30 @@ where
         let runner = Arc::clone(&self.runner);
         let clock = Arc::clone(&self.clock);
         let mut entropy = self.entropy.next();
-        let limit = self.connect_timeout;
         self.controls.retain(|t| !t.is_finished());
         self.controls.push(tokio::spawn(async move {
-            let result = match runner.prepare(op, kind, relay).await {
+            // HB-64 (EXT3d-1): one deadline from the admission for `prepare`, the connect, the handshake and the command; an
+            // overflow counts as expired
+            let deadline = admitted.checked_add(limit_ms);
+            let expired = || deadline.is_none_or(|d| clock.mono_ms() >= d);
+            let remaining = deadline.map_or(0, |d| d.saturating_sub(clock.mono_ms()));
+            let mut deadline_sleep =
+                std::pin::pin!(tokio::time::sleep(Duration::from_millis(remaining)));
+            // the deadline is polled first: a `prepare` that stalls past it sends nothing
+            let prepared = before_deadline(
+                deadline_sleep.as_mut(),
+                &expired,
+                runner.prepare(op, kind, relay),
+            )
+            .await;
+            let result = match prepared {
                 // Q300 (EXT3-1 Repro B, HB-55): the host's material before any link opens; nothing to do opens no link
-                Ok(None) => ControlResult::Done(ControlEffect::None),
-                Err(_) => ControlResult::LinkFailed {
+                Some(Ok(None)) => ControlResult::Done(ControlEffect::None),
+                // the deadline during `prepare`, or its error: no link, no command
+                None | Some(Err(_)) => ControlResult::LinkFailed {
                     closed_before: false,
                 },
-                Ok(Some(prepared)) => {
+                Some(Ok(Some(prepared))) => {
                     // Q300 phase rule (M7-S4d): set once the handshake is done — from then on the relay may have read the command
                     let mut up = false;
                     let attempt = async {
@@ -1358,29 +1422,34 @@ where
                             AsyncConnectOutcome::Failed(_) => return Err(false),
                         };
                         let mut t = AsyncRelayQueueTransport::new(session);
+                        // no command write starts at or after the deadline (HB-64)
+                        if expired() {
+                            return Err(false);
+                        }
                         up = true;
                         let answer = runner.run(prepared, &mut t).await;
                         // the one-shot link closes here, before the host commits the answer (Q300; spec §10.1)
                         drop(t);
                         Ok(answer)
                     };
-                    // the link's life under the connect timeout: a hanging relay fails it, never stalls it
-                    let outcome = tokio::time::timeout(limit, attempt).await;
+                    // the link's life under the limit counted from admission: a hanging relay fails it, never stalls it; the
+                    // deadline is polled before the attempt
+                    let outcome = before_deadline(deadline_sleep.as_mut(), &expired, attempt).await;
                     match outcome {
-                        Ok(Ok(Ok(answer))) => match runner.commit(answer).await {
+                        Some(Ok(Ok(answer))) => match runner.commit(answer).await {
                             Ok(effect) => ControlResult::Done(effect),
                             Err(_) => ControlResult::Answered,
                         },
-                        Ok(Err(closed_before)) => ControlResult::LinkFailed { closed_before },
-                        // the timeout before the link was up: no command was written
-                        Err(_) if !up => ControlResult::LinkFailed {
+                        Some(Err(closed_before)) => ControlResult::LinkFailed { closed_before },
+                        // the deadline before the link was up: no command was written
+                        None if !up => ControlResult::LinkFailed {
                             closed_before: false,
                         },
                         // Q300 phase rule (M7-S4d, XREVIEW-M7-S4 S4-1): once the link is up the relay may have read the command;
                         // whatever ended the attempt — a relay `ERR` of any code, an unfitting or garbled answer, the link
                         // closed, the timeout — it is a related operation (spec §10.6 (2)), never a link failure, so a hostile
                         // relay cannot choose the fast retry
-                        Ok(Ok(Err(_))) | Err(_) => {
+                        Some(Ok(Err(_))) | None => {
                             if runner.unanswered(kind).await {
                                 ControlResult::Done(ControlEffect::None)
                             } else {

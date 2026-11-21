@@ -308,6 +308,16 @@ pub enum Request {
         /// The message.
         msg_id: MessageId,
     },
+    /// The history of a contact, newest first, read only (M8 U7): at most `limit` messages older than the history row
+    /// `before` (`None`: from the newest). A view-once is never in it.
+    History {
+        /// The contact.
+        contact: ContactId,
+        /// The cursor of the oldest message the caller already has ([`HistoryEntry::cursor`]).
+        before: Option<i64>,
+        /// How many at most (the store caps it).
+        limit: u16,
+    },
     /// Show a received view-once.
     Reveal {
         /// The contact.
@@ -345,6 +355,10 @@ pub enum Request {
         /// Direct (non-Tor) transport.
         direct: bool,
     },
+    /// The UI reports what it found about the display (CS-1.18). Held in memory only; it changes nothing else.
+    SetDisplayState(DisplayState),
+    /// The display state the UI last reported (CS-1.18: testable through the core API).
+    DisplayState,
     /// Write the backup file, on the user's explicit request only (CS-3.5).
     Export {
         /// Where.
@@ -380,6 +394,8 @@ pub enum Response {
         /// The payload.
         payload: Zeroizing<Vec<u8>>,
     },
+    /// A page of the history, newest first.
+    History(Vec<HistoryEntry>),
     /// The payload of a view-once.
     Revealed(Zeroizing<Vec<u8>>),
     /// Whether the rotation started (else `Event::RotationDeferred`).
@@ -390,6 +406,8 @@ pub enum Response {
     Settings(Settings),
     /// The lines of the page.
     RelayView(Vec<&'static str>),
+    /// The display state the UI last reported.
+    DisplayState(DisplayState),
     /// Done.
     Done,
 }
@@ -409,6 +427,7 @@ impl core::fmt::Debug for Request {
                 .field("payload", &Len(payload.len()))
                 .finish_non_exhaustive(),
             Self::Message { .. } => f.write_str("Message"),
+            Self::History { .. } => f.write_str("History"),
             Self::Reveal { .. } => f.write_str("Reveal"),
             Self::Rotate { .. } => f.write_str("Rotate"),
             Self::RotateIdentity => f.write_str("RotateIdentity"),
@@ -417,6 +436,8 @@ impl core::fmt::Debug for Request {
             Self::Settings => f.write_str("Settings"),
             Self::SetSettings(_) => f.write_str("SetSettings"),
             Self::RelayView { .. } => f.write_str("RelayView"),
+            Self::SetDisplayState(_) => f.write_str("SetDisplayState"),
+            Self::DisplayState => f.write_str("DisplayState"),
             Self::Export { passphrase, .. } => f
                 .debug_struct("Export")
                 .field("passphrase", &Len(passphrase.len()))
@@ -440,6 +461,7 @@ impl core::fmt::Debug for Response {
                 .debug_struct("Message")
                 .field("payload", &Len(payload.len()))
                 .finish_non_exhaustive(),
+            Self::History(entries) => f.debug_tuple("History").field(&Len(entries.len())).finish(),
             Self::Revealed(payload) => f
                 .debug_tuple("Revealed")
                 .field(&Len(payload.len()))
@@ -448,9 +470,40 @@ impl core::fmt::Debug for Response {
             Self::IdentityRotated(_) => f.write_str("IdentityRotated"),
             Self::Settings(_) => f.write_str("Settings"),
             Self::RelayView(_) => f.write_str("RelayView"),
+            Self::DisplayState(_) => f.write_str("DisplayState"),
             Self::Done => f.write_str("Done"),
         }
     }
+}
+
+/// One message of [`Response::History`] (the payload is the user's text: no `Debug`).
+pub struct HistoryEntry {
+    /// The cursor to pass as `before` for the page of older messages.
+    pub cursor: i64,
+    /// The message id.
+    pub msg_id: MessageId,
+    /// Whether it was received (else sent).
+    pub incoming: bool,
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// When (Unix milliseconds of the store's clock).
+    pub ts_ms: u64,
+    /// The payload; empty for a view-once (which is never stored).
+    pub payload: Zeroizing<Vec<u8>>,
+}
+
+/// What the UI found about the display (CS-1.2, CS-1.9, CS-1.18). The core only holds it, for the tests of the indicator; it
+/// changes no other behaviour, and nothing is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayState {
+    /// Exclusion from capture is active and verified.
+    Protected,
+    /// Blur / view-once only (set by nothing before M9).
+    PartiallyProtected,
+    /// Not verified: content is locked (the state until the UI reports another).
+    Locked,
+    /// The user chose, for this session, to show content on an unprotected display.
+    Overridden,
 }
 
 /// What the scheduler tells the core about its recv-queues: the rate bound of a rotation counts every one (spec §10.2).
@@ -481,6 +534,8 @@ pub struct Core<C: Clock, S: EntropySource> {
     pub(crate) rotated: Vec<RotationDone>,
     /// The period of the queue a rotation makes current.
     pub(crate) rotation_period: secmp_proto::wire::Period,
+    /// What the UI reported about the display (memory only).
+    pub(crate) display: DisplayState,
 }
 
 /// A rotation that started: the queue the scheduler fetches from now on.
@@ -607,6 +662,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             routes_changed: Vec::new(),
             rotated: Vec::new(),
             rotation_period: secmp_proto::wire::Period::S80,
+            display: DisplayState::Locked,
         };
         let lost = core
             .store
@@ -849,21 +905,12 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                     now,
                 )?)
             }
-            Request::Message { contact, msg_id } => {
-                let now = self.now_ms();
-                let found = self
-                    .store
-                    .lock()
-                    .map_err(|_| Error::Unavailable)?
-                    .message(contact.0, &msg_id, now)?
-                    .ok_or(Error::Unavailable)?;
-                Response::Message {
-                    incoming: found.direction == secmp_store::messages::Direction::In,
-                    kind: found.kind,
-                    ts_ms: found.ts_ms,
-                    payload: found.payload,
-                }
-            }
+            Request::Message { contact, msg_id } => self.message(contact, &msg_id)?,
+            Request::History {
+                contact,
+                before,
+                limit,
+            } => Response::History(self.history(contact, before, limit)?),
             Request::Reveal { contact, msg_id } => {
                 let (now, store) = (self.now_ms(), Arc::clone(&self.store));
                 let conversation = self.session(contact)?;
@@ -900,6 +947,11 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             Request::RelayView { direct } => {
                 Response::RelayView(relay_view::relay_view(self.settings.mode, direct))
             }
+            Request::SetDisplayState(state) => {
+                self.display = state;
+                Response::Done
+            }
+            Request::DisplayState => Response::DisplayState(self.display),
             Request::Export {
                 path,
                 passphrase,
@@ -918,6 +970,48 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         };
         self.pump()?;
         Ok(answer)
+    }
+
+    /// `Request::Message`: a message of the history by its id.
+    fn message(&self, contact: ContactId, msg_id: &MessageId) -> Result<Response, Error> {
+        let found = self
+            .store
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .message(contact.0, msg_id, self.now_ms())?
+            .ok_or(Error::Unavailable)?;
+        Ok(Response::Message {
+            incoming: found.direction == secmp_store::messages::Direction::In,
+            kind: found.kind,
+            ts_ms: found.ts_ms,
+            payload: found.payload,
+        })
+    }
+
+    /// `Request::History`: a page of the history of `contact`, newest first, read from the store (nothing is written).
+    fn history(
+        &self,
+        contact: ContactId,
+        before: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<HistoryEntry>, Error> {
+        let rows = self.store.lock().map_err(|_| Error::Unavailable)?.history(
+            contact.0,
+            before,
+            limit,
+            self.now_ms(),
+        )?;
+        Ok(rows
+            .into_iter()
+            .map(|row| HistoryEntry {
+                cursor: row.cursor,
+                msg_id: row.msg_id,
+                incoming: row.direction == secmp_store::messages::Direction::In,
+                kind: row.kind,
+                ts_ms: row.ts_ms,
+                payload: row.payload,
+            })
+            .collect())
     }
 
     /// `Request::Verify`: with a session the contact flag and the trust are written in one transaction
@@ -1204,6 +1298,160 @@ mod tests {
                 local.spawn_local(serve);
                 local.run_until(requests(&mut api, &store)).await
             })??;
+            Ok(())
+        })
+    }
+
+    /// An expired row of `contact` and a row of another contact, written behind the core's back (S6).
+    #[cfg(feature = "kat")]
+    fn extra_rows(store: &SharedStore, contact: ContactId) -> R {
+        let mut s = store.lock().map_err(|_| "lock")?;
+        // one view-once held from a peer, and a row of kind 3 written behind the store's back
+        s.hold_received_view_once([0x61; 16], b"held-secret");
+        s.connection_kat().execute(
+            "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+             VALUES (?1, ?2, 0, 3, 5, NULL, ?3)",
+            (
+                contact.0,
+                [0x62_u8; 16].as_slice(),
+                b"raw-secret".as_slice(),
+            ),
+        )?;
+        let raw = "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+                   VALUES (?1, ?2, 0, 1, 6, ?3, ?4)";
+        s.connection_kat().execute(
+            raw,
+            (
+                contact.0,
+                [0x63_u8; 16].as_slice(),
+                Some(1_i64),
+                b"expired".as_slice(),
+            ),
+        )?;
+        s.connection_kat().execute(
+            raw,
+            (
+                contact.0.saturating_add(1000),
+                [0x64_u8; 16].as_slice(),
+                None::<i64>,
+                b"other contact".as_slice(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// 250 rows of `contact` (S6: a limit above the cap).
+    #[cfg(feature = "kat")]
+    fn many_rows(store: &SharedStore, contact: ContactId) -> R {
+        let s = store.lock().map_err(|_| "lock")?;
+        s.connection_kat().execute(
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 250) \
+             INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+             SELECT ?1, CAST(printf('%016d', x) AS BLOB), 0, 1, x, NULL, x'00' FROM c",
+            (contact.0,),
+        )?;
+        Ok(())
+    }
+
+    /// S6 (M8 U7): the history is read from the store, newest first and in pages; a view-once (queued here, held from a peer,
+    /// or a row of kind 3 that some other tool wrote) never comes out with a payload.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn history_never_returns_view_once_payload() -> R {
+        big(|| {
+            let World {
+                guest, mut h, g, ..
+            } = world("s6", 72)?;
+            drop(g);
+            let store = guest.profile.store();
+            let mut core =
+                Core::with_profile(guest.profile.clone(), guest.clock.clone(), sources(910))?;
+            h.queue_route_update(vec![route(1)?]);
+            let reply = next(&mut h, ms(4))?;
+            let conv = core.conversations_mut().get_mut(0).ok_or("conversation")?;
+            deliver(conv, &reply)?;
+            let Response::Contacts(list) = core.handle(Request::Contacts)? else {
+                return Err("contacts".into());
+            };
+            let contact = list.first().ok_or("contact")?.id;
+            let Response::SafetyNumber(number) = core.handle(Request::SafetyNumber { contact })?
+            else {
+                return Err("safety number".into());
+            };
+            core.handle(Request::Verify {
+                contact,
+                digits: number,
+            })?;
+            let mut sent = Vec::new();
+            for t in ["first", "second", "third"] {
+                let Response::Sent(id) = core.handle(send(contact, 1, t.as_bytes()))? else {
+                    return Err("sent".into());
+                };
+                sent.push(id);
+            }
+            // a view-once queued here; the helper adds one held from a peer and rows written behind the store's back
+            core.handle(send(contact, 3, b"queued-secret"))?;
+            extra_rows(&store, contact)?;
+            let mut page = |before: Option<i64>, limit: u16| -> Result<Vec<HistoryEntry>, E> {
+                match core.handle(Request::History {
+                    contact,
+                    before,
+                    limit,
+                })? {
+                    Response::History(entries) => Ok(entries),
+                    _ => Err("history".into()),
+                }
+            };
+            let all = page(None, 50)?;
+            // newest first: the raw row, then the three texts
+            let shown: Vec<(u8, &[u8])> =
+                all.iter().map(|e| (e.kind, e.payload.as_slice())).collect();
+            assert_eq!(
+                shown,
+                [
+                    (3, &b""[..]),
+                    (1, &b"third"[..]),
+                    (1, &b"second"[..]),
+                    (1, &b"first"[..])
+                ]
+            );
+            assert!(
+                all.iter()
+                    .all(|e| !e.payload.windows(6).any(|w| w == b"secret"))
+            );
+            assert!(
+                !all.iter().any(|e| e.msg_id == [0x61; 16]),
+                "a held view-once is not history"
+            );
+            assert_eq!(
+                all.iter()
+                    .filter(|e| !e.incoming)
+                    .map(|e| e.msg_id)
+                    .collect::<Vec<_>>(),
+                sent.iter().rev().copied().collect::<Vec<_>>()
+            );
+            // pages of two: the cursor of the oldest entry asks for the next, older ones
+            let first = page(None, 2)?;
+            assert_eq!(first.len(), 2);
+            let at = first.last().ok_or("page")?.cursor;
+            let second = page(Some(at), 2)?;
+            assert_eq!(
+                second
+                    .iter()
+                    .map(|e| e.payload.as_slice())
+                    .collect::<Vec<_>>(),
+                [&b"second"[..], &b"first"[..]]
+            );
+            assert!(page(Some(second.last().ok_or("page")?.cursor), 2)?.is_empty());
+            // nothing is asked for, nothing comes: `limit` 0, and a cursor below every row
+            assert!(page(None, 0)?.is_empty());
+            assert!(page(Some(-1), 50)?.is_empty());
+            // a limit above the cap returns at most the cap
+            many_rows(&store, contact)?;
+            assert_eq!(
+                page(None, u16::MAX)?.len(),
+                usize::from(secmp_store::messages::HISTORY_MAX)
+            );
             Ok(())
         })
     }

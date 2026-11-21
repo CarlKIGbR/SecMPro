@@ -266,7 +266,78 @@ jobs:
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --delegated miri --delegated coverage --models tr
+
+  # F-37 (M8 U0): the twins of `miri` and `coverage`, which `dispatch-full` delegates (as in ci.yml).
+  dispatch-miri:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-pv-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (Miri, fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Miri subset (step 9 miri)
+        run: cargo xtask step --strict miri
+
+  dispatch-coverage:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-pv-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (Miri, fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Coverage (step 7 coverage)
+        run: cargo xtask step --strict coverage
 
   # Step 8 as in ci.yml (ADR-047 Amendment 1, Amendment 11): 24 shards, then the verdict over them.
   dispatch-mutants-shard:

@@ -516,3 +516,563 @@ fn driver_control_consume_lost_after_the_handshake_ends_once() {
     assert_eq!(r.unanswered, vec![kind]);
     assert!(!r.done.contains(&kind));
 }
+
+// EXT3d-1 (M8-E1, HB-64): the limit of a control operation is counted from its admission `t_a`, not from the end of
+// `prepare`: no command write starts at or after `t_a + L`, and the attempt is not polled from then on.
+
+/// The limit (ms), as the tests count it.
+const L: u64 = secmp_client_core::scheduler::run::CONNECT_TIMEOUT_MS;
+
+/// A provider whose connect is pending for `delay_ms` of virtual time (the connect and the handshake of a slow circuit).
+#[derive(Clone)]
+struct Late {
+    inner: secmp_testkit::harness::MemProvider,
+    delay_ms: u64,
+}
+
+impl secmp_transport::driver::StreamProvider for Late {
+    type Stream = tokio::io::DuplexStream;
+
+    fn connect(
+        &self,
+        relay: &secmp_proto::wire::inv::RelayRef,
+        isolation: secmp_transport::driver::Isolation,
+    ) -> impl core::future::Future<Output = Result<tokio::io::DuplexStream, secmp_transport::Error>> + Send
+    {
+        let (inner, relay, delay) = (self.inner.clone(), relay.clone(), self.delay_ms);
+        async move {
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            secmp_transport::driver::StreamProvider::connect(&inner, &relay, isolation).await
+        }
+    }
+}
+
+/// One control operation run through the product driver.
+struct Cfg {
+    seed: u64,
+    kind: secmp_client_core::scheduler::types::ControlKind,
+    when: secmp_client_core::scheduler::control::When,
+    /// `params.control_delay_ms` (lo = hi).
+    delay_ms: u64,
+    /// `prepare` of `kind` awaits this long.
+    prepare_ms: u64,
+    /// The connect awaits this long.
+    connect_ms: u64,
+    /// `run` never returns.
+    hang: bool,
+    /// Run until this long after the first admission.
+    horizon_ms: u64,
+    /// `params.control_limit_ms`.
+    limit_ms: u64,
+}
+
+/// What one control operation did under the limit.
+struct Limited {
+    setup: Setup,
+    x: TClient<Late>,
+    op: secmp_client_core::scheduler::types::OpId,
+    /// `t_a` of the first attempt.
+    t_a: u64,
+    limit_ms: u64,
+}
+
+impl Limited {
+    fn start(c: &Cfg) -> Self {
+        use secmp_client_core::scheduler::types::RelayId;
+        use secmp_testkit::harness::Costs;
+        runtime().block_on(async {
+            let setup = Setup::new();
+            let late = Late {
+                inner: setup.provider.clone(),
+                delay_ms: c.connect_ms,
+            };
+            let params = Params {
+                control_delay_ms: (c.delay_ms, c.delay_ms),
+                control_limit_ms: c.limit_ms,
+                ..Params::default()
+            };
+            let mut x = TClient::with_provider(
+                &setup,
+                late,
+                Mode::Strict,
+                params,
+                c.seed,
+                Costs::default(),
+                0,
+            );
+            let t0 = setup.now();
+            {
+                let mut m = x.control.lock().unwrap();
+                m.prepare_wait_kind.push((c.kind, c.prepare_ms));
+                if c.hang {
+                    m.hang.push(c.kind);
+                }
+            }
+            let op = x
+                .sched
+                .schedule_control(t0, c.kind, RelayId(0), 1, c.when)
+                .unwrap();
+            x.run_until(t0.saturating_add(c.delay_ms).saturating_add(1_000))
+                .await;
+            let t_a = x
+                .driver
+                .log()
+                .unwrap()
+                .admitted
+                .iter()
+                .find_map(|(o, t)| (*o == op).then_some(*t))
+                .expect("admitted");
+            x.run_until(t_a.saturating_add(c.horizon_ms)).await;
+            Limited {
+                setup,
+                x,
+                op,
+                t_a,
+                limit_ms: c.limit_ms,
+            }
+        })
+    }
+
+    /// `(time, how)` of every report of the operation to the scheduler.
+    fn ends(&self) -> Vec<(u64, secmp_client_core::scheduler::run::ControlEnd)> {
+        let log = self.x.driver.log().unwrap();
+        log.controls
+            .iter()
+            .filter(|(_, o, _)| *o == self.op)
+            .map(|(t, _, e)| (*t, *e))
+            .collect()
+    }
+
+    /// The times `run` was entered for `kind`.
+    fn runs(&self, kind: secmp_client_core::scheduler::types::ControlKind) -> Vec<u64> {
+        let m = self.x.control.lock().unwrap();
+        m.run_entered
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .map(|(_, t)| *t)
+            .collect()
+    }
+
+    /// The first report is `want`, made at `t_a + L` (not before, not much after).
+    fn assert_first_end(&self, want: secmp_client_core::scheduler::run::ControlEnd) {
+        let d = self.t_a.saturating_add(self.limit_ms);
+        let (t, end) = *self.ends().first().expect("a report");
+        assert_eq!(end, want);
+        assert!(
+            t >= d && t <= d.saturating_add(1_000),
+            "reported at t_a + {} ms",
+            t.saturating_sub(self.t_a)
+        );
+    }
+}
+
+fn cfg(
+    seed: u64,
+    kind: secmp_client_core::scheduler::types::ControlKind,
+    when: secmp_client_core::scheduler::control::When,
+) -> Cfg {
+    Cfg {
+        seed,
+        kind,
+        when,
+        delay_ms: 60_000,
+        prepare_ms: 0,
+        connect_ms: 0,
+        hang: false,
+        horizon_ms: L + 10_000,
+        limit_ms: L,
+    }
+}
+
+/// T1: a `prepare` that stalls past the limit sends nothing: no connect, `run` never entered, link failed (before the
+/// link) at `t_a + L`.
+#[test]
+fn driver_control_prepare_stalled_past_limit_sends_nothing() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::ControlKind;
+    let kind = ControlKind::LinkPut(1);
+    let r = Limited::start(&Cfg {
+        prepare_ms: L + 1_000,
+        ..cfg(60, kind, When::Delayed)
+    });
+    assert!(r.runs(kind).is_empty(), "run entered");
+    assert!(r.setup.provider.connects().is_empty(), "connected");
+    r.assert_first_end(ControlEnd::LinkFailed(false));
+}
+
+/// T2: `prepare` and the handshake share one limit: 100 s and 30 s do not fit in 120 s.
+#[test]
+fn driver_control_prepare_and_handshake_share_one_limit() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::ControlKind;
+    let kind = ControlKind::LinkPut(2);
+    let r = Limited::start(&Cfg {
+        prepare_ms: 100_000,
+        connect_ms: 30_000,
+        ..cfg(61, kind, When::Prompt)
+    });
+    assert!(r.runs(kind).is_empty(), "run entered");
+    r.assert_first_end(ControlEnd::LinkFailed(false));
+}
+
+/// T3: a link that comes up exactly at `t_a + L` writes no command.
+#[test]
+fn driver_control_up_at_deadline_writes_no_command() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::ControlKind;
+    let kind = ControlKind::LinkPut(3);
+    let r = Limited::start(&Cfg {
+        prepare_ms: 10_000,
+        connect_ms: L - 10_000,
+        ..cfg(62, kind, When::Prompt)
+    });
+    assert!(r.runs(kind).is_empty(), "run entered");
+    r.assert_first_end(ControlEnd::LinkFailed(false));
+}
+
+/// T4: a command started before the deadline is cut at it; the operation is then answered (Q300 phase rule).
+#[test]
+fn driver_control_command_started_before_deadline_is_cut_at_it() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::ControlKind;
+    let kind = ControlKind::LinkPut(4);
+    let r = Limited::start(&Cfg {
+        prepare_ms: 10_000,
+        connect_ms: L - 11_000,
+        hang: true,
+        ..cfg(63, kind, When::Prompt)
+    });
+    let runs = r.runs(kind);
+    assert_eq!(runs.len(), 1);
+    assert!(
+        runs.iter().all(|t| *t < r.t_a + L),
+        "entered before the deadline"
+    );
+    r.assert_first_end(ControlEnd::Answered);
+    assert_eq!(r.x.control.lock().unwrap().unanswered, vec![kind]);
+}
+
+/// T5: the stalled `prepare` is reported as a link failure and the operation keeps its drawn delay as the floor of its
+/// next start.
+#[test]
+fn driver_control_stalled_prepare_reports_and_keeps_delay_floor() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::ControlKind;
+    let kind = ControlKind::LinkPut(5);
+    let drawn = 200_000;
+    let r = Limited::start(&Cfg {
+        delay_ms: drawn,
+        prepare_ms: L + 50_000,
+        horizon_ms: 500_000,
+        ..cfg(64, kind, When::Delayed)
+    });
+    r.assert_first_end(ControlEnd::LinkFailed(false));
+    let starts: Vec<u64> =
+        r.x.driver
+            .log()
+            .unwrap()
+            .admitted
+            .iter()
+            .filter(|(o, _)| *o == r.op)
+            .map(|(_, t)| *t)
+            .collect();
+    assert!(starts.len() >= 2, "retried: {starts:?}");
+    assert!(
+        starts
+            .get(1)
+            .is_some_and(|s| *s >= r.t_a.saturating_add(drawn)),
+        "next start {starts:?} before t_a + {drawn}"
+    );
+}
+
+/// T6: a `QUEUE_DEL` armed while the put's `prepare` stalls keeps its 60 s from the put's last possible command start.
+#[test]
+fn driver_deletion_armed_while_put_prepare_stalls_keeps_60s() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_testkit::harness::Costs;
+    runtime().block_on(async {
+        let mut setup = Setup::new();
+        let params = Params {
+            control_delay_ms: (60_000, 60_000),
+            ..Params::default()
+        };
+        let period = *params.periods_ms.first().unwrap();
+        let mut x = TClient::new(&setup, Mode::Strict, params, 65, Costs::default(), 0);
+        let t0 = setup.now();
+        let (rc, _) = setup.new_queue(&mut x.pool).await;
+        let q = x.sched.add_recv_queue(t0, RelayId(0), rc, period).unwrap();
+        let (put, del) = (ControlKind::LinkPut(6), ControlKind::QueueDel(q));
+        x.control
+            .lock()
+            .unwrap()
+            .prepare_wait_once
+            .push((put, 170_000));
+        let op = x
+            .sched
+            .schedule_control(t0, put, RelayId(0), 6, When::Prompt)
+            .unwrap();
+        x.run_until(t0 + 2_000).await;
+        x.sched
+            .schedule_control(setup.now(), del, RelayId(0), 6, When::AfterEmptyFetch(q))
+            .unwrap();
+        x.run_until(t0 + 600_000).await;
+        let t_a = x
+            .driver
+            .log()
+            .unwrap()
+            .admitted
+            .iter()
+            .find_map(|(o, t)| (*o == op).then_some(*t))
+            .unwrap();
+        let m = x.control.lock().unwrap();
+        let at = |k: ControlKind| -> Vec<u64> {
+            m.run_entered
+                .iter()
+                .filter(|(c, _)| *c == k)
+                .map(|(_, t)| *t)
+                .collect()
+        };
+        let (puts, dels) = (at(put), at(del));
+        let log = x.driver.log().unwrap();
+        let starts: Vec<u64> = log
+            .admitted
+            .iter()
+            .filter(|(o, _)| *o == op)
+            .map(|(_, t)| *t)
+            .collect();
+        let ctx = format!(
+            "t_a {t_a}, L {L}, put starts {puts:?}, deletion starts {dels:?}, admissions {starts:?}"
+        );
+        // (a) the retried put issued a command
+        assert!(!puts.is_empty(), "no put command: {ctx}");
+        // (b) the first attempt issued none: it was cut at t_a + L, and no put command lies between that and the retry's
+        // admission
+        let retry = *starts.get(1).expect("the put was retried");
+        assert!(retry >= t_a + L, "retry before the deadline: {ctx}");
+        assert!(
+            puts.iter().all(|p| *p >= retry),
+            "a put command of the first attempt: {ctx}"
+        );
+        // (c) every put command and every deletion command are at least 60 s apart; the deletion starts no earlier than
+        // t_a + L + 60 s
+        for p in &puts {
+            for q in &dels {
+                assert!(p.abs_diff(*q) >= 60_000, "p {p}, q {q}: {ctx}");
+            }
+        }
+        let first_del = *dels.first().expect("the deletion ran");
+        assert!(first_del >= t_a + L + 60_000, "{ctx}");
+    });
+}
+
+/// T7: a prompt `LINK_PUT` obeys the same limit.
+#[test]
+fn driver_prompt_link_put_obeys_the_limit() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::ControlKind;
+    let kind = ControlKind::LinkPut(7);
+    let r = Limited::start(&Cfg {
+        prepare_ms: L + 1_000,
+        ..cfg(66, kind, When::Prompt)
+    });
+    assert!(r.runs(kind).is_empty(), "run entered");
+    assert!(r.setup.provider.connects().is_empty(), "connected");
+    r.assert_first_end(ControlEnd::LinkFailed(false));
+}
+
+/// A clock that follows the paused tokio time plus a settable offset (ms): the host clock jumps ahead of the timer.
+struct Skewed {
+    inner: secmp_client_core::clock::TokioClock,
+    offset: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl secmp_client_core::clock::Clock for Skewed {
+    fn mono_ms(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+        self.inner
+            .mono_ms()
+            .saturating_add(self.offset.load(Ordering::SeqCst))
+    }
+
+    fn unix_secs(&self) -> u64 {
+        self.inner.unix_secs()
+    }
+}
+
+/// T9: the explicit clock check decides when the timer lags. The handshake completes at `t_a + L − 1 s` by tokio time, while
+/// the clock — jumped ahead by 5 s — reads past `t_a + L`: `run` is not entered, the link failed before it was up. (Without
+/// the clock predicate of `before_deadline` and the check before `up = true` the command is written: shown red locally.)
+#[test]
+fn driver_control_clock_check_blocks_run_when_timer_lags() {
+    use secmp_client_core::clock::Clock;
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::core::Scheduler;
+    use secmp_client_core::scheduler::run::{ControlEnd, Driver, Only};
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId, Transport};
+    use secmp_client_core::sessions::actor::Conversations;
+    use secmp_client_core::timing::TimingRng;
+    use secmp_testkit::harness::{CostedWorker, Costs, TestControl, TestDirectory, TestHandshakes};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let relay = &setup.relay;
+        let offset = Arc::new(AtomicU64::new(0));
+        let clock = Arc::new(Skewed {
+            inner: relay.clock(),
+            offset: Arc::clone(&offset),
+        });
+        let late = Late {
+            inner: setup.provider.clone(),
+            delay_ms: L - 11_000,
+        };
+        let worker = CostedWorker::new(
+            Arc::new(Mutex::new(Conversations::new())),
+            Costs::default(),
+            relay.clock(),
+        );
+        let control =
+            TestControl::new(relay.access_key(), "m6-tokio-ctl", 0).with_clock(relay.clock());
+        let material = Arc::clone(&control.material);
+        let mut driver = Driver::new(
+            Arc::new(Only::new(late, Transport::Tor)),
+            Arc::new(TestDirectory::new(relay.relay_ref(), relay.access_key())),
+            Arc::new(control),
+            TestHandshakes::new("m6-tokio-hs", 0),
+            worker,
+            Arc::clone(&clock),
+        )
+        .with_log();
+        let params = Params {
+            control_delay_ms: (60_000, 60_000),
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(67));
+        let kind = ControlKind::LinkPut(9);
+        material
+            .lock()
+            .unwrap()
+            .prepare_wait_kind
+            .push((kind, 10_000));
+        let t0 = clock.mono_ms();
+        let op = sched
+            .schedule_control(t0, kind, RelayId(0), 1, When::Prompt)
+            .unwrap();
+        driver.run_until(&mut sched, t0 + 1_000).await.unwrap();
+        let t_a = driver
+            .log()
+            .unwrap()
+            .admitted
+            .iter()
+            .find_map(|(o, t)| (*o == op).then_some(*t))
+            .unwrap();
+        driver.run_until(&mut sched, t_a + 100_000).await.unwrap();
+        // the clock jumps ahead; the timer (tokio time) still has 20 s to go
+        offset.store(5_000, Ordering::SeqCst);
+        driver
+            .run_until(&mut sched, t_a + L + 10_000)
+            .await
+            .unwrap();
+        assert!(
+            material.lock().unwrap().run_entered.is_empty(),
+            "run entered"
+        );
+        let first = driver
+            .log()
+            .unwrap()
+            .controls
+            .iter()
+            .find_map(|(_, o, e)| (*o == op).then_some(*e));
+        assert_eq!(first, Some(ControlEnd::LinkFailed(false)));
+    });
+}
+
+/// T10: the control limit is one value, `Params::control_limit_ms`, for the driver's deadline and the scheduler's S-9b
+/// floor. With 600 s: (a) a `prepare` released at `t_a + 599 s` still sends its command; (b) one released at `t_a + 601 s`
+/// does not, and the link failure is reported at `t_a + 600 s`; (c) a deletion armed at `t_a + 2 s` while the put runs
+/// starts no earlier than `t_a + 600 s + 60 s`.
+#[test]
+fn control_limit_is_one_value_for_floor_and_deadline() {
+    use secmp_client_core::scheduler::control::When;
+    use secmp_client_core::scheduler::run::ControlEnd;
+    use secmp_client_core::scheduler::types::{ControlKind, RelayId};
+    use secmp_testkit::harness::Costs;
+    const LIMIT: u64 = 600_000;
+    let put = ControlKind::LinkPut(10);
+    // (a)
+    let early = Limited::start(&Cfg {
+        prepare_ms: 599_000,
+        horizon_ms: LIMIT + 10_000,
+        limit_ms: LIMIT,
+        ..cfg(68, put, When::Prompt)
+    });
+    let runs = early.runs(put);
+    let first = *runs.first().expect("run entered");
+    assert!(
+        first >= early.t_a + 599_000 && first < early.t_a + LIMIT,
+        "run entered at t_a + {}",
+        first - early.t_a
+    );
+    // (b)
+    let late = Limited::start(&Cfg {
+        prepare_ms: 601_000,
+        horizon_ms: LIMIT + 10_000,
+        limit_ms: LIMIT,
+        ..cfg(69, put, When::Prompt)
+    });
+    assert!(late.runs(put).is_empty(), "run entered");
+    late.assert_first_end(ControlEnd::LinkFailed(false));
+    // (c)
+    runtime().block_on(async {
+        let mut setup = Setup::new();
+        let params = Params {
+            control_delay_ms: (60_000, 60_000),
+            control_limit_ms: LIMIT,
+            ..Params::default()
+        };
+        let period = *params.periods_ms.first().unwrap();
+        let mut x = TClient::new(&setup, Mode::Strict, params, 70, Costs::default(), 0);
+        let t0 = setup.now();
+        let (rc, _) = setup.new_queue(&mut x.pool).await;
+        let q = x.sched.add_recv_queue(t0, RelayId(0), rc, period).unwrap();
+        let del = ControlKind::QueueDel(q);
+        x.control
+            .lock()
+            .unwrap()
+            .prepare_wait_once
+            .push((put, 601_000));
+        let op = x
+            .sched
+            .schedule_control(t0, put, RelayId(0), 6, When::Prompt)
+            .unwrap();
+        x.run_until(t0 + 2_000).await;
+        x.sched
+            .schedule_control(setup.now(), del, RelayId(0), 6, When::AfterEmptyFetch(q))
+            .unwrap();
+        x.run_until(t0 + 1_500_000).await;
+        let log = x.driver.log().unwrap();
+        let admissions: Vec<u64> = log
+            .admitted
+            .iter()
+            .filter(|(o, _)| *o == op)
+            .map(|(_, t)| *t)
+            .collect();
+        let t_a = *admissions.first().unwrap();
+        let m = x.control.lock().unwrap();
+        let dels: Vec<u64> = m
+            .run_entered
+            .iter()
+            .filter(|(k, _)| *k == del)
+            .map(|(_, t)| *t)
+            .collect();
+        let first_del = *dels.first().expect("the deletion ran");
+        assert!(first_del >= t_a + LIMIT + 60_000, "{dels:?}, t_a {t_a}");
+    });
+}

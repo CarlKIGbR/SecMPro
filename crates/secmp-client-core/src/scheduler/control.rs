@@ -7,7 +7,7 @@
 //! timing randomness only (CO-08).
 
 use crate::scheduler::core::backoff::reconnect_delay;
-use crate::scheduler::params::{CONNECT_TIMEOUT_MS, Params};
+use crate::scheduler::params::Params;
 use crate::scheduler::types::{ControlKind, OpId, QueueId, RelayId};
 use crate::timing::{TimingRng, Unavailable};
 
@@ -70,6 +70,8 @@ pub struct DueOp {
     pub kind: ControlKind,
     /// On which relay.
     pub relay: RelayId,
+    /// The admission time: the `now` of [`ControlOps::take_due`] (HB-64, EXT3d-1).
+    pub at: u64,
 }
 
 /// The queue of control operations.
@@ -118,7 +120,7 @@ impl ControlOps {
         });
     }
 
-    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; a link's life after `prepare` lasts up to `CONNECT_TIMEOUT_MS`; `prepare` and `commit` are outside that limit (HB-62 (3)), so the bound of three or four assumes a bounded `prepare`; delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
+    /// The operation a new `kind` on `relay` joins instead of being queued (Q304, EXT3b-4): one `LINK_PUT` chain and one owner-status `LINK_GET` chain per link data. A new operation joins only a WAITING one of its kind: one requested while its kind runs is queued (never two WAITING through this path; an attempt lasts up to `params.control_limit_ms` from its admission, `prepare` included (HB-64, EXT3d-1; `commit` is outside that limit, HB-62 (3)); delayed starts are 60 s apart, so two can run at once, and `answered`/`failed` re-queue without joining — at most three or four operations of one kind, link data and relay, HB-61) — a put that succeeds after the relay lost its state must not swallow the re-put the owner answer asked for (EXT3c-2). `None` for every other kind.
     #[must_use]
     pub fn coalesced(&self, kind: ControlKind, relay: RelayId) -> Option<OpId> {
         let joins = |o: &Op| {
@@ -308,7 +310,7 @@ impl ControlOps {
 
     /// A `FETCH` of `queue` returned no present cell at `now`: the operations that waited for it start their delay
     /// `U[1 min, 60 min]` from `max(now, the latest related start)`; when an operation of the same correlation runs, from
-    /// `now + CONNECT_TIMEOUT_MS` — its command may still leave until then (EXT3c-1, M7-S9b). Without randomness they keep
+    /// `now + params.control_limit_ms` — its command may still leave until then (EXT3c-1, M7-S9b). Without randomness they keep
     /// waiting (fail closed: nothing is deleted without its delay).
     pub fn note_empty_fetch(
         &mut self,
@@ -325,7 +327,7 @@ impl ControlOps {
             let related = op.related;
             let running = self.ops.iter().any(|o| o.related == related && o.running);
             let floor = if running {
-                now.saturating_add(CONNECT_TIMEOUT_MS)
+                now.saturating_add(params.control_limit_ms)
             } else {
                 now
             };
@@ -390,6 +392,7 @@ impl ControlOps {
                 id: op.id,
                 kind: op.kind,
                 relay: op.relay,
+                at: now,
             });
             if let Some(op) = self.ops.get_mut(i) {
                 op.running = true;
@@ -663,7 +666,7 @@ mod tests {
         Ok(())
     }
 
-    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + CONNECT_TIMEOUT_MS` — the running one may still send its command until then; with none running, from `now` or the latest related start, as before; an operation of another correlation does not move it.
+    /// S9b — spec §10.6 (2), Q304 (EXT3c-1): an operation that waited for an empty `FETCH` and is armed while an operation of its correlation RUNS counts its delay from `now + params.control_limit_ms` — the running one may send a command only until `params.control_limit_ms` from its admission (HB-64, EXT3d-1), which is no later; with none running, from `now` or the latest related start, as before; an operation of another correlation does not move it.
     #[test]
     fn deletion_armed_while_a_related_operation_runs_waits_out_the_attempt()
     -> Result<(), Unavailable> {
@@ -834,6 +837,63 @@ mod tests {
                 "seed {seed}: pushed {pushed}, again {again}"
             );
         }
+        Ok(())
+    }
+
+    /// EXT3d-1 (HB-64, T11): the S-9b floor of an armed deletion follows `params.control_limit_ms`, the value the driver's
+    /// deadline reads too: 120 s and 600 s differ by exactly 480 s in its due time.
+    #[test]
+    fn note_empty_fetch_floor_follows_control_limit() -> Result<(), Unavailable> {
+        let due_with = |limit: u64| -> Result<u64, Unavailable> {
+            let params = Params {
+                control_delay_ms: (60_000, 60_000),
+                control_limit_ms: limit,
+                ..Params::default()
+            };
+            let mut rng = TimingRng::seeded(11);
+            let mut ops = ControlOps::new();
+            let q = QueueId(7);
+            ops.schedule(
+                &params,
+                &mut rng,
+                OpId(1),
+                0,
+                spec(ControlKind::LinkPut(1), 1, When::Prompt),
+            )?;
+            assert_eq!(ops.take_due(0).len(), 1);
+            ops.schedule(
+                &params,
+                &mut rng,
+                OpId(2),
+                2_000,
+                spec(ControlKind::QueueDel(q), 1, When::AfterEmptyFetch(q)),
+            )?;
+            ops.note_empty_fetch(&params, &mut rng, q, 2_000);
+            ops.due_of(OpId(2)).ok_or(Unavailable)
+        };
+        let (short, long) = (due_with(120_000)?, due_with(600_000)?);
+        assert_eq!(short, 2_000 + 120_000 + 60_000);
+        assert_eq!(long.saturating_sub(short), 480_000);
+        Ok(())
+    }
+
+    /// EXT3d-1 (HB-64, T8): `take_due(now)` names `now` as the admission time of every operation it takes.
+    #[test]
+    fn take_due_reports_admission_time() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let mut rng = TimingRng::seeded(8);
+        let mut ops = ControlOps::new();
+        ops.schedule(
+            &params,
+            &mut rng,
+            OpId(1),
+            100,
+            spec(ControlKind::LinkPut(1), 1, When::At(5_000)),
+        )?;
+        assert!(ops.take_due(4_999).is_empty());
+        let due = ops.take_due(7_321);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due.first().map(|d| d.at), Some(7_321));
         Ok(())
     }
 }

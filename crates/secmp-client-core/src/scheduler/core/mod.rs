@@ -2309,6 +2309,7 @@ impl Scheduler {
                 relay: due.relay,
                 kind: due.kind,
                 transport,
+                admitted: due.at,
             });
         }
         self.links.retain(|l| !matches!(l.state, State::Gone));

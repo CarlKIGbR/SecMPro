@@ -234,6 +234,8 @@ fn render_settings(ui: &MainWindow, vm: &Vm) {
     ui.set_identity_text(t(key::ACTION_IDENTITY));
     ui.set_export_path_label(t(key::ACTION_EXPORT_PATH));
     ui.set_export_pass_label(t(key::ACTION_EXPORT_PASS));
+    ui.set_export_pass_again_label(t(key::ONBOARDING_PASS_AGAIN));
+    ui.set_export_locked(vm.confirming());
     ui.set_export_text(t(key::ACTION_EXPORT));
     ui.set_retention_names(ModelRc::new(VecModel::from(
         vm.retention_names()
@@ -296,11 +298,12 @@ fn wire_settings(ui: &MainWindow) {
             render(&sh.ui, &sh.vm);
         });
     });
-    ui.on_ask_export(|path, pass| {
+    ui.on_ask_export(|path, pass, again| {
         with_shell(|sh| {
-            sh.vm.ask_export(&path, &pass);
-            // the model holds the passphrase in a zeroising buffer; the field is emptied
+            sh.vm.ask_export(&path, &pass, &again);
+            // the model holds the passphrase in a zeroising buffer; the fields are emptied
             sh.ui.set_export_pass(SharedString::new());
+            sh.ui.set_export_pass2(SharedString::new());
             render(&sh.ui, &sh.vm);
         });
     });
@@ -457,6 +460,7 @@ fn wire(ui: &MainWindow, vm: Vm, bridge: Bridge) {
             if was == Screen::Settings {
                 sh.ui.set_export_path(SharedString::new());
                 sh.ui.set_export_pass(SharedString::new());
+                sh.ui.set_export_pass2(SharedString::new());
             }
             render(&sh.ui, &sh.vm);
         });

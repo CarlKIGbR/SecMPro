@@ -273,6 +273,8 @@ pub enum Response {
     Settings(SettingsView),
     /// A contact or profile action went through.
     ActionDone(ActionKind),
+    /// A rotation the core put off (its event says so).
+    ActionDeferred,
     /// The connection.
     Status(LinkReport),
     /// The display state as the core holds it.
@@ -328,6 +330,7 @@ impl core::fmt::Debug for Response {
             Self::HistoryFailed(_) => "HistoryFailed",
             Self::Settings(_) => "Settings",
             Self::ActionDone(_) => "ActionDone",
+            Self::ActionDeferred => "ActionDeferred",
             Self::Status(_) => "Status",
             Self::Display(_) => "Display",
             Self::MessageMissing { .. } => "MessageMissing",

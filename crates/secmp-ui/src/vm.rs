@@ -391,6 +391,7 @@ pub struct Vm {
     status: Option<LinkReport>,
     profile_open: bool,
     reported: Option<Protection>,
+    reporting: Option<Protection>,
 }
 
 /// What the invitation screen holds. The URI is a capability: it lives in a zeroising buffer, is shown as content only and is
@@ -425,6 +426,7 @@ impl Vm {
             status: None,
             profile_open: false,
             reported: None,
+            reporting: None,
         }
     }
 
@@ -445,19 +447,29 @@ impl Vm {
         if self.protection != Protection::Verified {
             self.chat.release();
         }
+        if self.protection == Protection::Locked {
+            // an action that waited for its click is not carried out on a locked display
+            self.confirm = None;
+        }
     }
 
     /// Tell the core what the display state is, once per change and only while a profile is open (CS-1.18: the core can be
     /// asked what the UI reported). A full queue leaves it for the next answer.
     pub fn sync_display(&mut self, bridge: &Bridge) {
-        if !self.profile_open || self.reported == Some(self.protection) {
+        if !self.profile_open
+            || self.reported == Some(self.protection)
+            || self.reporting == Some(self.protection)
+        {
             return;
         }
+        // reported is set when the core's answer comes; a request that is refused is made again at the next change of state
         if bridge
             .submit(Request::SetDisplayState(self.protection))
             .is_ok()
         {
-            self.reported = Some(self.protection);
+            self.reporting = Some(self.protection);
+        } else if self.reporting.is_some() {
+            self.reporting = None;
         }
     }
 
@@ -627,6 +639,7 @@ impl Vm {
     /// The user leaves the screen they are on (for the contact list, from the safety number for the conversation); what the
     /// screen held is dropped (the invitation URI, the revealed text and the digits are zeroised).
     pub fn leave(&mut self) {
+        self.confirm = None;
         match self.screen {
             Screen::Invitations => {
                 self.invite = InviteState::default();
@@ -1195,10 +1208,20 @@ impl Vm {
             .unwrap_or(0)
     }
 
-    /// Store `new` as the settings (shown at once; a refusal reads them again).
+    /// Store `new` as the settings: it is shown once the submit was accepted. A refused submit shows what the stored settings
+    /// are (they are read again) and the failure.
     fn store_settings(&mut self, bridge: &Bridge, new: SettingsView) {
-        self.settings = Some(new);
-        self.begin(bridge, Request::SetSettings(new));
+        self.failure = None;
+        self.notice = None;
+        if self.submit(bridge, Request::SetSettings(new)) {
+            self.settings = Some(new);
+            self.busy = true;
+        } else {
+            let failure = self.failure;
+            self.confirm = None;
+            self.submit(bridge, Request::Settings);
+            self.failure = failure;
+        }
     }
 
     /// The user picks the traffic mode at `index`: the relay's view of that mode is listed and a confirm click is asked for;
@@ -1317,13 +1340,18 @@ impl Vm {
 
     /// The user asks to export a backup to `path` under `passphrase`: a confirm click follows. The passphrase is held in a
     /// zeroising buffer until then.
-    pub fn ask_export(&mut self, path: &str, passphrase: &str) {
+    pub fn ask_export(&mut self, path: &str, passphrase: &str, again: &str) {
         if self.screen != Screen::Settings {
             return;
         }
         let pass = Zeroizing::new(passphrase.as_bytes().to_vec());
+        let again = Zeroizing::new(again.as_bytes().to_vec());
         if path.trim().is_empty() || pass.is_empty() {
             self.failure = Some(Failure::ExportInput);
+            return;
+        }
+        if !same_secret(&pass, &again) {
+            self.failure = Some(Failure::PassphraseMismatch);
             return;
         }
         self.ask(Confirm::Export {
@@ -1343,17 +1371,26 @@ impl Vm {
 
     /// The question the user is asked to confirm, or empty.
     #[must_use]
-    pub fn confirm_text(&self) -> &'static str {
-        let key = match self.confirm {
-            None => return "",
+    pub fn confirm_text(&self) -> String {
+        let key = match &self.confirm {
+            None => return String::new(),
             Some(Confirm::Rotate(_)) => key::CONFIRM_ROTATE,
             Some(Confirm::Reset(_)) => key::CONFIRM_RESET,
             Some(Confirm::Remove(_)) => key::CONFIRM_REMOVE,
             Some(Confirm::Identity) => key::CONFIRM_IDENTITY,
-            Some(Confirm::Export { .. }) => key::CONFIRM_EXPORT,
+            Some(Confirm::Export { path, .. }) => {
+                // the target is part of the question
+                return format!("{}\n{path}", locale::text(self.lang, key::CONFIRM_EXPORT));
+            }
             Some(Confirm::Mode(_)) => key::CONFIRM_MODE,
         };
-        locale::text(self.lang, key)
+        locale::text(self.lang, key).to_owned()
+    }
+
+    /// Whether an action waits for its confirm click.
+    #[must_use]
+    pub const fn confirming(&self) -> bool {
+        self.confirm.is_some()
     }
 
     /// The user clicked "Confirm": the action is sent now, for the first time.
@@ -1450,12 +1487,27 @@ impl Vm {
         self.busy = false;
         self.profile_open = true;
         self.reported = None;
+        self.reporting = None;
         self.screen = Screen::Contacts;
         self.failure = None;
         if self.submit(bridge, Request::Contacts) && mode_not_saved {
             self.failure = Some(Failure::ModeNotSaved);
         }
         self.poll_status(bridge);
+    }
+
+    /// A contact or profile action went through.
+    fn action_done(&mut self, kind: ActionKind, bridge: &Bridge) {
+        self.busy = false;
+        self.failure = None;
+        self.notice = Some(if kind == ActionKind::Identity {
+            key::ACTION_IDENTITY_DONE
+        } else {
+            key::ACTION_DONE
+        });
+        if kind == ActionKind::Remove {
+            self.submit(bridge, Request::Contacts);
+        }
     }
 
     /// A request did not go through.
@@ -1558,20 +1610,18 @@ impl Vm {
                     self.submit(bridge, Request::RelayView(settings.mode));
                 }
             }
-            Response::ActionDone(kind) => {
+            Response::ActionDone(kind) => self.action_done(kind, bridge),
+            Response::Status(report) => self.status = Some(report),
+            Response::Display(state) => {
+                // the core holds it now
+                self.reported = Some(state);
+                self.reporting = self.reporting.filter(|r| *r != state);
+            }
+            Response::ActionDeferred => {
+                // the core put the rotation off: the banner of the event says so, there is no error
                 self.busy = false;
                 self.failure = None;
-                self.notice = Some(if kind == ActionKind::Identity {
-                    key::ACTION_IDENTITY_DONE
-                } else {
-                    key::ACTION_DONE
-                });
-                if kind == ActionKind::Remove {
-                    self.submit(bridge, Request::Contacts);
-                }
             }
-            Response::Status(report) => self.status = Some(report),
-            Response::Display(_) => {}
             Response::Invitation(uri) => {
                 self.busy = false;
                 self.failure = None;

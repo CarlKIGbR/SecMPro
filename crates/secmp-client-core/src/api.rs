@@ -1302,6 +1302,57 @@ mod tests {
         })
     }
 
+    /// An expired row of `contact` and a row of another contact, written behind the core's back (S6).
+    #[cfg(feature = "kat")]
+    fn extra_rows(store: &SharedStore, contact: ContactId) -> R {
+        let mut s = store.lock().map_err(|_| "lock")?;
+        // one view-once held from a peer, and a row of kind 3 written behind the store's back
+        s.hold_received_view_once([0x61; 16], b"held-secret");
+        s.connection_kat().execute(
+            "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+             VALUES (?1, ?2, 0, 3, 5, NULL, ?3)",
+            (
+                contact.0,
+                [0x62_u8; 16].as_slice(),
+                b"raw-secret".as_slice(),
+            ),
+        )?;
+        let raw = "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+                   VALUES (?1, ?2, 0, 1, 6, ?3, ?4)";
+        s.connection_kat().execute(
+            raw,
+            (
+                contact.0,
+                [0x63_u8; 16].as_slice(),
+                Some(1_i64),
+                b"expired".as_slice(),
+            ),
+        )?;
+        s.connection_kat().execute(
+            raw,
+            (
+                contact.0.saturating_add(1000),
+                [0x64_u8; 16].as_slice(),
+                None::<i64>,
+                b"other contact".as_slice(),
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// 250 rows of `contact` (S6: a limit above the cap).
+    #[cfg(feature = "kat")]
+    fn many_rows(store: &SharedStore, contact: ContactId) -> R {
+        let s = store.lock().map_err(|_| "lock")?;
+        s.connection_kat().execute(
+            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 250) \
+             INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+             SELECT ?1, CAST(printf('%016d', x) AS BLOB), 0, 1, x, NULL, x'00' FROM c",
+            (contact.0,),
+        )?;
+        Ok(())
+    }
+
     /// S6 (M8 U7): the history is read from the store, newest first and in pages; a view-once (queued here, held from a peer,
     /// or a row of kind 3 that some other tool wrote) never comes out with a payload.
     #[cfg(feature = "kat")]
@@ -1338,21 +1389,9 @@ mod tests {
                 };
                 sent.push(id);
             }
-            // a view-once queued here, one held from a peer, and a row of kind 3 written behind the store's back
+            // a view-once queued here; the helper adds one held from a peer and rows written behind the store's back
             core.handle(send(contact, 3, b"queued-secret"))?;
-            {
-                let mut s = store.lock().map_err(|_| "lock")?;
-                s.hold_received_view_once([0x61; 16], b"held-secret");
-                s.connection_kat().execute(
-                    "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
-                     VALUES (?1, ?2, 0, 3, 5, NULL, ?3)",
-                    (
-                        contact.0,
-                        [0x62_u8; 16].as_slice(),
-                        b"raw-secret".as_slice(),
-                    ),
-                )?;
-            }
+            extra_rows(&store, contact)?;
             let mut page = |before: Option<i64>, limit: u16| -> Result<Vec<HistoryEntry>, E> {
                 match core.handle(Request::History {
                     contact,
@@ -1404,6 +1443,15 @@ mod tests {
                 [&b"second"[..], &b"first"[..]]
             );
             assert!(page(Some(second.last().ok_or("page")?.cursor), 2)?.is_empty());
+            // nothing is asked for, nothing comes: `limit` 0, and a cursor below every row
+            assert!(page(None, 0)?.is_empty());
+            assert!(page(Some(-1), 50)?.is_empty());
+            // a limit above the cap returns at most the cap
+            many_rows(&store, contact)?;
+            assert_eq!(
+                page(None, u16::MAX)?.len(),
+                usize::from(secmp_store::messages::HISTORY_MAX)
+            );
             Ok(())
         })
     }

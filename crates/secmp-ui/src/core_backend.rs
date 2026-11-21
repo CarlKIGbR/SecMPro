@@ -104,7 +104,8 @@ const fn protection_of(d: DisplayState) -> Protection {
     }
 }
 
-/// The relay whose spare pool a rotation takes its queue from: the profile's first (as `secmp-cli rotate`).
+/// The relay whose spare pool a rotation takes its queue from: the profile's first (as `secmp-cli rotate`); the core's API
+/// exposes no accessor for the profile's relay ids (HB-87).
 const ROTATE_RELAY: u32 = 1;
 
 /// The row a contact is shown as.
@@ -379,12 +380,13 @@ impl CoreBackend {
     /// A contact or profile action; every refusal is one failure.
     fn action(&self, request: Request, kind: ActionKind) -> UiResponse {
         match (self.core(request), kind) {
+            (Ok(Response::Rotated(false)), ActionKind::Rotate) => UiResponse::ActionDeferred,
             (Ok(Response::Rotated(true)), ActionKind::Rotate)
             | (Ok(Response::Done), ActionKind::Reset | ActionKind::Remove)
             | (Ok(Response::IdentityRotated(_)), ActionKind::Identity) => {
                 UiResponse::ActionDone(kind)
             }
-            // a rotation the core put off is told as an event (a banner); here it did not go through
+            // a rotation the core put off is told as an event (a banner), not as a failure
             _ => UiResponse::Failed(Failure::Action),
         }
     }

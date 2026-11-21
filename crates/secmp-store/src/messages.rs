@@ -260,10 +260,11 @@ impl Store {
             out.push(HistoryRow {
                 cursor,
                 msg_id: <[u8; 16]>::try_from(id.as_slice()).map_err(|_| Error::Unavailable)?,
-                direction: if direction == 0 {
-                    Direction::In
-                } else {
-                    Direction::Out
+                direction: match direction {
+                    0 => Direction::In,
+                    1 => Direction::Out,
+                    // no writer stores another value: the uniform error
+                    _ => return Err(Error::Unavailable),
                 },
                 kind: u8::try_from(kind).map_err(|_| Error::Unavailable)?,
                 ts_ms: u64::try_from(ts).map_err(|_| Error::Unavailable)?,
@@ -634,6 +635,33 @@ mod tests {
             Some(b"in".as_slice())
         );
         assert!(store.view_once_held(&received, 0));
+        Ok(())
+    }
+
+    /// X1 (M8 U9): a history row whose direction is neither 0 nor 1 makes the read fail with the uniform error.
+    #[test]
+    fn history_rejects_unknown_direction_value() -> R {
+        let dir = TempDir::new("x1-direction")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.insert_message(&NewMessage {
+            contact_id: 1,
+            msg_id: [1; 16],
+            direction: Direction::In,
+            kind: 1,
+            ts_ms: 1,
+            expire_after: 0,
+            payload: b"ok",
+        })?;
+        assert_eq!(store.history(1, None, 10, 0)?.len(), 1);
+        store.connection_kat().execute(
+            "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
+             VALUES (1, x'02020202020202020202020202020202', 2, 1, 2, NULL, x'00')",
+            [],
+        )?;
+        assert!(matches!(
+            store.history(1, None, 10, 0),
+            Err(Error::Unavailable)
+        ));
         Ok(())
     }
 

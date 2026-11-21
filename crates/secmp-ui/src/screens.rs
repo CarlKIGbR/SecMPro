@@ -148,6 +148,8 @@ slint::slint! {
         in property <string> identity-text;
         in property <string> export-path-label;
         in property <string> export-pass-label;
+        in property <string> export-pass-again-label;
+        in property <bool> export-locked: false;
         in property <string> export-text;
         in property <[string]> retention-names;
         in property <[string]> delivered-names;
@@ -158,12 +160,13 @@ slint::slint! {
         in-out property <bool> settings-read: false;
         in-out property <string> export-path;
         in-out property <string> export-pass;
+        in-out property <string> export-pass2;
         callback settings-mode-picked(int);
         callback settings-retention-picked(int);
         callback settings-delivered-picked(int);
         callback settings-read-toggled(bool);
         callback ask-identity();
-        callback ask-export(string, string);
+        callback ask-export(string, string, string);
 
         // contact options (8)
         in property <string> options-title;
@@ -600,18 +603,18 @@ slint::slint! {
                     clicked => { root.override-requested(); }
                 }
                 Text { text: root.settings-profile-title; font-weight: 700; }
+                Text { text: root.export-path-label; }
+                LineEdit {
+                    text <=> root.export-path;
+                    accessible-label: root.export-path-label;
+                    enabled: !root.busy && !root.export-locked;
+                }
                 if root.confirm-text == "" : VerticalLayout {
                     spacing: 6px;
                     Button {
                         text: root.identity-text;
                         enabled: !root.busy;
                         clicked => { root.ask-identity(); }
-                    }
-                    Text { text: root.export-path-label; }
-                    LineEdit {
-                        text <=> root.export-path;
-                        accessible-label: root.export-path-label;
-                        enabled: !root.busy;
                     }
                     Text { text: root.export-pass-label; }
                     LineEdit {
@@ -620,10 +623,17 @@ slint::slint! {
                         accessible-label: root.export-pass-label;
                         enabled: !root.busy;
                     }
+                    Text { text: root.export-pass-again-label; }
+                    LineEdit {
+                        text <=> root.export-pass2;
+                        input-type: password;
+                        accessible-label: root.export-pass-again-label;
+                        enabled: !root.busy;
+                    }
                     Button {
                         text: root.export-text;
                         enabled: !root.busy;
-                        clicked => { root.ask-export(root.export-path, root.export-pass); }
+                        clicked => { root.ask-export(root.export-path, root.export-pass, root.export-pass2); }
                     }
                 }
                 Button {

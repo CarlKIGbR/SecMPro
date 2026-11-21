@@ -3,7 +3,7 @@
 //! `secmp-client-core`): the fixes of the part-2 review, the history, the settings, the contact actions and the status line,
 //! through the view models on the testing backend (no display).
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
@@ -173,6 +173,21 @@ fn verify_answer_does_not_clear_newer_key_change() {
     rig.bridge.shutdown();
 }
 
+/// The backend waits at the gate with a request, and eight more wait behind it: the queue is full.
+fn jam(bridge: &Bridge, entered: &AtomicUsize) -> Test {
+    let before = entered.load(Ordering::SeqCst);
+    bridge.submit(Request::Contacts).map_err(|_| "submit")?;
+    for _ in 0..1_000 {
+        if entered.load(Ordering::SeqCst) > before {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(entered.load(Ordering::SeqCst) > before, "the gate holds");
+    while bridge.submit(Request::Contacts).is_ok() {}
+    Ok(())
+}
+
 /// A model method that asks for an action.
 type Ask = fn(&mut Vm);
 
@@ -198,17 +213,7 @@ fn full_queue_sets_busy_on_safety_and_history_requests() -> Test {
     assert!(vm.conv_more());
     assert_eq!(vm.error_text(), "");
 
-    // the backend waits at the gate with a request, and eight more wait behind it: the queue is full
-    let before = entered.load(Ordering::SeqCst);
-    bridge.submit(Request::Contacts).map_err(|_| "submit")?;
-    for _ in 0..1_000 {
-        if entered.load(Ordering::SeqCst) > before {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(entered.load(Ordering::SeqCst) > before, "the gate holds");
-    while bridge.submit(Request::Contacts).is_ok() {}
+    jam(&bridge, &entered)?;
     let busy = locale::text(Lang::En, Failure::Busy.message_key());
 
     vm.open_safety(&bridge);
@@ -443,18 +448,28 @@ fn contact_and_identity_actions_send_nothing_before_confirmation() -> Test {
     );
 
     // an export needs its path and passphrase, then a confirm click
-    rig.vm.ask_export("", "pass");
+    rig.vm.ask_export("", "pass", "pass");
     assert_eq!(rig.vm.confirm_text(), "");
     assert_eq!(
         rig.vm.error_text(),
         locale::text(Lang::En, Failure::ExportInput.message_key())
     );
-    rig.vm.ask_export("/tmp/backup.smpb", "pass");
+    rig.vm.ask_export("/tmp/backup.smpb", "pass", "other");
+    assert_eq!(rig.vm.confirm_text(), "");
+    assert_eq!(
+        rig.vm.error_text(),
+        locale::text(Lang::En, Failure::PassphraseMismatch.message_key())
+    );
+    rig.vm.ask_export("/tmp/backup.smpb", "pass", "pass");
     rig.settle();
     assert_eq!(sent(&rig), 4);
+    // the question names the target
     assert_eq!(
         rig.vm.confirm_text(),
-        locale::text(Lang::En, key::CONFIRM_EXPORT)
+        format!(
+            "{}\n/tmp/backup.smpb",
+            locale::text(Lang::En, key::CONFIRM_EXPORT)
+        )
     );
     rig.vm.confirm(&rig.bridge);
     rig.settle();
@@ -585,4 +600,103 @@ fn status_line_shows_no_address_and_no_activity_counters() -> Test {
     assert!(plain(&down), "{down}");
     rig.bridge.shutdown();
     Ok(())
+}
+
+/// X2: a settings change whose submit is refused (the queue is full) is not shown: the stored value stays on the screen, with
+/// the busy failure, and nothing was stored.
+#[test]
+fn refused_settings_submit_keeps_showing_the_stored_value() -> Test {
+    let (sink, rx) = queue();
+    let (open, close) = channel::<()>();
+    let (backend, _) = stub(vec![row(1, "Zed", true)], Some(close));
+    let (entered, sets) = (backend.entered.clone(), backend.sets.clone());
+    let bridge = Bridge::spawn(backend, sink);
+    let mut vm = Vm::new(Lang::En, Screen::Unlock, "alice");
+    vm.set_protection(Protection::Verified);
+    vm.apply(Response::Opened, &bridge);
+    open.send(())?;
+    pump(&mut vm, &bridge, &rx, |vm| !vm.contacts().is_empty());
+    vm.open_settings(&bridge);
+    pump(&mut vm, &bridge, &rx, Vm::settings_enabled);
+    let stored = vm.settings_shown();
+    assert!(stored.is_some());
+
+    jam(&bridge, &entered)?;
+    vm.pick_retention(&bridge, 2);
+    assert_eq!(vm.settings_shown(), stored);
+    assert_eq!(
+        vm.error_text(),
+        locale::text(Lang::En, Failure::Busy.message_key())
+    );
+    assert!(!vm.busy());
+
+    drop(open);
+    settle(&mut vm, &bridge, &rx)?;
+    assert_eq!(vm.settings_shown(), stored);
+    assert_eq!(sets.load(Ordering::SeqCst), 0);
+    bridge.shutdown();
+    Ok(())
+}
+
+/// X3: an export writes an encrypted file (the profile's name is not in it); a second export to the same path is refused with
+/// the export error and leaves the file as it was.
+#[test]
+fn export_writes_encrypted_backup_and_never_overwrites() -> Test {
+    let (root, mut vm, bridge, rx) = real("x3", Protection::Verified)?;
+    vm.open_settings(&bridge);
+    pump(&mut vm, &bridge, &rx, Vm::settings_enabled);
+    let path = root.join("backup.smpb");
+    let path_text = path.to_string_lossy().into_owned();
+
+    vm.ask_export(&path_text, "backup pass", "backup pass");
+    assert!(vm.confirm_text().ends_with(&path_text));
+    assert!(
+        !path.exists(),
+        "nothing is written before the confirm click"
+    );
+    vm.confirm(&bridge);
+    pump(&mut vm, &bridge, &rx, |vm| !vm.busy());
+    assert_eq!(vm.error_text(), "");
+    assert_eq!(vm.notice_text(), locale::text(Lang::En, key::ACTION_DONE));
+    let first = std::fs::read(&path)?;
+    assert!(!first.is_empty());
+    assert!(!first.windows(5).any(|w| w == b"alice"));
+
+    vm.ask_export(&path_text, "backup pass", "backup pass");
+    vm.confirm(&bridge);
+    pump(&mut vm, &bridge, &rx, |vm| !vm.busy());
+    assert_eq!(
+        vm.error_text(),
+        locale::text(Lang::En, Failure::Export.message_key())
+    );
+    assert_eq!(std::fs::read(&path)?, first);
+    bridge.shutdown();
+    remove(&root);
+    Ok(())
+}
+
+/// X4: an action that waits for its confirm click is dropped when the display state drops to locked, and when the screen is
+/// left; the click that follows sends nothing.
+#[test]
+fn pending_action_is_cleared_when_protection_drops() {
+    let mut rig = Rig::conversation();
+    rig.vm.open_options();
+    rig.vm.ask_remove();
+    assert!(rig.vm.confirming());
+    rig.vm.set_protection(Protection::Locked);
+    assert!(!rig.vm.confirming());
+    assert_eq!(rig.vm.confirm_text(), "");
+    rig.vm.set_protection(Protection::Verified);
+    rig.vm.confirm(&rig.bridge);
+    rig.settle();
+    assert_eq!(rig.actions.load(Ordering::SeqCst), 0);
+
+    rig.vm.ask_rotate();
+    assert!(rig.vm.confirming());
+    rig.vm.leave();
+    assert!(!rig.vm.confirming());
+    rig.vm.confirm(&rig.bridge);
+    rig.settle();
+    assert_eq!(rig.actions.load(Ordering::SeqCst), 0);
+    rig.bridge.shutdown();
 }

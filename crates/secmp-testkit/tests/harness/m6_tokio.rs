@@ -185,7 +185,8 @@ impl<P: StreamProvider + 'static> TClient<P> {
         let convs = Arc::new(Mutex::new(Conversations::new()));
         let worker = CostedWorker::new(Arc::clone(&convs), costs, relay.clock());
         let (work_total, jobs) = (Arc::clone(&worker.work_total), Arc::clone(&worker.log));
-        let control = TestControl::new(relay.access_key(), "m6-tokio-ctl", index);
+        let control =
+            TestControl::new(relay.access_key(), "m6-tokio-ctl", index).with_clock(relay.clock());
         let material = Arc::clone(&control.material);
         let driver = Driver::new(
             Arc::new(Only::new(provider, Transport::Tor)),

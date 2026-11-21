@@ -167,6 +167,8 @@ pub enum Output {
         kind: ControlKind,
         /// The transport.
         transport: Transport,
+        /// The admission time (monotonic ms): the limit of the operation is counted from it (HB-64, EXT3d-1).
+        admitted: u64,
     },
     /// A local event.
     Event(LinkEvent),

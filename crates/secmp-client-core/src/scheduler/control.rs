@@ -70,6 +70,8 @@ pub struct DueOp {
     pub kind: ControlKind,
     /// On which relay.
     pub relay: RelayId,
+    /// The admission time: the `now` of [`ControlOps::take_due`] (HB-64, EXT3d-1).
+    pub at: u64,
 }
 
 /// The queue of control operations.
@@ -390,6 +392,7 @@ impl ControlOps {
                 id: op.id,
                 kind: op.kind,
                 relay: op.relay,
+                at: now,
             });
             if let Some(op) = self.ops.get_mut(i) {
                 op.running = true;
@@ -834,6 +837,26 @@ mod tests {
                 "seed {seed}: pushed {pushed}, again {again}"
             );
         }
+        Ok(())
+    }
+
+    /// EXT3d-1 (HB-64, T8): `take_due(now)` names `now` as the admission time of every operation it takes.
+    #[test]
+    fn take_due_reports_admission_time() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let mut rng = TimingRng::seeded(8);
+        let mut ops = ControlOps::new();
+        ops.schedule(
+            &params,
+            &mut rng,
+            OpId(1),
+            100,
+            spec(ControlKind::LinkPut(1), 1, When::At(5_000)),
+        )?;
+        assert!(ops.take_due(4_999).is_empty());
+        let due = ops.take_due(7_321);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due.first().map(|d| d.at), Some(7_321));
         Ok(())
     }
 }

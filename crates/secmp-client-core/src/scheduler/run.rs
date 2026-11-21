@@ -690,6 +690,21 @@ pub struct RunLog {
     pub discarded: Vec<(u64, LinkId)>,
     /// The steps of the loop.
     pub steps: Vec<Step>,
+    /// The admission time of every control operation start (EXT3d-1).
+    pub admitted: Vec<(OpId, u64)>,
+    /// How every control attempt ended for the scheduler: time, operation, outcome (EXT3d-1).
+    pub controls: Vec<(u64, OpId, ControlEnd)>,
+}
+
+/// How a control attempt ended, as the log records it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlEnd {
+    /// Done.
+    Done,
+    /// The link failed (`closed_before`).
+    LinkFailed(bool),
+    /// Answered.
+    Answered,
 }
 
 enum Conn<S> {
@@ -1093,6 +1108,16 @@ where
                 }
             }
             Event::Control(op, result) => {
+                if let Some(log) = &mut self.log {
+                    let end = match &result {
+                        ControlResult::Done(_) => ControlEnd::Done,
+                        ControlResult::LinkFailed { closed_before } => {
+                            ControlEnd::LinkFailed(*closed_before)
+                        }
+                        ControlResult::Answered => ControlEnd::Answered,
+                    };
+                    log.controls.push((now, op, end));
+                }
                 match result {
                     ControlResult::Done(effect) => {
                         match effect {
@@ -1195,8 +1220,9 @@ where
                     relay,
                     kind,
                     transport,
+                    admitted,
                 } => {
-                    self.control(now, op, key, relay, kind, transport);
+                    self.control((now, admitted), op, key, relay, kind, transport);
                 }
             }
         }
@@ -1307,7 +1333,7 @@ where
 
     fn control(
         &mut self,
-        now: u64,
+        (now, admitted): (u64, u64),
         op: OpId,
         key: IsolationKey,
         relay: RelayId,
@@ -1317,6 +1343,7 @@ where
         let isolation = Isolation(key.0);
         if let Some(log) = &mut self.log {
             log.connects.push((now, Purpose::Control(op), isolation));
+            log.admitted.push((op, admitted));
         }
         let events = self.events_tx.clone();
         let providers = Arc::clone(&self.providers);

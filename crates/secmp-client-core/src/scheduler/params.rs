@@ -34,6 +34,9 @@ pub struct Params {
     pub max_in_flight: u8,
     /// The delay of a control operation from a related one (spec §10.6 (2)), inclusive.
     pub control_delay_ms: (u64, u64),
+    /// The limit of a control operation, counted from its admission; the S-9b floor and the driver deadline both read it
+    /// (HB-64, EXT3d-1).
+    pub control_limit_ms: u64,
     /// The delay before a recipient re-creates a queue (spec §9.1), inclusive.
     pub recreate_delay_ms: (u64, u64),
     /// How long before a tick a `FETCH` is built if the previous response is not committed (OPEN-M6-13).
@@ -62,6 +65,7 @@ impl Default for Params {
             lifetime_ms: (21_600_000, 86_400_000),
             max_in_flight: 2,
             control_delay_ms: (60_000, 3_600_000),
+            control_limit_ms: CONNECT_TIMEOUT_MS,
             recreate_delay_ms: (10_000, 300_000),
             fetch_lead_ms: 1_000,
             backoff_cap_ms: 3_600_000,
@@ -77,9 +81,9 @@ pub const FETCH_MULTI_LIMIT: usize = 32;
 
 /// How long a connection attempt (stream and SecMP-LINK handshake) may take before it counts as failed: a provider that
 /// never answers must not leave a link in `Connecting`, which has no deadline in the core (obligation (iii)). Two
-/// minutes: a Tor circuit to an onion service plus the handshake. A control operation's limit (`prepare`, connect,
-/// handshake and command together) is counted from its admission, the `now` of `ControlOps::take_due` (HB-64, EXT3d-1): no
-/// command write starts at or after `admission + CONNECT_TIMEOUT_MS`.
+/// minutes: a Tor circuit to an onion service plus the handshake. It is also the default of `Params::control_limit_ms`,
+/// the limit of a control operation (`prepare`, connect, handshake and command together), counted from its admission, the
+/// `now` of `ControlOps::take_due` (HB-64, EXT3d-1): no command write starts at or after `admission + control_limit_ms`.
 pub const CONNECT_TIMEOUT_MS: u64 = 120_000;
 
 impl Params {

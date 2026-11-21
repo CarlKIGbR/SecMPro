@@ -819,7 +819,7 @@ async fn before_deadline<F: Future>(
     .await
 }
 
-/// The limit of a connection attempt, and of a control operation counted from its admission (HB-64, EXT3d-1); defined in [`crate::scheduler::params`] so the pure control module can use it under Kani,
+/// The limit of a connection attempt (and the default of `Params::control_limit_ms`, HB-64, EXT3d-1); defined in [`crate::scheduler::params`] so the pure control module can use it under Kani,
 /// where this module is compiled out (M7-S9d).
 pub use crate::scheduler::params::CONNECT_TIMEOUT_MS;
 
@@ -863,8 +863,8 @@ where
         }
     }
 
-    /// Change the connect timeout (default [`CONNECT_TIMEOUT_MS`]). A larger value does not extend the limit of a control
-    /// operation, which never exceeds [`CONNECT_TIMEOUT_MS`] (HB-64, the S-9b floor counts with that constant).
+    /// Change the connect timeout (default [`CONNECT_TIMEOUT_MS`]). It bounds the connects of data links only; it does not
+    /// change the limit of a control operation, which is `Params::control_limit_ms` of the scheduler (HB-64).
     #[must_use]
     pub const fn with_connect_timeout(mut self, ms: u64) -> Self {
         self.connect_timeout = Duration::from_millis(ms);
@@ -1243,7 +1243,9 @@ where
                     transport,
                     admitted,
                 } => {
-                    self.control((now, admitted), op, key, relay, kind, transport);
+                    // the one value the S-9b floor reads too (HB-64)
+                    let limit_ms = sched.params().control_limit_ms;
+                    self.control((now, admitted, limit_ms), op, key, relay, kind, transport);
                 }
             }
         }
@@ -1354,7 +1356,7 @@ where
 
     fn control(
         &mut self,
-        (now, admitted): (u64, u64),
+        (now, admitted, limit_ms): (u64, u64, u64),
         op: OpId,
         key: IsolationKey,
         relay: RelayId,
@@ -1372,10 +1374,6 @@ where
         let runner = Arc::clone(&self.runner);
         let clock = Arc::clone(&self.clock);
         let mut entropy = self.entropy.next();
-        // D1: never above the constant the S-9b floor of `ControlOps::note_empty_fetch` uses
-        let limit_ms = u64::try_from(self.connect_timeout.as_millis())
-            .unwrap_or(u64::MAX)
-            .min(CONNECT_TIMEOUT_MS);
         self.controls.retain(|t| !t.is_finished());
         self.controls.push(tokio::spawn(async move {
             // HB-64 (EXT3d-1): one deadline from the admission for `prepare`, the connect, the handshake and the command; an

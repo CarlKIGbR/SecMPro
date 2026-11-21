@@ -513,6 +513,13 @@ fn copy_key(k: &AccessKey) -> AccessKey {
 }
 
 impl<P: StreamProvider + 'static> World<P> {
+    /// The control limit of the schedulers of the run: the drivers' connect timeout where a run sets one (a slow link needs
+    /// both raised), else the default.
+    fn control_limit_ms(&self) -> u64 {
+        self.connect_timeout_ms
+            .unwrap_or(secmp_client_core::scheduler::params::CONNECT_TIMEOUT_MS)
+    }
+
     fn node<R: Rand>(
         &self,
         s: Start<R>,
@@ -550,7 +557,11 @@ impl<P: StreamProvider + 'static> World<P> {
         seed: u64,
     ) -> Result<Node<P, R>, Fail> {
         let now = self.clock.mono_ms();
-        let mut sched = Scheduler::new(Params::default(), self.mode, R::timing(seed));
+        let params = Params {
+            control_limit_ms: self.control_limit_ms(),
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, self.mode, R::timing(seed));
         if self.direct {
             let _ = sched
                 .set_direct(now, true, &mut NoCells)
@@ -1487,6 +1498,7 @@ impl<P: StreamProvider + 'static> World<P> {
         );
         let params = Params {
             control_delay_ms: (2_000, 5_000),
+            control_limit_ms: self.control_limit_ms(),
             ..Params::default()
         };
         let now = self.clock.mono_ms();

@@ -642,3 +642,6 @@ pub fn run(root: &Path, direct: bool) -> ExitCode {
         ExitCode::FAILURE
     }
 }
+
+#[cfg(test)]
+mod wire_tests;

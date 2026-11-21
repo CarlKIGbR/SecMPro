@@ -90,3 +90,18 @@ mod display_affinity {
 
 #[cfg(windows)]
 pub use display_affinity::{display_affinity, set_exclude_from_capture};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The one error is fixed text without any code, handle or detail (CLAUDE.md §4) and is a plain value.
+    #[test]
+    fn error_text_is_fixed_and_carries_no_detail() {
+        assert_eq!(Error.to_string(), "desktop system call failed");
+        assert_eq!(format!("{Error:?}"), "Error");
+        let boxed: Box<dyn std::error::Error> = Box::new(Error);
+        assert_eq!(boxed.to_string(), "desktop system call failed");
+        assert!(boxed.source().is_none());
+    }
+}
